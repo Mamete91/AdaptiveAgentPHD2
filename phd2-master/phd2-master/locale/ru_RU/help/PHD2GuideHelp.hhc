@@ -1,0 +1,245 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<HTML>
+<HEAD>
+<meta name="GENERATOR" content="Microsoft&reg; HTML Help Workshop 4.1; charset=UTF-8" http-equiv="content-type">
+<!-- Sitemap 1.0 -->
+</HEAD><BODY>
+<OBJECT type="text/site properties">
+	<param name="ImageType" value="Folder">
+</OBJECT>
+<UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Введение">
+		<param name="Local" value="Introduction.htm">
+		</OBJECT>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Главный экран">
+		<param name="Local" value="MainScreen.htm">
+		</OBJECT>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Основы использования">
+		<param name="Local" value="Basic_use.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Подключение оборудования">
+			<param name="Local" value="Basic_use.htm#Equipment_Connection">
+			<param name="URL" value="Basic_use.htm">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Профили оборудования">
+			<param name="Local" value="Basic_use.htm#Equipment_Profile">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Время экспозиции и выбор звезды">
+			<param name="Local" value="Basic_use.htm#Exposure_Time_and_Star_Selection">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Калибровка">
+			<param name="Local" value="Basic_use.htm#Automatic_Calibration">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Гидирование">
+			<param name="Local" value="Basic_use.htm#Guiding">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Темновые кадры и карты дефектных пикселей">
+		<param name="Local" value="Darks_BadPixel_Maps.htm">
+		</OBJECT>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Средства визуализации">
+		<param name="Local" value="Visualization.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Наложения">
+			<param name="Local" value="Visualization.htm">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="График производительности гидирования">
+			<param name="Local" value="Visualization.htm#Graphical_Display">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Экран профиля звезды">
+			<param name="Local" value="Visualization.htm#Star_Profile_and_Target_Displays">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Экран прицела">
+			<param name="Local" value="Visualization.htm#Star_Profile_and_Target_Displays">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="График адаптивной оптики">
+			<param name="Local" value="Visualization.htm#Adaptive_Optics_AO_Graph">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Закреплённые окна">
+			<param name="Local" value="Visualization.htm#DockableMoveable_Graphical_Windows">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Настройки">
+		<param name="Local" value="Advanced_settings.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Общие параметры">
+			<param name="Local" value="Advanced_settings.htm#Global_Tab">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Параметры гидирования">
+			<param name="Local" value="Advanced_settings.htm#Guiding_Tab">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Параметры камеры">
+			<param name="Local" value="Advanced_settings.htm#Camera_Tab">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Алгоритмы">
+			<param name="Local" value="Advanced_settings.htm#Algorithms_Tab">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Другие устройства">
+			<param name="Local" value="Advanced_settings.htm#Other_Devices_Tab">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Алгоритмы гидирования">
+		<param name="Local" value="Guide_algorithms.htm">
+		</OBJECT>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Инструменты">
+		<param name="Local" value="Tools.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Ручное управление монтировкой">
+			<param name="Local" value="Tools.htm#Manual_Guide">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Автоматический выбор звезды">
+			<param name="Local" value="Tools.htm#Auto-Select_Star">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Калибровочные данные">
+			<param name="Local" value="Tools.htm#Manual_Control_of_Calibration_Data">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Сервер">
+			<param name="Local" value="Tools.htm#PHD2_Server">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Логгирование">
+			<param name="Local" value="Tools.htm#Logging_and_Debug_Output">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Установка полюса">
+			<param name="Local" value="Tools.htm#Polar_alignment_tools">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Сохранение положения звезды">
+			<param name="Local" value="Tools.htm#Lock_Positions">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Отслеживание комет">
+			<param name="Local" value="Tools.htm#Comet_Tracking">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Помощник гидирования">
+			<param name="Local" value="Tools.htm#Guiding_Assistant">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Перекрёстный тест звезды">
+			<param name="Local" value="Tools.htm#Star_cross_tool">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Профили оборудования">
+			<param name="Local" value="Tools.htm#Managing_Equipment_Profiles">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Управление симуляторами">
+			<param name="Local" value="Tools.htm#Advanced_Settings_for_the_Simulators">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Горячие клавиши">
+			<param name="Local" value="Tools.htm#Keyboard_Shortcuts">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Обновление программы">
+			<param name="Local" value="Tools.htm#Software_Update">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Горячие клавиши">
+		<param name="Local" value="KeyboardShortcuts.htm">
+		</OBJECT>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Поиск и анализ неисправностей">
+		<param name="Local" value="Trouble_shooting.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Проблемы калибровки">
+			<param name="Local" value="Trouble_shooting.htm#Problems-_Mount_Control">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Изучение поведения монтировки">
+			<param name="Local" value="Trouble_shooting.htm#Measuring_Mount_Behavior">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Проблемы отображения на экране">
+			<param name="Local" value="Trouble_shooting.htm#Problems-_Display_Window">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Зависание камеры и проблемы загрузки">
+			<param name="Local" value="Trouble_shooting.htm#Problems-_Camera_Timeouts">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Проблемы горячих пикселей">
+			<param name="Local" value="Trouble_shooting.htm#Problems-Hot_Pixels">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Восстановление рабочих настроек">
+			<param name="Local" value="Trouble_shooting.htm#Problems-restore_guiding_parameters">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Низкая производительность гидирования">
+			<param name="Local" value="Trouble_shooting.htm#Problems-_Poor_Guiding">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Предупреждения">
+			<param name="Local" value="Trouble_shooting.htm#Problems-_Alerts">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Анализ логов">
+			<param name="Local" value="Trouble_shooting.htm#Log_analysis">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Problem Reporting">
+			<param name="Local" value="Trouble_shooting.htm#Problem_Reporting">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Обучение">
+		<param name="Local" value="Tutorials.htm">
+		</OBJECT>
+	<UL>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Drift Alignment">
+			<param name="Local" value="Tutorials.htm#Drift_Align">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Static Polar Alignment">
+			<param name="Local" value="Tutorials.htm#Static_polar_alignment">
+			</OBJECT>
+		<LI> <OBJECT type="text/sitemap">
+			<param name="Name" value="Polar Drift Alignment">
+			<param name="Local" value="Tutorials.htm#Polar_Drift_Align">
+			</OBJECT>
+	</UL>
+	<LI> <OBJECT type="text/sitemap">
+		<param name="Name" value="Терминология">
+		<param name="Local" value="Glossary.html">
+		</OBJECT>
+</UL>
+</BODY></HTML>

@@ -1,0 +1,38 @@
+=== PHD2 Adaptive Guiding Agent v1.1 ===
+
+PREREQUISITI
+------------
+1. Assicurati di aver aperto PHD2.
+2. In PHD2 vai in Strumenti -> Abilita Server.
+3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per verificare la connessione
+   (devono comparire tre luci verdi nel log).
+
+AVVIO RAPIDO — FOCALE PIENA (tutti LIVE, exposure dynamic attivo)
+------------------------------------------------------------------
+  Avvia_Askar71F.bat            (Askar 71F,    490mm  focale piena, 1.58"/px, AM5)
+  Avvia_Tecnosky115.bat         (Tecnosky 115, 800mm  focale piena, 1.03"/px, AM5/CEM70G)
+  Avvia_RC8.bat                 (RC8,         1624mm  focale piena, 0.51"/px, CEM70G - LIVE)
+
+AVVIO RAPIDO — CON RIDUTTORE (tutti LIVE, exposure dynamic attivo)
+-------------------------------------------------------------------
+  Avvia_Askar71F_Ridotto.bat    (Askar 71F,     367mm, 2.11"/px, riduttore 0.75x)
+  Avvia_Tecnosky115_Ridotto.bat (Tecnosky 115,  640mm, 1.29"/px, riduttore 0.80x)
+  Avvia_RC8_Ridotto.bat         (RC8,          1218mm, 0.68"/px, riduttore 0.75x - LIVE)
+
+DASHBOARD
+---------
+Apri il browser e vai su: http://localhost:8080
+
+CONFIGURAZIONE
+--------------
+Ogni file config_*.toml corrisponde a un setup. I parametri principali:
+  dry_run = true    -> modalita' analisi (nessun comando inviato a PHD2)
+  dry_run = false   -> modalita' LIVE (l'agente modifica parametri di guida)
+
+  NOTA: tutti i config_*.toml hanno dry_run=false e exposure_dynamic.enabled=true.
+  Il config.toml di default (fallback) ha dry_run=true ed e' solo per emergenze.
+
+FIREWALL
+--------
+Se la dashboard non e' raggiungibile da altri dispositivi sulla rete locale,
+eseguire 'Sblocca_Firewall_8080.bat' come Amministratore (una sola volta).

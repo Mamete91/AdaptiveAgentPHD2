@@ -1,0 +1,22 @@
+name: clang-format Check
+on: [push, pull_request]
+jobs:
+  formatting-check:
+    name: Formatting Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.x'
+
+    - name: Install clang-format
+      run: pip3 install clang-format==18.1.8
+
+    - name: Run clang-format style check
+      run: |
+        ./build/run-clang-format
+        git diff --exit-code

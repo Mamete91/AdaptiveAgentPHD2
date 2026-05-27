@@ -1,0 +1,9 @@
+{
+  "session_start": "2026-04-28T18:17:36.180824",
+  "duration_minutes": 1.2,
+  "total_frames": 35,
+  "total_actions": 11,
+  "peak_rms_total_arcsec": 0.5124,
+  "csv_file": "logs\\session_20260428_181736.csv",
+  "jsonl_file": "logs\\decisions_20260428_181736.jsonl"
+}

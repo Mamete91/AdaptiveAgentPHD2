@@ -1,0 +1,544 @@
+/**
+ * app.js — Dashboard real-time per PHD2 Adaptive Agent
+ * Connessione WebSocket + aggiornamento UI + Chart.js
+ */
+
+// ===== CONFIG =====
+const MAX_CHART_POINTS = 120;  // ultimi N frame nel grafico
+const WS_URL = `ws://${location.host}/ws`;
+const API_BASE = `${location.protocol}//${location.host}`;
+
+// ===== STATO =====
+let wsConn = null;
+let frameCount = 0;
+let actionCount = 0;
+let isDryRun = true;
+let exposureMarkerMeta = [];  // parallel to chart labels; null or {dir, old_ms, new_ms, state}
+
+// ===== CHART =====
+const chartCtx = document.getElementById('guide-chart').getContext('2d');
+const guideChart = new Chart(chartCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'RMS RA',
+        data: [],
+        borderColor: '#5b9cf6',
+        backgroundColor: 'rgba(91,156,246,0.08)',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.35,
+        fill: true,
+      },
+      {
+        label: 'RMS Dec',
+        data: [],
+        borderColor: '#34d399',
+        backgroundColor: 'rgba(52,211,153,0.06)',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.35,
+        fill: true,
+      },
+      {
+        label: 'RMS Totale',
+        data: [],
+        borderColor: '#a78bfa',
+        backgroundColor: 'rgba(167,139,250,0.05)',
+        borderWidth: 2.5,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        tension: 0.35,
+        fill: false,
+        borderDash: [],
+      },
+      {
+        label: 'Exp. Change',
+        data: [],
+        borderColor: 'transparent',
+        backgroundColor: (ctx) => {
+          const meta = exposureMarkerMeta[ctx.dataIndex];
+          if (!meta) return 'transparent';
+          return meta.dir === 'UP' ? 'rgba(255,210,107,0.9)' : 'rgba(0,214,143,0.9)';
+        },
+        borderWidth: 0,
+        showLine: false,
+        pointRadius: (ctx) => (exposureMarkerMeta[ctx.dataIndex] ? 8 : 0),
+        pointHoverRadius: (ctx) => (exposureMarkerMeta[ctx.dataIndex] ? 10 : 0),
+        pointStyle: 'triangle',
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        display: true,
+        labels: {
+          color: '#8a9cc0',
+          font: { family: 'Inter', size: 12 },
+          usePointStyle: true,
+          pointStyleWidth: 10,
+          boxHeight: 4,
+        },
+      },
+      tooltip: {
+        backgroundColor: '#0d1424',
+        borderColor: 'rgba(100,160,255,0.2)',
+        borderWidth: 1,
+        titleColor: '#e8f0ff',
+        bodyColor: '#8a9cc0',
+        filter: (item) => {
+          if (item.datasetIndex === 3 && !exposureMarkerMeta[item.dataIndex]) return false;
+          return true;
+        },
+        callbacks: {
+          label: ctx => {
+            if (ctx.datasetIndex === 3) {
+              const meta = exposureMarkerMeta[ctx.dataIndex];
+              if (meta) return ` Exp ${meta.dir}: ${meta.old_ms}ms → ${meta.new_ms}ms`;
+              return null;
+            }
+            return ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)}″`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        ticks: { display: false },
+        grid: { color: 'rgba(100,160,255,0.05)' },
+        border: { display: false },
+      },
+      y: {
+        min: 0,
+        suggestedMax: 1.2,
+        ticks: {
+          color: '#4d5f7a',
+          font: { family: 'JetBrains Mono', size: 11 },
+          callback: v => `${v.toFixed(2)}″`,
+        },
+        grid: { color: 'rgba(100,160,255,0.07)' },
+        border: { display: false },
+      },
+    },
+  },
+});
+
+// Soglie orizzontali (linee reference)
+const _rmsHighPlugin = {
+  id: 'threshLines',
+  afterDraw(chart) {
+    if (!chart.chartArea || !chart.scales || !chart.scales.y) return;
+    const { ctx, chartArea: { left, right }, scales: { y } } = chart;
+    const drawLine = (val, color, dash) => {
+      const yPx = y.getPixelForValue(val);
+      if (yPx === undefined || isNaN(yPx)) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      ctx.moveTo(left, yPx);
+      ctx.lineTo(right, yPx);
+      ctx.stroke();
+      ctx.restore();
+    };
+    drawLine(0.80, 'rgba(255,154,60,0.5)', [5, 4]);   // soglia alta
+    drawLine(0.35, 'rgba(0,214,143,0.4)', [5, 4]);    // soglia bassa
+  },
+};
+Chart.register(_rmsHighPlugin);
+
+
+// ===== WEBSOCKET =====
+function connectWS() {
+  updateConnStatus('reconnecting', 'Connessione…');
+
+  wsConn = new WebSocket(WS_URL);
+
+  wsConn.onopen = () => {
+    updateConnStatus('connected', 'Connesso');
+    // Carica stato iniziale via REST
+    fetchStatus();
+  };
+
+  wsConn.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      handleMessage(msg);
+    } catch (e) {
+      console.warn('WS parse error:', e);
+    }
+  };
+
+  wsConn.onclose = () => {
+    updateConnStatus('disconnected', 'Disconnesso');
+    setTimeout(connectWS, 3000);
+  };
+
+  wsConn.onerror = () => {
+    wsConn.close();
+  };
+}
+
+function handleMessage(msg) {
+  if (msg.type === 'guide_step') {
+    updateGuideStep(msg);
+  } else if (msg.type === 'status') {
+    applyFullStatus(msg);
+  } else if (msg.type === 'star_lost') {
+    setCondition('STAR_LOST', '⭕', '🌕 Stella persa');
+  } else if (msg.type === 'start_guiding') {
+    setCondition('NOMINAL', '🌟', 'Guida avviata');
+  } else if (msg.type === 'guiding_stopped') {
+    setCondition('UNKNOWN', '⏸', 'Guida ferma');
+  }
+  // ping ignorato
+}
+
+
+// ===== REST STATUS =====
+async function fetchStatus() {
+  try {
+    const r = await fetch(`${API_BASE}/status`);
+    const data = await r.json();
+    applyFullStatus(data);
+  } catch (e) { /* nessuna conn */ }
+}
+
+function applyFullStatus(data) {
+  const ctrl = data.controller || {};
+  const an = data.analyzer || {};
+
+  // Aggiorna controller UI
+  if (ctrl.guiding_state) {
+    updateCtrlState(ctrl.guiding_state);
+  }
+  if (ctrl.ra) {
+    el('ra-aggr').textContent = ctrl.ra.current_aggr?.toFixed(1) ?? '—';
+    el('ra-mm').textContent = ctrl.ra.current_minmove?.toFixed(3) ?? '—';
+    el('ra-param-name').textContent = ctrl.ra.aggr_param || '—';
+  }
+  if (ctrl.dec) {
+    el('dec-aggr').textContent = ctrl.dec.current_aggr?.toFixed(1) ?? '—';
+    el('dec-mm').textContent = ctrl.dec.current_minmove?.toFixed(3) ?? '—';
+    el('dec-param-name').textContent = ctrl.dec.aggr_param || '—';
+  }
+  isDryRun = ctrl.dry_run ?? true;
+  el('dry-run-switch').checked = isDryRun;
+  el('mode-badge').textContent = isDryRun ? 'MODALITÀ TEST' : 'LIVE CONTROL';
+  el('mode-badge').classList.toggle('live', !isDryRun);
+  
+  if (ctrl.ai_find_enabled !== undefined) {
+    el('ai-find-switch').checked = ctrl.ai_find_enabled;
+  }
+
+  // Aggiorna analyzer UI se disponibile
+  if (an.rms_ra !== undefined) {
+    updateRmsDisplay(an.rms_ra, an.rms_dec, an.rms_total);
+    el('snr-val').textContent = an.snr_avg?.toFixed(1) ?? '—';
+    el('hfd-val').textContent = an.hfd_avg?.toFixed(2) ?? '—';
+    el('spike-val').textContent = an.spike_score !== undefined
+      ? (an.spike_score * 100).toFixed(0) + '%' : '—';
+    if (an.condition) {
+      setConditionFromName(an.condition, an.condition_description || '');
+    }
+  }
+
+  // Esposizione dinamica + escalation gate
+  if (ctrl.exposure || ctrl.escalation_gate) {
+    updateExposureEscalation(ctrl);
+  }
+
+  // Actions history
+  if (ctrl.last_actions?.length) {
+    el('action-log').innerHTML = ''; // prevent duplication
+    ctrl.last_actions.forEach(a => addActionLog(a));
+  }
+}
+
+
+// ===== AGGIORNAMENTO UI =====
+function updateGuideStep(msg) {
+  frameCount++;
+  el('frame-count').textContent = `${frameCount} frame`;
+
+  updateRmsDisplay(msg.rms_ra, msg.rms_dec, msg.rms_total);
+
+  // Grafico — cerca azione esposizione per marker
+  let expMarker = null;
+  if (msg.actions?.length) {
+    const expAction = msg.actions.find(a => a.axis === 'exposure');
+    if (expAction) {
+      expMarker = {
+        dir: expAction.new_value > expAction.old_value ? 'UP' : 'DOWN',
+        old_ms: Math.round(expAction.old_value),
+        new_ms: Math.round(expAction.new_value),
+        state: msg.condition || '',
+      };
+    }
+  }
+
+  const ts = new Date(msg.ts * 1000).toLocaleTimeString('it-IT', { hour12: false });
+  addChartPoint(ts, msg.rms_ra, msg.rms_dec, msg.rms_total, expMarker);
+
+  // Condizione
+  if (msg.condition) {
+    setConditionFromName(msg.condition, msg.condition_desc || '');
+  }
+
+  // Azioni controller
+  if (msg.actions?.length) {
+    msg.actions.forEach(a => addActionLog(a));
+  }
+}
+
+function updateRmsDisplay(ra, dec, tot) {
+  // Valori
+  setGauge('rms-ra-val', ra, 'bar-ra');
+  setGauge('rms-dec-val', dec, 'bar-dec');
+  setGauge('rms-total-val', tot, 'bar-total');
+}
+
+function setGauge(valId, rms, barId) {
+  const valEl = el(valId);
+  const barEl = el(barId);
+  if (rms === undefined || rms === null) return;
+
+  valEl.textContent = rms.toFixed(3);
+
+  // Classificazione colore
+  let cls = 'good';
+  let barColor = 'var(--green)';
+  if (rms > 0.80) { cls = 'crit'; barColor = 'var(--red)'; }
+  else if (rms > 0.60) { cls = 'bad'; barColor = 'var(--orange)'; }
+  else if (rms > 0.35) { cls = 'warn'; barColor = 'var(--yellow)'; }
+
+  valEl.className = `gauge-value ${cls}`;
+
+  // Barra: mappa 0–1.5 arcsec in 0–100%
+  const pct = Math.min(100, (rms / 1.5) * 100);
+  barEl.style.width = pct + '%';
+  barEl.style.background = barColor;
+}
+
+function addChartPoint(label, ra, dec, tot, expMarker = null) {
+  const d = guideChart.data;
+  d.labels.push(label);
+  d.datasets[0].data.push(ra);
+  d.datasets[1].data.push(dec);
+  d.datasets[2].data.push(tot);
+  // 4th dataset: small y-value at marker points (renders as triangle dot)
+  d.datasets[3].data.push(expMarker ? 0.06 : null);
+  exposureMarkerMeta.push(expMarker);
+
+  if (d.labels.length > MAX_CHART_POINTS) {
+    d.labels.shift();
+    d.datasets.forEach(ds => ds.data.shift());
+    exposureMarkerMeta.shift();
+  }
+  guideChart.update('none');
+}
+
+// Condizione seeing
+const CONDITION_MAP = {
+  NOMINAL:         { icon: '🌟', color: '#00d68f', label: 'Nominale' },
+  DEGRADED_SEEING: { icon: '🌪', color: '#ff9a3c', label: 'Seeing Degradato' },
+  OSCILLATING:     { icon: '〰️', color: '#ffd66b', label: 'Oscillazione' },
+  LOW_SNR:         { icon: '🌫', color: '#8a9cc0', label: 'SNR Basso' },
+  STAR_LOST:       { icon: '❌', color: '#ff5555', label: 'Stella Persa' },
+  UNKNOWN:         { icon: '🌙', color: '#4d5f7a', label: 'In attesa…' },
+};
+
+function setCondition(key, iconOverride, labelOverride) {
+  const cfg = CONDITION_MAP[key] || CONDITION_MAP.UNKNOWN;
+  el('condition-icon').textContent = iconOverride || cfg.icon;
+  el('condition-name').textContent = labelOverride || cfg.label;
+  el('condition-name').style.color = cfg.color;
+}
+
+function setConditionFromName(condName, desc) {
+  const cfg = CONDITION_MAP[condName] || CONDITION_MAP.UNKNOWN;
+  el('condition-icon').textContent = cfg.icon;
+  el('condition-name').textContent = cfg.label;
+  el('condition-name').style.color = cfg.color;
+  el('condition-desc').textContent = desc;
+}
+
+function updateCtrlState(state) {
+  const badge = el('ctrl-state-badge');
+  badge.className = `ctrl-state-badge ${state.toLowerCase()}`;
+  el('ctrl-state-label').textContent = state.replace('_', ' ');
+}
+
+function updateExposureEscalation(ctrl) {
+  const exp = ctrl.exposure;
+  const gate = ctrl.escalation_gate;
+
+  if (exp) {
+    // State badge
+    const stateName = exp.state || 'NOMINAL';
+    el('exp-state-label').textContent = stateName.replace(/_/g, ' ');
+    const badgeEl = el('exp-state-badge');
+    badgeEl.className = 'exposure-state-badge';
+    if (stateName === 'NOMINAL') badgeEl.classList.add('nominal');
+    else if (stateName === 'BOOSTED_FOR_SNR') badgeEl.classList.add('boosted-snr');
+    else if (stateName === 'BOOSTED_FOR_SEEING') badgeEl.classList.add('boosted-seeing');
+
+    // Values
+    const cur = exp.current_ms;
+    const base = exp.base_ms;
+    el('exp-current-ms').textContent = cur != null ? `${cur} ms` : '—';
+    el('exp-base-ms').textContent = base != null ? `${base} ms` : '—';
+    el('exp-steps').textContent = exp.steps_above_base != null ? exp.steps_above_base : '—';
+
+    // Cooldown bar
+    const residuo = exp.cooldown_residuo_s ?? 0;
+    const total = exp.cooldown_total_s ?? 1;
+    const pct = total > 0 ? Math.min(100, (residuo / total) * 100) : 0;
+    const barEl = el('exp-cooldown-bar');
+    barEl.style.width = pct + '%';
+    barEl.classList.toggle('hot', pct > 50);
+    el('exp-cooldown-text').textContent = pct > 0 ? `${residuo.toFixed(0)}s / ${total}s` : 'pronto';
+  }
+
+  if (gate) {
+    const enabledBadge = el('gate-enabled-badge');
+    const gateOn = gate.enabled === true;
+    enabledBadge.textContent = gateOn ? 'ATTIVO' : 'DISATTIVO';
+    enabledBadge.classList.toggle('on', gateOn);
+
+    // RA
+    const raEl = el('gate-ra-badge');
+    raEl.textContent = gate.ra ? 'SATURATE' : 'OK';
+    raEl.className = `gate-status-badge ${gate.ra ? 'saturated' : 'ok'}`;
+
+    // DEC
+    const decEl = el('gate-dec-badge');
+    decEl.textContent = gate.dec ? 'SATURATE' : 'OK';
+    decEl.className = `gate-status-badge ${gate.dec ? 'saturated' : 'ok'}`;
+
+    // Note
+    const anysat = gate.ra || gate.dec;
+    el('gate-note').textContent = anysat
+      ? 'Gate aperto: path B può intervenire sull\'esposizione'
+      : 'Gate chiuso: leve RA e DEC non ancora al limite';
+  }
+}
+
+// Log azioni
+function addActionLog(action) {
+  const logBody = el('action-log');
+
+  // Rimuovi placeholder
+  const placeholder = logBody.querySelector('.log-placeholder');
+  if (placeholder) placeholder.remove();
+
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${action.dry_run ? 'dry' : 'live'}`;
+
+  const time = new Date(action.timestamp * 1000).toLocaleTimeString('it-IT', { hour12: false });
+  const isDown = action.new_value < action.old_value;
+  const valClass = isDown ? 'down' : '';
+
+  const oldVal = action.old_value !== undefined && action.old_value !== null ? Number(action.old_value).toFixed(1) : '—';
+  const newVal = action.new_value !== undefined && action.new_value !== null ? Number(action.new_value).toFixed(1) : '—';
+
+  entry.innerHTML = `
+    <span class="log-time">${time}</span>
+    <div class="log-content">
+      <div>
+        <span class="log-axis">${(action.axis || '').toUpperCase()}</span>
+        <span class="log-param" style="margin-left:8px">${action.param || ''}</span>
+        <span class="log-change" style="margin-left:8px">
+          <span class="old-val">${oldVal}</span>
+          <span class="arrow">→</span>
+          <span class="new-val ${valClass}">${newVal}</span>
+        </span>
+      </div>
+      <div class="log-reason">${action.reason || ''}</div>
+    </div>
+    <span class="log-badge ${action.dry_run ? 'dry' : 'live'}">${action.dry_run ? 'TEST' : 'LIVE'}</span>
+  `;
+
+  logBody.prepend(entry);
+
+  // Mantieni al massimo 50 entry nel DOM
+  const entries = logBody.querySelectorAll('.log-entry');
+  if (entries.length > 50) {
+    entries[entries.length - 1].remove();
+  }
+}
+
+function updateConnStatus(state, label) {
+  const dot = document.querySelector('.status-dot');
+  dot.className = `status-dot ${state}`;
+  el('conn-label').textContent = label;
+}
+
+
+// ===== CONTROLLI =====
+el('btn-clear-chart').addEventListener('click', () => {
+  guideChart.data.labels = [];
+  guideChart.data.datasets.forEach(ds => ds.data = []);
+  exposureMarkerMeta = [];
+  guideChart.update();
+  frameCount = 0;
+  el('frame-count').textContent = '0 frame';
+});
+
+el('btn-clear-log').addEventListener('click', () => {
+  el('action-log').innerHTML = '<div class="log-placeholder">Log pulito.</div>';
+});
+
+el('dry-run-switch').addEventListener('change', async function () {
+  const enabled = this.checked;
+  try {
+    await fetch(`${API_BASE}/config/dry_run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    el('mode-badge').textContent = enabled ? 'MODALITÀ TEST' : 'LIVE CONTROL';
+    el('mode-badge').classList.toggle('live', !enabled);
+  } catch (e) {
+    console.error('Errore aggiornamento dry_run:', e);
+    // rollback toggle visivo
+    this.checked = !enabled;
+  }
+});
+
+el('ai-find-switch').addEventListener('change', async function () {
+  const enabled = this.checked;
+  try {
+    await fetch(`${API_BASE}/config/ai_find`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+  } catch (e) {
+    console.error('Errore aggiornamento ai_find:', e);
+    this.checked = !enabled;
+  }
+});
+
+
+// ===== HELPERS =====
+function el(id) { return document.getElementById(id); }
+
+
+// ===== AVVIO =====
+document.addEventListener('DOMContentLoaded', () => {
+  connectWS();
+
+  // Poll status ogni 5s come fallback se il WS non manda aggiornamenti
+  setInterval(fetchStatus, 5000);
+});

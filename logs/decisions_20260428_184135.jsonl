@@ -1,0 +1,2 @@
+{"timestamp": 1777394515.183533, "axis": "ra", "param": "Aggressiveness", "old_value": 70.0, "new_value": 72.0, "reason": "RMS RA=0.38\" < 0.45\" per 10 frame - guida stabile, aumento graduale Aggressivita", "dry_run": true}
+{"timestamp": 1777394515.183533, "axis": "dec", "param": "Aggressiveness", "old_value": 60.0, "new_value": 62.0, "reason": "RMS DEC=0.20\" < 0.45\" per 10 frame - guida stabile, aumento graduale Aggressivita", "dry_run": true}

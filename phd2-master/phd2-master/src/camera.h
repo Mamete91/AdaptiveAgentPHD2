@@ -1,0 +1,369 @@
+/*
+ *  camera.h
+ *  PHD Guiding
+ *
+ *  Created by Craig Stark.
+ *  Copyright (c) 2006-2010 Craig Stark.
+ *  All rights reserved.
+ *
+ *  This source code is distributed under the following "BSD" license
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *    Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *    Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *    Neither the name of Craig Stark, Stark Labs nor the names of its
+ *     contributors may be used to endorse or promote products derived from
+ *     this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ *  POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
+
+#ifndef CAMERA_H_INCLUDED
+#define CAMERA_H_INCLUDED
+
+typedef std::map<int, usImage *> ExposureImgMap; // map exposure to image
+class DefectMap;
+
+enum PropDlgType
+{
+    PROPDLG_NONE = 0,
+    PROPDLG_WHEN_CONNECTED = (1 << 0), // property dialog available when connected
+    PROPDLG_WHEN_DISCONNECTED = (1 << 1), // property dialog available when disconnected
+    PROPDLG_ANY = (PROPDLG_WHEN_CONNECTED | PROPDLG_WHEN_DISCONNECTED),
+};
+
+extern wxSize UNDEFINED_FRAME_SIZE;
+
+class GuideCamera;
+
+class CameraConfigDialogPane : public ConfigDialogPane
+{
+public:
+    CameraConfigDialogPane(wxWindow *pParent, GuideCamera *pCamera);
+    virtual ~CameraConfigDialogPane() {};
+
+    void LayoutControls(GuideCamera *pCamera, BrainCtrlIdMap& CtrlMap);
+    virtual void LoadValues() {};
+    virtual void UnloadValues() {};
+};
+
+class CameraConfigDialogCtrlSet : public ConfigDialogCtrlSet
+{
+    GuideCamera *m_pCamera;
+    wxCheckBox *m_pUseSubframes;
+    wxSpinCtrl *m_pCameraGain;
+    wxButton *m_resetGain;
+    wxSpinCtrl *m_timeoutVal;
+    wxSpinCtrl *m_pDelay;
+    wxSpinCtrlDouble *m_pPixelSize;
+    wxChoice *m_binning;
+    wxCheckBox *m_allowSwBinning;
+    wxCheckBox *m_coolerOn;
+    wxSpinCtrl *m_coolerSetpt;
+    wxTextCtrl *m_camSaturationADU;
+    wxRadioButton *m_SaturationByProfile;
+    wxRadioButton *m_SaturationByADU;
+    void OnSwBinningChecked(wxCommandEvent& event);
+
+    int m_prevBinning;
+
+public:
+    CameraConfigDialogCtrlSet(wxWindow *pParent, GuideCamera *pCamera, AdvancedDialog *pAdvancedDialog,
+                              BrainCtrlIdMap& CtrlMap);
+    virtual ~CameraConfigDialogCtrlSet() {};
+    virtual void LoadValues();
+    virtual void UnloadValues();
+
+    double GetPixelSize();
+    void SetPixelSize(double val);
+    int GetBinning();
+    void SetBinning(int val);
+    void OnSaturationChoiceChanged(wxCommandEvent& event);
+};
+
+enum CaptureOptionBits
+{
+    CAPTURE_SUBTRACT_DARK = 1 << 0,
+    CAPTURE_RECON = 1 << 1, // debayer and/or deinterlace as required
+    CAPTURE_IGNORE_FRAME_LIMIT = 1 << 2,
+
+    CAPTURE_LIGHT = CAPTURE_SUBTRACT_DARK | CAPTURE_RECON,
+    CAPTURE_DARK = CAPTURE_IGNORE_FRAME_LIMIT,
+    CAPTURE_BPM_REVIEW = CAPTURE_SUBTRACT_DARK | CAPTURE_IGNORE_FRAME_LIMIT,
+};
+
+struct CaptureParams
+{
+    wxRect subframe;
+    wxRect limitFrame;
+    int duration;
+    int gain;
+    int captureOptions;
+    wxByte hwBinning;
+    wxByte swBinning;
+    wxByte bpp;
+
+    // combined binning level - hardware + software
+    int CombinedBinning() const { return hwBinning * swBinning; }
+};
+
+// mapping from combined binning to (hwBinning, swBinning) pair
+typedef std::map<int, std::pair<int, int>> BinningChoices;
+
+class GuideCamera : public wxMessageBoxProxy, public OnboardST4
+{
+    friend class CameraConfigDialogPane;
+    friend class CameraConfigDialogCtrlSet;
+
+    double m_pixelSize;
+
+protected:
+    bool m_hasGuideOutput;
+    int m_timeoutMs;
+    bool m_saturationByADU;
+    unsigned short m_saturationADU;
+
+public:
+    enum
+    {
+        MAX_SOFTWARE_BINNING = 4
+    };
+
+    static const double UnknownPixelSize;
+
+    int GuideCameraGain;
+    wxString Name; // User-friendly name
+
+    // FrameSize is the size of the current guide frame, *before software binning*. To
+    // get the actual size of the current guide frame image, callers should use
+    // pFrame->pGuider->CurrentImage()->Size. If the current image is not available,
+    // pCamera->GetFrameSize() can be used, but this is not guaranteed match the current
+    // frame size, and may even be an empty rect for some cameras (ASCOM cameras for
+    // example) that do not report a frame size until after an image is captured.
+    wxSize FrameSize;
+
+    bool Connected;
+    PropDlgType PropertyDialogType;
+    bool HasGainControl;
+    bool HasShutter;
+    bool HasSubframes;
+    bool HasFrameLimiting;
+    wxByte MaxHwBinning; // max hardware binning level
+    wxByte HwBinning; // hardware binning level
+    wxByte SwBinning; // software binning level
+    bool ShutterClosed; // false=light, true=dark
+    bool UseSubframes;
+    bool HasCooler;
+    bool HasBayer; // true for color camera
+    wxRect LimitFrame; // limit full frames to this region of interest (ROI). An empty rect for no limit.
+
+    wxCriticalSection DarkFrameLock; // dark frames can be accessed in the main thread or the camera worker thread
+    usImage *CurrentDarkFrame;
+    ExposureImgMap Darks; // map exposure => dark frame
+    DefectMap *CurrentDefectMap;
+
+    static wxArrayString GuideCameraList();
+    static GuideCamera *Factory(const wxString& choice);
+
+    GuideCamera();
+    virtual ~GuideCamera();
+
+    virtual bool HasNonGuiCapture() = 0;
+    virtual wxByte BitsPerPixel() = 0;
+
+    static bool Capture(GuideCamera *camera, usImage& img, const CaptureParams& capture);
+
+    virtual bool CanSelectCamera() const { return false; }
+    virtual bool HandleSelectCameraButtonClick(wxCommandEvent& evt);
+    static const wxString DEFAULT_CAMERA_ID;
+    virtual bool EnumCameras(wxArrayString& names, wxArrayString& ids);
+
+    static bool ConnectCamera(GuideCamera *camera, const wxString& cameraId);
+
+    // Opens connection to the camera. cameraId identifies which camera to connect to if
+    // there is more than one camera present
+    virtual bool Connect(const wxString& cameraId) = 0;
+    virtual bool Disconnect() = 0; // Disconnects, unloading any DLLs loaded by Connect
+    virtual void InitCapture(); // Gets run at the start of any loop (e.g., reset stream, set gain, etc).
+
+    virtual bool ST4HasGuideOutput();
+    virtual bool ST4HostConnected();
+    virtual bool ST4HasNonGuiMove();
+    virtual bool ST4PulseGuideScope(int direction, int duration);
+
+    CameraConfigDialogPane *GetConfigDialogPane(wxWindow *pParent);
+    CameraConfigDialogCtrlSet *GetConfigDlgCtrlSet(wxWindow *pParent, GuideCamera *pCamera, AdvancedDialog *pAdvancedDialog,
+                                                   BrainCtrlIdMap& CtrlMap);
+
+    static BinningChoices GetBinningChoices(int maxHwBinning);
+    BinningChoices GetBinningChoices() const;
+    static int MaxCombinedBinning(int maxHwBinning);
+    int MaxCombinedBinning() const;
+    static std::pair<int, int> GetHwAndSwBinning(int maxHwBinning, int combinedBinning);
+    std::pair<int, int> GetHwAndSwBinning(int combinedBinning) const;
+    static void GetBinningOpts(wxArrayString *opts, int maxHwBinning, bool includeSwBinning);
+    void GetBinningOpts(wxArrayString *opts, bool includeSwBinning) const;
+    static bool GetOfferSwBinning(int maxHwBinning);
+    bool GetOfferSwBinning() const;
+    int GetBinning() const;
+    // set the combined binning level
+    bool SetBinning(int binning);
+    // set the hardware and software binning levels
+    bool SetBinning(int hwBinning, int swBinning);
+    bool SetLimitFrame(const wxRect& roi, int binning, wxString *errorMessage);
+    void LoadLimitFrame(int binning);
+
+    virtual void ShowPropertyDialog() { return; }
+    bool SetCameraPixelSize(double pixel_size);
+    double GetCameraPixelSize() const;
+    virtual bool GetDevicePixelSize(double *devPixelSize); // Value from device/driver or error return
+
+    virtual bool SetCoolerOn(bool on);
+    virtual bool SetCoolerSetpoint(double temperature);
+    virtual bool GetCoolerStatus(bool *on, double *setpoint, double *power, double *temperature);
+    virtual bool GetSensorTemperature(double *temperature);
+
+    virtual wxString GetSettingsSummary();
+    void AddDark(usImage *dark);
+    void SelectDark(int exposureDuration);
+    void SetDefectMap(DefectMap *newMap);
+    void ClearDefectMap();
+    void ClearDarks();
+
+    void SubtractDark(usImage& img);
+    void GetDarkLibraryProperties(int *pNumDarks, double *pMinExp, double *pMaxExp);
+
+    virtual wxSize GetFrameSize() const;
+    virtual wxSize DarkFrameSize() { return FrameSize; }
+
+    static double GetProfilePixelSize();
+
+    unsigned short GetSaturationADU() const;
+    bool IsSaturationByADU() const;
+    void SetSaturationByADU(bool saturationByADU, unsigned short saturationVal);
+
+    int GetCameraGain() const;
+    bool SetCameraGain(int cameraGain);
+    virtual int GetDefaultCameraGain();
+
+    virtual bool Capture(usImage& img, const CaptureParams& captureParams) = 0;
+
+protected:
+    int GetTimeoutMs() const;
+    void SetTimeoutMs(int timeoutMs);
+
+    static bool CamConnectFailed(const wxString& errorMessage);
+
+    enum CaptureFailType
+    {
+        CAPT_FAIL_MEMORY,
+        CAPT_FAIL_TIMEOUT,
+    };
+    enum ReconnectType
+    {
+        NO_RECONNECT,
+        RECONNECT,
+    };
+    void DisconnectWithAlert(CaptureFailType type);
+    void DisconnectWithAlert(const wxString& msg, ReconnectType reconnect);
+};
+
+inline int GuideCamera::GetTimeoutMs() const
+{
+    return m_timeoutMs;
+}
+
+inline BinningChoices GuideCamera::GetBinningChoices() const
+{
+    return GetBinningChoices(MaxHwBinning);
+}
+
+// returns the max combined binning level (hardware and software)
+inline int GuideCamera::MaxCombinedBinning(int maxHwBinning)
+{
+    return GetBinningChoices(maxHwBinning).rbegin()->first;
+}
+
+inline int GuideCamera::MaxCombinedBinning() const
+{
+    return MaxCombinedBinning(MaxHwBinning);
+}
+
+inline std::pair<int, int> GuideCamera::GetHwAndSwBinning(int combinedBinning) const
+{
+    return GetHwAndSwBinning(MaxHwBinning, combinedBinning);
+}
+
+inline void GuideCamera::GetBinningOpts(wxArrayString *opts, bool includeSwBinning) const
+{
+    GetBinningOpts(opts, MaxHwBinning, includeSwBinning);
+}
+
+// get the combined binning level -- hardware and software binning
+inline int GuideCamera::GetBinning() const
+{
+    return HwBinning * SwBinning;
+}
+
+// Returns true when software binning should be offered in the UI.
+//
+// For cameras with adequate hardware binning capability (>= 4x), returns false.
+inline bool GuideCamera::GetOfferSwBinning(int maxHwBinning)
+{
+    return maxHwBinning < MAX_SOFTWARE_BINNING;
+}
+
+// Returns true when software binning should be offered in the UI.
+//
+// For cameras with adequate hardware binning capability (>= 4x), returns false.
+inline bool GuideCamera::GetOfferSwBinning() const
+{
+    return GetOfferSwBinning(MaxHwBinning);
+}
+
+// returns the expected frame size after software binning
+inline wxSize GuideCamera::GetFrameSize() const
+{
+    return wxSize(FrameSize.GetWidth() / SwBinning, FrameSize.GetHeight() / SwBinning);
+}
+
+inline double GuideCamera::GetCameraPixelSize() const
+{
+    return m_pixelSize;
+}
+
+inline bool GuideCamera::GetDevicePixelSize(double *devPixelSize)
+{
+    return true; // Return an error, the device/driver can't report pixel size
+}
+
+inline bool GuideCamera::IsSaturationByADU() const
+{
+    return m_saturationByADU;
+}
+
+inline unsigned short GuideCamera::GetSaturationADU() const
+{
+    return m_saturationByADU ? m_saturationADU : 0;
+}
+
+inline int GuideCamera::GetCameraGain() const
+{
+    return GuideCameraGain;
+}
+
+#endif /* CAMERA_H_INCLUDED */

@@ -1,0 +1,274 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html><head><meta http-equiv="content-type" content="text/html; charset=UTF-8"><title>Paramètres avancés</title></head>
+<body>
+<h2>Paramètres avancés</h2>
+Les paramètres avancés sont accessibles depuis le bouton 'cerveau'
+bien connu des utilisateurs de la version originale de PHD.
+&nbsp;<span style="font-style: italic;">PHD2</span> possède beaucoup plus de paramètres
+afin d'optimiser les performances de l'autoguidage. &nbsp;Même s'ils
+sont appelés 'avancés', ces paramètres ne sont pas particulièrement difficiles à
+comprendre, donc n'hésitez pas à les parcourir. &nbsp;Tous
+les champs possèdent un "tool tip", une petite fenêtre
+qui décrit chaque&nbsp;option en détail. &nbsp;
+Passez simplement le curseur au-dessus du champ pour voir le 'tool tip'. &nbsp;
+Normalement, il vous offre assez d'informations. &nbsp; 
+Parce qu'il existe bien plus de paramètres, le dialogue avancé de <span style="font-style: italic;">PHD2</span> est organisé
+en onglets, et la documentation suit également ce modèle. Tous les onglets affichent des boutons 'OK' et 'Annuler' en bas de fenêtre. 
+<br><br><span style="text-decoration: underline;"><a href="#Global_Tab">Onglet Global</a>
+<br><a href="#Guiding_Tab">Onglet Guidage</a><br>
+<a href="#Camera_Tab">Onglet Caméra</a>
+<br><a href="#Algorithms_Tab">Onglet Algorithmes</a><br>
+<a href="#Other_Devices_Tab">Onglet Autre Matériel</a>
+<br>
+<br>
+
+</span><h3><a name="Global_Tab"></a>Onglet Global</h3>
+<img alt="" src="Advanced_global.PNG"><br>
+<br>
+Les champs de l'onglet Global sont décrits par les informations qui s'affichent lorsque le pointeur de souris passe au-dessus.
+En voici une liste:
+<ul>
+<li>'<a name="Language"></a>Langue' - détermines la langue d'affichage de <span style="font-style: italic;">PHD2</span>, selon les traductions disponibles.
+&nbsp;Il faut redémarrer le programme en cas de changement</li>
+<li>'<a name="Reset_Configuration"></a>Remise à zéro' - pour restaurer les valeurs telles qu'elles existent lors d'une nouvelle installation de <span style="font-style: italic;">PHD2</span>.</li>
+<li>'<a name="Reset_Dont_Ask"></a>Rétablir les alertes "ne plus demander"' - rétablit les alertes cachées par l'option "ne plus demander""</li>
+<li>'<a name="Image_format"></a>Format de sauvegarde d'image' - spécifie le format d'image&nbsp;si le journal d'image pour l'étoile-guide est actif. Si vous l'utilisez pour essayer de résoudre un problème, utilisez le format Raw FITS.</li>
+<li>'<a name="Dither_RA_only"></a>Dithering seulement en AD' - les applications tierces qui utilisent le serveur de <span style="font-style: italic;">PHD2</span> ne pourront activer que le dithering en AD.</li>
+<li>'<a name="Dither_scale"></a>Echelle de dithering' - contrôle l'ampleur du dithering&nbsp;</li>
+<li>'<a name="Log_File_Location"></a>Emplacement du fichier de journal' - spécifie le dossier où PHD2 doit sauvegarder les journaux.</li>
+</ul>
+
+
+<h3><a name="Camera_Tab"></a>Onglet Caméra</h3>
+<img alt="" src="Advanced_camera.PNG"><br>
+<br>
+L'onglet Caméra contient les options suivantes: <br>
+<ul>
+<li>'<a name="Noise_reduction"></a>Réduction de bruit
+' - spécifie l'algorithme utilisé pour traiter les images bruitées - celles pour lesquelles l'application de darks est insuffisante.
+&nbsp;Choisissez Aucun, moyenne 2x2, ou moyenne 3x3. Les moyennes 2x2 et 3x3 réduisent considérablement le bruit. 3x3 est particulièrement
+efficace pour éliminer les pixels chauds. Ces options ne dégradent pas l'autoguidage de façon significative. Cependant, créer une matrice de pixels morts est plus efficace.</li>
+<li>'<a name="Time_lapse"></a>Laps de temps' - impose un délai fixe entre les
+expositions d'autoguidage. &nbsp;Ceci peut être utile si les expositions sont
+très courtes et vous ne voulez pas saturer la liaison avec la caméra ou la monture avec un trafic important.
+</li>
+<li>'<a name="Auto_exposure"></a>Temps d'exposition automatique' - Ce sont les réglages qui contrôlent l'exposition automatique.
+<ul><li>Min Exposition - le temps de pose minimum. PHD2 n'utilisera pas de temps de pose inférieur à cette valeur, même si l'étoile-guide à un RSB supérieur à la valeur RSB cible.
+Si ce paramètre est trop bas, vous risquez de 'chasser la turbulence' et obtenir un autoguidage médiocre.
+Les utilisateurs d'OA emploient généralement une valeur plus basse vu que des petites corrections fréquentes sont souvent désirables.</li>
+<li>Max Exposition - le temps de pose maximum. Quand une étoile est sélectionnée, PHD2 utilise la valeur d'exposition maximale puis diminue jusqu'à obtenir le RSB désiré.</li>
+<li>RSB cible - le RSB moyen que PHD2 cible en ajustant la durée de pose.
+Le RSB peut fluctuer d'une pose à l'autre, même avec un temps d'exposition fixe. tenez-en compte lors du réglage de ce paramètre.
+PHD2 rejette les images si le RSB descend sous 3,0. La valeur par défaut de 6,0 devrait offrir une latitude suffisante pour absorber les fluctuations naturelles.
+Comme mentionné dans la rubrique 'usage de base', le RSB est un concept comparable au rapport signal/bruit utilisé en photométrie.</li>
+</ul>
+</li>
+<li>'<a name="Pixel_size"></a>Taille des pixels en microns'
+ - Le second paramètre requis pour que <span style="font-style: italic;">PHD2</span> calcule l'échantillonnage de l'image
+en vue d'afficher les données d'autoguidage en secondes d'arc.&nbsp;La valeur à entrer se trouve dans le manuel de votre caméra. 
+Vous pouvez aussi calculer cette valeur en divisant la largeur du capteur en microns par le nombre de pixels horizontaux.
+Le premier paramètre est la longueur focale, qui s'introduit dans l'onglet 'Guidage'.</li>
+<li>'<a name="Camera_gain"></a>Gain caméra' - Fixe le niveau de gain pour les nombreuses caméras offrant cette option.&nbsp;
+Si l'étoile-guide est très brillante, la caméra bruitée ou la durée d'exposition importante, essayez de réduire cette valeur.
+</li>
+<li>'<a name="Disconnect_nonresponsive_camera"></a>Déconnexion de caméra plantée' - Le temps en secondes avant que PHD2 déconnecte une caméra qui ne transmet plus d'images. 
+Ces erreurs sont souvent causées par une connexion USB défectueuse. Cette valeur s'ajoute au temps de pose programmé. 
+PHD2 tente alors d'arrêter l'opération en cours et de déconnecter la caméra puis affiche un message d'alerte.
+Comme le problème provient du matériel, il est possible que PHD2 n'arrive pas à déconnecter la caméra de façon contrôlée. 
+Le paramètre doit être suffisamment élevé afin d'éviter les fausses alertes. C'est d'autant plus important pour les caméras possédant deux capteurs: un pour l'imagerie et un pour l'autoguidage. 
+En effet, ces appareils ne peuvent pas transférer en même temps les images des deux capteurs, ce qui cause des retards importants. 
+Ceci ne concerne que les pilotes du logiciel Sequence Generator Pro pour la marque SBIG.
+</li>
+<li>'<a name="Binning_setting"></a>Binning - La valeur de binning pour les caméras proposant cette option. Voir l'explication ci-dessous.
+</li>
+<li>'<a name="Use_subframes"></a>Utiliser des 'subframes' - <span style="font-style: italic;">PHD2</span>
+charge uniquement une sous-image à chaque exposition avec une caméra offrant cette possibilité.
+&nbsp;Ceci est très intéressant pour les caméras communiquant lentement avec le PC.
+L'option peut transformer un système trop lent en un excellent autoguidage . Quand cette option est activée,
+seule une petite sous-image (100x100 pixels) est téléchargée quand une étoile est sélectionnée, tant pour la calibration que pour l'autoguidage.
+&nbsp;Pendant la boucle initiale l'image complète est chargée mais elle est réduite dès qu'une étoile est sélectionnée.&nbsp; 
+Si vous utilisez cette option mais voulez voir l'image complète pour sélectionner une autre étoile, cliquez n'importe-où en dehors de la sous-image.</li>
+</ul>
+<span style="font-weight: bold;"><a name="Binning_usage"></a>Utilisation du Binning</span><br>
+Certaines caméras utilisables dans PHD2 peuvent réaliser le binning matériel.
+Cette option est intéressante lors de l'autoguidage à forte focale ou si la caméra possède des pixels de petite taille.
+Dans ce cas de figure, les images d'autoguidage sont suréchantillonnées et les étoiles souvent faibles, causant un RSB bas.
+En utilisant le binning on peut diminuer l'effet du bruit de lecture et améliorer le RSB, sans dégrader la précision de l'autoguidage.
+En binning, les effets suivants sont observés:<br>
+<ol>
+<li>Les étoiles ont un meilleur RSB et sont plus faciles à 'détacher' du fond de ciel.
+Ceci n'est utile que si vous ne trouvez qu'une étoile faible, avec un RSB proche de 3.
+</li>
+<li>La quantité de données transmises est diminuée par le carré du facteur de binning.
+Même si l'étoile est assez visible, cette option permet d'éviter la congestion du port USB&nbsp;
+Bien sûr, employer des 'subframes' donne un effet similaire après sélection d'une étoile.
+</li>
+<li>La résolution de l'image est diminuée par le facteur de binning. Ce n'est pas un souci si l'image d'origine a un échantillonnage inférieur à 1".
+Dans le cas contraire, il est possible que les performances de PHD2 soient dégradées. 
+Il faudra procéder à des essais car cette situation est aussi dépendante de l'échantillonnage de l'imageur.
+</li>
+<li>Chaque niveau de binning nécessite ses propres darks et matrices de pixels morts. 
+Si vous comptez alterner plusieurs réglages de binning, il est préférable de créer différents profils de matériel et créer les librairies et matrices pour chaque profil.
+De cette façon, vous pouvez passer d'un facteur de binning à un autre simplement en changeant de profil.
+</li></ol>
+La majorité des utilisateurs de PHD2 n'aura pas besoin du binning et devrait probablement éviter d'y faire appel à moins de savoir exactement de quoi il s'agit et quels effets cela entraîne.
+<br>
+<h3><a name="Guiding_Tab"></a>Guiding Tab</h3><span style="font-size: 10pt; font-family: Arial;"></span>
+<img style="width: 602px; height: 567px;" alt="" src="Advanced_guiding.png">
+<br><br>
+L'onglet Guidage contient les paramètres utilisés pour la calibration, le suivi et le guidage communs à tous les algorithmes.
+<br>
+Suivi de l'étoile-guide<br><ul>
+<li>'<a name="Search_region"></a>Zone de recherche' - spécifie la taille du "rectangle de suivi", en pixels. &nbsp;
+Vous devrez peut-être augmenter cette valeur si votre monture ne fonctionne pas bien ou si elle n'est pas bien alignée au nord.&nbsp;
+Vous pouvez aussi l'augmenter temporairement lors de la procédure de l'assistant d'autoguidage afin d'éviter une perte de l'étoile due au backlash.
+Attention, une zone trop grande risque de posséder plusieurs étoiles ce qui peut causer des problèmes pendant l'autoguidage.</li>
+<li>'<a name="Star_mass_change_detection"></a>Détection de masse d'étoile' - Indique 
+à <span style="font-style: italic;">PHD2</span> de calculer la luminosité et la taille de l'étoile par rapport au fond de ciel.</li>
+<li>'<a name="Star_mass_tolerance"></a>Tolérance de masse d'étoile' - quand la case est cochée, <span style="font-style: italic;">PHD2</span> 
+génère une erreur 'étoile perdue' si la 'masse' de l'étoile change de plus que le pourcentage choisi.&nbsp;
+C'est utile si plusieurs étoiles de magnitude différente sont présentes dans le rectangle et que vous voulez la certitude que 
+&nbsp;<span style="font-style: italic;">PHD2</span> ne passe pas d'une à l'autre.&nbsp;
+Cela permet aussi d'écarter les erreurs causées par des nuages d'altitude, une caméra fort bruitée ou des traces de particules alpha.
+Cependant, la prudence est de mise si on guide sur une étoile faible. 
+En cas d'erreurs 'étoile perdue' trop nombreuses alors que l'étoile-guide est bien visible, essayez d'augmenter la valeur.
+Une valeur de 100 ou une case décochée désactivent complètement les alertes.</li>
+</ul>
+Calibration<br><ul>
+<li>'<a name="Focal_length"></a>Focale' - la distance focale de l'optique d'autoguidage (millimètres). 
+Indique un des deux paramètres dont <span style="font-style: italic;">PHD2</span> a besoin pour calculer l'échantillonnage et donc 
+afficher les informations en arc-secondes. L'autre paramètre est la taille des pixels de l'autoguideur. Il se trouve dans l'onglet 'caméra'.</li>
+<li>'<a name="Calibration_step-size"></a>Pas de calibration (ms)' 
+-&nbsp;spécifie la durée de l'impulsion de guidage que 
+<span style="font-style: italic;">PHD2</span>
+emploie pendant la calibration. &nbsp;Son utilisation est décrite dans la section 'Auto Calibration' de la page d'aide 'Usage de base'.
+Vous pouvez ajuster la valeur selon que l'étoile-guide bouge trop vite ou trop lentement pendant la calibration.
+En général il est bon de calibrer sur une étoile située à moins de 30° de l'équateur céleste (Dec = 0°), et d'utiliser une valeur de 'pas de calibration'
+qui donne de 8 à 14 'pas' dans chaque direction. Le bouton 'Calculer' ouvre un dialogue qui vous aide à calculer une valeur appropriée:&nbsp;</li>
+<li>'<a name="Auto_restore_calibration"></a>Restaurer la calibration automatiquement' - indique à 
+<span style="font-style: italic;">PHD2</span> de recharger automatiquement les données de calibration à la connexion de l'équipement.
+Lisez bien la section <a href="Basic_use.htm#Automatic_Calibration">Calibration automatique</a> 
+pour comprendre les implications et les risques de cette option.</li>
+<li>'<a name="Assert_Dec_Orthogonal"></a>Suppose les axes orthogonaux' - Normalement, la calibration calcule 
+les axes AD et DEC de la caméra de façon indépendante. Une grande précision n'est pas nécessaire et les valeurs par défaut marchent bien.
+Les montures avec une erreur périodique très importante peuvent cependant bénéficier de cocher cette option.
+Dans ce cas, PHD2 calculera l'angle de la caméra en AD et supposera que l'axe DEC lui est orthogonal.</li>
+<li>'<a name="Clear_calibration"></a>Effacer la calibration'
+-&nbsp;Indique à <span style="font-style: italic;">PHD2</span>&nbsp;
+que vous désirez abandonner les valeurs de calibration en cours pour ce matériel et re-calibrer avant de lancer l'autoguidage.
+Il y a plusieurs raisons pour utiliser cette option:
+- par exemple vous avez tourné la caméra dans son support ou choisi une nouvelle cible proche du pôle céleste.
+&nbsp;Vous pouvez aussi utiliser le raccourci Shift-Click sur l'icone de guidage de la fenêtre principale pour forcer une nouvelle calibration.</li>
+<li>'<a name="Declination_compensation"></a>Utiliser la compensation de déclinaison' - 
+Si PHD2 peut obtenir les données de pointage de la monture via ASCOM, 
+il ajustera automatiquement l'ampleur de l'autoguidage en AD à la déclinaison courante.
+Cette case devrait rester cochée sauf dans certains cas très rares. Par exemple, les contrôleurs SiTech 
+appliquent une compensation automatique, auquel cas PHD2 ne doit pas en ajouter.</li>
+</ul>Paramètres d'autoguidage partagés<ul>
+<li>'<a name="Fast_Re-center"></a>Recentrage rapide après calibration ou dithering' - lors de la calibration et du dithering, la monture peut bouger beaucoup par rapport 
+à la position originale du verrouillage. En cochant cette case, PHD2 remettra la monture à cette position le plus vite possible, 
+avec les ordres les plus longs autorisés par les valeurs 'durée max' de votre algorithme d'autoguidage.
+Il s'agit seulement d'une optimisation, cette case est donc totalement optionnelle.</li>
+
+<li>'<a name="Reverse_Dec_output_after_meridian_flip"></a>Inverser la sortie DEC après basculement au méridien' -&nbsp;
+indique à <span style="font-style: italic;">PHD2</span> de modifier les données de calibration quand vous effectuez un basculement au méridien. &nbsp;
+Certaines montures tiennent compte de cette situation et inversent spontanément les ordres d'autoguidage. &nbsp;D'autres, probablement la majorité, ne le font pas.
+Le logiciel doit savoir quelle stratégie est employée par votre monture. 
+&nbsp;Trouver cette information dans la documentation de votre monture peut être difficile. Il vaut mieux procéder à un test.
+&nbsp;Décochez la case et faites une calibration avec la monture inclinée d'un côté du trépied. Tournez alors la monture de l'autre côté, choisissez 'Inverser les données de calibration' dans le menu 'Outils'
+puis commencez à autoguider.&nbsp;
+Si le guidage fonctionne normalement, laissez la case décochée mais si la déclinaison ne se corrige pas dans le bon sens, cochez la case et recommencez le test.</li>
+
+<li>'<a name="Enable_guide_output"></a>Activer le guidage'
+- Cette option est cochée par défaut pour indiquer à <span style="font-style: italic;">PHD2</span> de commander la &nbsp;monture. &nbsp;
+Dans certaines circonstances il peut être utile de le désactiver, généralement pour observer le comportement de la monture sans corrections.
+&nbsp;Par exemple, vous pouvez désactiver les ordres d'autoguidage pour contrôler la forme de la courbe d'erreur périodique 
+ou pour vérifier la dérive causée par une mise en station incorrecte.
+&nbsp;</li>
+<li>'<a name="Stop_guiding_on_slew"></a>Arrêter le guidage en cas de mouvement ' - quand on guide avec une monture ASCOM, PHD2
+peut détecter un mouvement propre à la monture et arrêter l'autoguidage.</li>
+</ul>Calculateur de pas de calibration<br><br><img style="width: 319px; height: 525px;" alt="Calc_step_dialog" src="Advanced_calstep_calculator.png"><br><span style="font-size: 10pt; font-family: Arial;"></span><br>
+Pour utiliser le <a name="Calculator_auto-step-size"></a>calculateur, les trois champs éditables du dessus doivent être correctement remplis.
+&nbsp;Si vous avez déjà spécifié la focale et la taille des pixels dans les onglets 'Global' et 'Caméra', ces champs sont pré-remplis dans ce dialogue.&nbsp;
+Vous devez entrer ou corriger la vitesse de correction utilisée sur la monture, en multiple de la vitesse sidérale. Ces valeurs sont pré-remplies pour les montures ASCOM.
+&nbsp;La majorité des montures utilisent une valeur de 1x ou 0,5x mais vous pouvez choisir une autre valeur.
+&nbsp;
+Vous pouvez laisser les 'Pas de calibration' à la valeur par défaut de 12, qui convient dans la plupart des cas. 
+Une valeur trop faible augmente le risque que des petites erreurs causent un échec de la calibration.&nbsp;
+Cliquez alors sur 'Recalc' et <span style="font-style: italic;">PHD2</span>
+déterminera l'échantillonnage ainsi qu'une valeur recommandée pour la calibration. &nbsp;Cliquez sur 'OK' pour introduire cette valeur dans le champ
+'Pas de calibration' du dialogue 'Monture'.
+&nbsp;En cliquant 'OK' les champs 'taille de pixels' et 'longueur focale' dans les onglets 'Caméra' et 'Global' 
+seront adaptés, donc chaque changement dans le calculateur est répercuté sur ces champs.&nbsp;
+Ce ne sera pas le cas si vous cliquez sur 'Annuler'.
+Notez que PHD2 ne change jamais la vitesse de correction dans la monture, quelle que soit la valeur indiquée ici.
+
+<h3><a name="Algorithms_Tab"></a>Onglet Algorithmes</h3>
+<span style="font-size: 10pt; font-family: Arial;"></span><img style="width: 598px; height: 566px;" alt="" src="Advanced_algorithms.png"><br><br>
+Cet onglet sert à choisir les algorithmes de guidage et à affiner leurs paramètres.
+Les valeurs changent considérablement quand on modifie l'algorithme. Pour cette raison, une section séparée est dédiée aux 
+<a href="Guide_algorithms.htm">algorithmes de guidage</a><br>
+<br>
+Les contrôles indépendants de ceux utilisés pour les algorithmes de guidage sont expliqués ci-dessous.&nbsp;
+<ul><li>'<a name="Max_Duration_RA"></a>Durée Max AD' - détermine la durée maximale d'une correction en AD.&nbsp;
+Vous pouvez diminuer cette valeur pour empêcher de contrer un écart brusque causé par un événement externe: pixel chaud, coup de vent, etc.</li>
+<li>'<a name="Declination_backlash_comp"></a>Utiliser la compensation de jeu' - 
+indique si PHD2 appliquera une compensation de jeu (backlash) lors d'un changement de sens en DEC.&nbsp;
+La mesure du jeu et le calcul d'une valeur adéquate sont faits par l'assistant d'autoguidage.&nbsp;
+La taille de la correction additionnelle est indiquée dans le champ 'quantité' à côté de la case à cocher.&nbsp;
+PHD2 modifiera la valeur si nécessaire pour éviter une sur-correction.
+Comme PHD2 est capable d'apprendre la bonne valeur, la compensation de backlash utilisée dans beaucoup de montures est probablement moins performante.
+Si vous utilisez la compensation de jeu dans PHD2 vous devriez désactiver celle de la monture.&nbsp;
+Voyez l'aide dans la section <a href="Tools.htm#Guiding_Assistant">Assistant d'autoguidage</a> pour plus d'infos.</li>
+<li>'<a name="Max_Duration_Declination"></a>Durée Max DEC' - détermine la durée maximale d'une correction (comme plus haut mais en DEC).</li>
+<li>'<a name="Dec_guide_mode"></a>Mode d'autoguidage en DEC' -&nbsp;donne plus de possibilités pour l'autoguidage en DEC.&nbsp;
+L'autoguidage en DEC est très différent qu'en AD car les erreurs ne sont pas causées par des imperfections dans les engrenages de la monture.
+Les écarts proviennent essentiellement d'un défaut de mise en station ou de flexions différentielles. 
+Cela signifie que l'erreur devrait être relativement constante et de même direction, sauf en cas de sur-correction lors d'un ordre précédent.&nbsp;
+La valeur par défaut 'auto' signifie à PHD2 que certains changements de sens sont acceptables, selon les modalités des algorithmes choisis.
+Cependant, si votre monture présente un jeu important en déclinaison (backlash), il est préférable d'éviter un changement de sens.&nbsp;
+Dans ce cas, sélectionnez 'Nord' ou 'Sud' pour corriger uniquement dans cette direction. Attention, une sur-correction dans un de ces modes
+causera un déplacement de longue durée de l'étoile au-delà de l'axe central, jusqu'à ce que la dérive naturelle ramène l'étoile du con côté. 
+Pour cette raison, il est conseillé de choisir des valeurs modestes pour l'agressivité.&nbsp;
+Enfin, l'option 'aucun' désactive l'autoguidage en DEC.</li>
+</ul>
+<br><h3>
+<a name="Other_Devices_Tab"></a>Onglet Autres équipements</h3><span style="font-size: 10pt; font-family: Arial;"></span>
+<img style="width: 591px; height: 451px;" alt="" src="Advanced_other.png">
+<br><br>
+Si vous utilisez une optique adaptative (OA) ou un dérotateur de champ, l'onglet 'autres équipements' sera visible.&nbsp;
+La partie supérieure est pour l'OA, si vous en avez un.
+Utilisez les 4 premiers paramètres pour contrôler le processus de calibration et la façon d'exécuter les 'sauts'.
+Le champ 'Pas de calibration' indique à <span style="font-style: italic;">PHD2</span> la quantité de mouvement en site/altitude&nbsp;
+pour chacune des directions haut/bas et droite/gauche, exprimé en unités de pas d'OA pendant la calibration.&nbsp;
+ Le paramètre 'échantillons à moyenner' indique à <span style="font-style: italic;">PHD2</span>
+combien d'échantillons prendre à chacun des points.
+&nbsp;Faire une moyenne des images est important car la turbulence cause toujours un mouvement non désiré de l'étoile.
+&nbsp;Comme expliqué plus tôt, l'OA ne peut corriger qu'un mouvement d'amplitude faible.
+&nbsp;Il faut initier les sauts de correction de la monture avant que ces limites soient atteintes; c'est le but du champ 'pourcentage de saut'.
+&nbsp;Afin de bouger la monture, la correction complète est appliquée par étapes. Le champ 'Pas de saut' contrôle la taille de ces étapes.
+Si l'opération de 'saut de correction' a débuté et que l'étoile-guide reste en-dehors de la zone de 'pourcentage de saut', <span style="font-style: italic;">PHD2</span>
+augmentera la taille du saut jusqu'à ce que l'étoile-guide soit à nouveau dans les tolérances.
+&nbsp;Tout mouvement additionnel de ce point vers la position centrale continuera avec la taille de saut spécifiée.
+&nbsp;Cette complexité est nécessaire pour garantir un guidage optimal sans étoiles déformées, même pendant le saut de correction de la monture.
+&nbsp;Pendant le saut de correction, l'OA continue à procéder à des corrections, 
+donc le long saut de correction est influencé continuellement par les ajustements dans L'OA.<br><br>
+
+L'option 'Saut au dithering' indique à PHD2 de déplacer la monture quand un ordre de dithering est reçu, et donc de ramener l'étoile-guide plus près du centre de l'OA.
+L'option d'activer ou pas les commandes de guidages de l'OA est indépendante de la case 'Activer l'autoguidage' dans l'onglet 'guidage'. 
+Vous pouvez donc choisir d'activer à votre guise les commandes de l'OA ou les 'sauts' de la monture. 
+L'option 'supprimer la calibration OA' marche sur le même principe, elle est indépendante et n'a pas d'effet sur la calibration de la monture. 
+Quand une OA est utilisée, l'onglet 'algorithmes' ne montre que les choix contrôlant l'élément d'inclinaison de l'OA.
+<img style="width: 590px; height: 450px;" alt="" src="Advanced_other_Algo.png"><br><br>
+Comme l'OA ne doit pas déplacer une masse importante, les valeurs d'agressivité peuvent être plus hautes dans les algorithmes.
+La valeur d'algorithme par défaut pour une OA est 'aucun'. Cela signifie que
+PHD2 n'appliquera aucun hystérésis. Dans ce cas, chaque ordre sera directement basé sur l'erreur mesurée et causera une correction de 100%.&nbsp;
+Pour un autre algorithme, utilisez également une valeur d'agressivité élevée, par exemple 100%.
+Notez que pour une AO, les autres paramètres partagés de l'onglet algorithmes ne sont pas relevants et ne s'affichent donc pas.
+<br><br>
+Le dérotateur de champ n'a qu'un seul paramètre, afin d'ajuster la notion '+ ou -' présente dans ASCOM.
+La case 'Inverser' peut être utile pour les appareils à miroirs, qui inversent l'image quand le nombre de surfaces est impair.
+La direction et l'amplitude de la rotation est utilisée par PHD2 pour la calibration, selon le standard ASCOM: 
+"la position du dérotateur est exprimée comme un angle de 0 à 360° (excl.), dans le sens antihoraire".
+Cela dit, la méthode la plus rapide pour trouver le bon réglage est l'expérimentation.
+</body></html>

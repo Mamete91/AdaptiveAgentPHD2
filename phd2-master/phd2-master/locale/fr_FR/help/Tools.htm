@@ -1,0 +1,446 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html><head><meta http-equiv="content-type" content="text/html; charset=UTF-8"><title>Outils et utilitaires</title></head>
+<body>
+<h2>Outils et utilitaires</h2>
+<a href="#Manual_Guide">Guidage manuel</a><br>
+<a href="#Auto-Select_Star">Sélection automatique d'étoile</a><br>
+<a href="#Calibration_Details">Détails de la calibration</a><br>
+<a href="#PHD2_Server">Serveur PHD2</a><br>
+<a href="#Dithering_Ops">Dithering</a><br>
+<a href="#Logging_and_Debug_Output">Journal et débogage</a><br>
+<a href="#Drift_Align">Mise en station</a><br>
+<a href="#Lock_Positions">Verrouillage de cible</a><br>
+<a href="#Comet_Tracking">Suivi de Comète</a><br>
+<a href="#Guiding_Assistant">Assistant de guidage</a><br>
+<a href="#Managing_Equipment_Profiles">Profils de matériel</a><br>
+<a href="#Advanced_Settings_for_the_Simulators">Paramètres du simulateur</a><br>
+<a href="#Keyboard_Shortcuts">Raccourcis clavier</a><br>
+
+<br><h3><a name="Manual_Guide"></a>Guidage manuel</h3><br><img alt="" src="ManualGuide.PNG"><br><br>
+Si vous essayez une nouvelle monture et que la calibration échoue, vous devriez vérifier que les commandes de <span style="font-style: italic;">PHD2</span>
+arrivent bien à la monture. Ou peut-être voulez-vous appliquer du 'dithering' manuel? Cliquez sur 'guidage manuel' dans le menu 'Outils'
+<span style="font-weight: bold;"><span style="font-weight: bold;"></span></span>
+et un dialogue apparaîtra afin de déplacer la monture dans n'importe quelle direction.
+Chaque pression sur un bouton envoie une impulsion de la durée indiquée dans 'Durée d'impulsion'. 
+&nbsp;La valeur par défaut correspond au 'pas de calibration' spécifié dans le dialogue de paramètres avancés. 
+&nbsp;Si vous diagnostiquez des soucis de calibration, écoutez la monture au lieu de la regarder afin de vérifier si les commandes de <span style="font-style: italic;">PHD2</span>
+sont appliquées. Vous ne verrez rien bouger à la vitesse d'autoguidage, le mouvement est trop faible.
+Vous pouvez aussi observer les moteurs eux-mêmes ou attacher un pointeur laser pour voir si la tache projetée sur une cible lointaine bouge.
+&nbsp;Si vous possédez une otique adaptative, vous verrez des boutons séparés pour l'OA et la monture.
+ &nbsp;<br><br><a name="Dithering"></a>Le 'dithering' sert en imagerie et pour l'automatisation, le plus souvent via le serveur de PHD2.
+Cependant, vous pouvez faire du dithering manuel à l'aide des boutons au bas de ce dialogue.
+&nbsp;Le paramètre 'dither' contrôle l'amplitude du déplacement en pixels. Vous pouvez l'augmenter en le multipliant par la constante d'échelle située à côté.
+&nbsp;Ces contrôles déterminent un mouvement maximum.&nbsp; 
+Quand vous cliquez sur 'Dither', PHD2 applique un mouvement aléatoire inférieur ou  égal à cette valeur dans une des directions nord/sud/est/ouest.
+La case 'AD seulement' limite les déplacements à l'axe est-ouest.&nbsp;
+Bien sûr, n'utilisez le dithering que si votre imageur n'est pas en train de capturer une image.
+
+<br><h3><a name="Auto-Select_Star"></a>Sélection automatique d'étoile</h3>
+Cliquez sur 'Sélection automatique d'étoile' dans le menu 'Outils' ou via le raccourci au clavier &lt;Alt&gt;S. 
+<span style="font-style: italic;">PHD2</span> va examiner l'image affichée et choisir une étoile adaptée à l'autoguidage.
+&nbsp;Le mode 'boucle' doit bien sûr être activé.&nbsp;
+PHD2 choisit une étoile assez brillante et éloignée d'autres étoiles ainsi que du bord de l'image.
+L'étoile peut sembler sombre sur l'écran mais ce n'est en général pas un problème.
+Vous pouvez activer l'outil 'profil d'étoile' pour inspecter l'astre choisi par PHD2.
+La courbe devrait être pointue et non saturée (plate) au sommet, comme pour un choix manuel d'étoile.
+Le choix automatique n'est pas infaillible. Vous pouvez faire un choix manuel si celui de PHD2 ne convient pas.
+Pour utiliser la sélection automatique, il est recommandé d'activer une librairie de darks ou une matrice de pixels morts, 
+sans quoi PHD2 risque de choisir un pixel chaud.
+
+<h3><a name="Calibration_Details"></a>Détails de la calibration</h3>
+Les fenêtres concernant la calibration, dont les diagnostics de calibration, ressemblent à cet écran:
+<br><br>
+<img style="width: 728px; height: 377px;" alt="" src="Calib_Review.png"><br><br>
+Le graphique à gauche montre les mouvements de l'étoile suite aux ordres envoyés par PHD2.
+Les lignes représentent les taux AD et DEC calculés par la calibration.
+Celles-ci devraient être relativement perpendiculaires. 
+Les points ne seront jamais parfaitement alignés, c'est normal. en revanche il ne devrait pas y avoir de courbes, déviations ou renversements importants.
+Avec les longues focales il est normal que les points soient un peu éparpillés.
+Les points rouges et bleus (impulsions Ouest et Nord) sont utilisés pour le calcul des taux d'autoguidage.
+Les petits cercles montrent les trajectoires de 'retour' des mouvements Est et Sud. 
+Ceux-ci peuvent aider à déterminer si la turbulence a causé des fluctuations ou si la monture présente beaucoup de 'backlash'.
+Si l'option de recentrage rapide est cochés dans les paramètres avancés, il peut y avoir moins de points dans les directions Nord et Est.
+Les tableaux à droite affichent les données de position retournées par les pilotes ASCOM de la monture.
+Si vous n'utilisez pas ASCOM certaines données seront manquantes, c'est normal.
+Les tables donnent aussi les taux calculés pour une monture 'parfaite'.
+Ces valeurs idéales ne peuvent jamais être atteintes, seulement approchées.
+Si la calibration a réussi sans message d'alerte, vous ne devez pas vous inquiéter, c'est que vos résultats sont suffisants.
+Si vous comptez conserver cette calibration pour une longue période, prenez quand même la peine de vérifier les valeurs affichées.
+Il arrive d'avoir une mauvaise calibration, même avec une monture haut de gamme. Par exemple suite à un coup de vent ponctuel.
+<br><br>
+<span style="font-weight: bold;"><a name="Declination_Backlash"></a>Backlash en DEC</span><br>
+Le jeu mécanique en DEC (backlash) est une cause fréquente de problèmes de calibration.
+Ce défaut est présent dans la majorité des montures à engrenages.
+Certaines montures ont tellement de backlash que l'autoguidage en est affecté.
+Voyez ce dialogue de calibration: <br><br><img style="width: 727px; height: 382px;" alt="" src="Calib_Review_Backlash.png">
+<br><br>
+Le premier indice d'un problème se trouve en comparant les taux en AD et en DEC.
+Dans ce cas, le DEC est à peine la moitié de l'AD, ce qui ne devrait jamais arriver.
+En fait, cette situation aurait provoqué un message d'alerte.
+Les points de déclinaison (bleus) sont en partie groupés au centre. 
+Seuls les 9 derniers pas en DEC ont effectivement déplacé la monture, le reste n'a pas bougé à cause du backlash.
+Cette situation reflète deux problèmes: d'abord la calibration est mauvaise et devrait être recommencée.
+Ensuite, la monture va probablement causer un autoguidage médiocre si le moteur DEC doit être inversé, même si le taux en DEC est correct.
+La calibration peut être améliorée en commençant par déplacer la monture manuellement pendant 10 à 20 
+secondes vers le nord avec l'outil 'guidage manuel', jusqu'à ce qu'un mouvement stable soit constaté à l'image.
+Après cela, le taux de calibration en DEC sera bien meilleur car le backlash est déjà supprimé.
+Le second problème nécessite une intervention sur la mécanique elle-même, c'est à dire un réglage du jeu.
+Vous pouvez essayer d'utiliser une fonction de compensation de jeu mais les résultats seront médiocres si le backlash est trop important, supérieur à 2 ou 3 secondes.
+Si le problème mécanique ne peut pas être résolu et que la monture est déjà au maximum de sa précision, alors il vaut mieux guider en DEC dans une seule direction.
+Pour cela il faut d'abord déterminer dans quel sens se produit la dérive causée par l'imprécision de mise en station.
+Si la courbe dérive vers le haut, choisissez l'option 'Nord', et inversement.
+Cette solution est moins pratique mais donne malgré tout d'excellents résultats.
+De nombreux astrophotographes préfèrent d'ailleurs cette méthode, quel que soit le backlash.
+<font style="color: rgb(0, 0, 3);" color="navy"><span style="font-size: 10pt;"></span></font>
+<br><br><span style="font-weight: bold;">Autres options liées à la calibration</span>
+<br>
+Les données de calibration sont enregistrées automatiquement après chaque calibration réussie. 
+L'utilisation des données de calibration a été décrite ailleurs (Usage de PHD), 
+y compris la   possibilité de récupérer les données de la dernière session ou de 'retourner' les axes après le passage du méridien. 
+Vous accédez à ces fonctions via le menu 'Outils'.   Ce menu permet également d'entrer soi-même les données de calibration. 
+Cette possibilité est offerte mais ne devrait être utile que très rarement. 
+Cliquez sur 'Entrer les données de calibration' pour ouvrir le dialogue. 
+Les données peuvent provenir d'une ancienne session, par exemple après extraction du journal d'autoguidage de PHD2. 
+N'oubliez pas que si vous utilisez une monture connectée via ASCOM comme monture principale ou auxiliaire, vous n'avez pas besoin d'accéder à ces paramètres.
+<br><br>
+
+
+<h3><a name="PHD2_Server"></a>Serveur <span style="font-style: italic;">PHD2</span></h3><span style="font-style: italic;">
+PHD2</span> interface avec les logiciels tiers qui nécessitent un contrôle de l'autoguidage.
+&nbsp;Le programme <span style="font-style: italic;">Nebulosity </span> de Stark Labs était le premier à offrir cette possibilité
+mais d'autres logiciels ont entre-temps été produits.
+&nbsp;Le serveur de <span style="font-style: italic;">PHD2</span> permet aux programmes de capture de contrôler le 'dithering'
+ entre chaque pose ou d'interrompre l'autoguidage, par exemple pendant que l'imageur transfère ses données.
+&nbsp;Cliquez sur l'option &nbsp; '<a name="Enable_Server"></a>Activer le serveur' du menu 'Outils'.
+L'interface du serveur a été considérablement remaniée dans 
+<span style="font-style: italic;">PHD2</span>. 
+Il est désormais possible pour les applications de contrôler de nombreuses fonctions de
+<span style="font-style: italic;">PHD2</span>. &nbsp;La documentation destinée aux programmeurs qui veulent se connecter au serveur est disponible
+sur le <a href="https://github.com/OpenPHDGuiding/phd2/wiki">Wiki PHD2</a>.<br><br>
+
+<h3><a name="Dithering_Ops"></a>Dithering</h3><big></big><p>
+Le dithering sert à 'diluer' le bruit présent à des coordonnées fixes sur les capteurs, en particulier le bruit thermique.
+Ce bruit dépend de la caméra et dans une moindre mesure du logiciel de pré-traitement.
+Pour les imageurs dont la température est régulée et qui présentent un bruit thermique faible, le dithering est une façon de supprimer les pixels chauds subsistant malgré l'usage de darks.
+En effet, la position des pixels chauds change avec le temps, les librairies de darks ne permettent donc pas de tout corriger.
+Le dithering permet aussi de limiter l'impact d'autres problèmes, comme des bandes ou des colonnes de défauts sur l'image.
+Si le capteur ne possède pas de régulation de température, les darks et les librairies de darks ne sont pas 100% efficaces. 
+Dans ce cas, le dithering permet de 'camoufler' les défauts. C'est en particulier le cas pour les APN.
+Dans PHD2, le dithering automatique est accompli via l'interface du serveur. Il faut donc veiller à activer celui-ci dans le menu 'Outils'.
+Dans une des applications externes compatibles avec PHD2, vous pouvez spécifier la grandeur maximale du dithering.
+Quand cette application lance un ordre de dithering, PHD2 génère un nombre aléatoire entre 0 et cette valeur maximale. 
+La monture est alors déplacée d'autant de pixels.
+Certaines applications ne permettent pas de choisir la valeur directement mais proposent un choix contextuel, comme "small, medium, large".
+Pour contourner ce problème, PHD2 propose un paramètre interne dans l'onglet 'Global' du cerveau.
+Il s'agit d'un multiplicateur qui permet d'ajuster la réponse du programme. 
+De ce fait, une valeur '1' n'a aucun effet alors qu'une valeur 10x multiplie le mouvement par dix.
+Si votre application permet de choisir une valeur chiffrée, vous pouvez laisser ce paramètre à 1.
+</p>
+<p>Appliquer du dithering entraîne deux conséquences néfastes: 1) il faut un certain temps pour stabiliser la monture après un dithering et 
+2) l'image finale n'est pas 100% alignée, une fine bande en périphérie devra être coupée.
+L'application externe qui commande le dithering applique un délai suffisant pour reprendre la session d'imagerie.
+Soit l'application décide elle-même du délai, soit elle délègue cette tâche à PHD2. 
+Si le logiciel externe utilise l'interface la plus récente pour communiquer avec PHD2, il peut employer une règle de ce type:
+"Les erreurs de guidage doivent être redescendues à moins de 1,5 pixels pendant au moins 10 secondes".
+Ce genre de logique demande un temps variable qui dépend de la sévérité de la règle mais aussi de facteurs externes comme le vent, la turbulence, etc.
+L'axe DEC en particulier peut prendre beaucoup de temps à se stabiliser à cause du jeu mécanique ('backlash').
+C'est la raison pour laquelle PHD2 donne aussi la possibilité de faire le dithering uniquement sur l'axe AD. 
+Cette option se trouve dans l'onglet 'Global', à côté de l'échelle de dithering.
+</p>
+
+<h3><a name="Logging_and_Debug_Output"></a>Sortie de journal et débogage</h3>
+<span style="font-style: italic;">PHD2</span>
+peut produire un journal de débogage et un
+journal d'autoguidage. &nbsp;Tous deux sont importants.
+&nbsp;Le journal d'autoguidage est similaire à celui de l'ancien PHD, mais
+avec
+plus de données. &nbsp;Il peut être analysé après-coup pour
+évaluer les performances et identifier les problèmes - Il contient un
+registre de ce que vous voyez sur le graphe d'autoguidage. &nbsp;Plusieurs
+logiciels peuvent&nbsp;&nbsp;analyser ces
+journaux
+et produire des résultats graphiques&nbsp; de qualité. &nbsp;Le
+journal de débogage
+possède un&nbsp; registre complet des actions de la session de <span style="font-style: italic;">PHD2</span>
+, &nbsp;donc il est très utile pour identifier les problèmes
+que vous pourriez avoir. &nbsp;Sa sortie est aisément lisible, il n'est
+donc pas
+difficile de l'examiner pour comprendre ce qui se passe. &nbsp;Si
+vous
+devez signaler un souci avec le logiciel, on vous demandera certainement
+de fournir le fichier de ce journal. <br>
+<br>
+Ces deux fichiers
+seront générés si &nbsp;'Activer le journal' est coché dans l'onglet
+Global. &nbsp;L'emplacement des fichiers est défini dans 'Emplacement de fichier
+journal' un peu plus loin dans le dialogue. &nbsp;Par défaut, les
+journaux
+sont stockés dans un répertoire spécifique au système d'exploitation.
+&nbsp;Par exemple, dans Windows les fichiers sont conservés dans un sous-répertoire '<span style="font-style: italic;">PHD2</span>'
+de "Mes Documents". &nbsp;Vous pouvez spécifier un autre 
+emplacement dans le champ éditable.<br>
+<br>
+Dans certains cas il est intéressant de capturer des
+images de la caméra de guidage, en complément des données du journal en vue de résoudre des problèmes.
+&nbsp;Activez cette option en cochant 'Enregistrer l'image de l'étoile-guide'.
+Les fichiers image seront enregistrés auprès des autres journaux.
+Le format des images est contrôlé dans l'onglet 'Global' des 'Paramètres avancés'. 
+Si vous tentez de résoudre un problème, enregistrez les images au format 'Raw FITS'.
+<br>
+
+<h3><a name="Drift_Align"></a>Mise en station</h3>La mise en station par dérive est une excellente façon d'obtenir un alignement polaire correct.
+Pour certains c'est même une référence.
+L'outil de mise en station propose une série de dialogues pour vous aider dans cette procédure.
+Quand l'autoguidage est calibré, cliquez sur 'Mise en station' dans le menu 'Outils'.
+Le premier dialogue vous aidera à ajuster l'azimut de la monture.
+Si votre monture est compatible ASCOM vous aurez la possibilité de la déplacer vers une zone proche de l'équateur et du méridien céleste. &nbsp;
+Si vous n'utilisez pas une monture ASCOM, vous devrez le faire manuellement.
+Quand le télescope est en position et que vous avez une étoile-guide dans le champ, cliquez sur 'Dériver' pour 
+commencer à enregistrer les données.
+Vous verrez le graphique évoluer et surtout, deux lignes de tendances. 
+Attendez assez longtemps pour que la ligne en DEC se stabilise. Elle ne doit plus bouger à chaque nouvelle image.
+Au bas de la fenêtre du graphique vous verrez la mesure d'erreur d'alignement en azimut.
+Dans la fenêtre d'image, vous verrez aussi un cercle magenta autour de l'étoile.
+Ce cercle indique la quantité de mouvement requis pour ajuster l'azimut.
+Initialement, le cercle peut être trop grand pour être visible; il apparaîtra quand l'alignement sera meilleur.<br/>
+Appuyez maintenant sur 'ajuster' pour interrompre l'autoguidage puis ajustez mécaniquement l'azimut de la monture.
+Cliquez ensuite sur 'dériver' pour répéter la mesure. Continuez de cette façon pour obtenir la plus petite erreur possible.
+Vous pouvez utiliser le champ 'notes' pour indiquer dans 
+quel sens les lignes bougent selon que vous avez tourné les vis à droite ou à gauche, par exemple.
+Ces notes sont conservées entre chaque session de <span style="font-style: italic;">PHD2</span>
+, ce qui facilite les mises en station suivantes.
+<br><br>
+Tant que vous n'aurez pas l'habitude de la mise en station, celle-ci vous paraîtra fastidieuse.
+Vous devrez déterminer dans quel sens tourner les vis pour obtenir l'effet désiré: combien et dans quelle direction?
+Afin de vous aider, <span style="font-style: italic;">PHD2</span> vous propose des 'marqueurs'. &nbsp;
+Ceux-ci sont pratiques pour marquer l'emplacement de l'étoile-guide avant et après les ajustements.
+
+
+&nbsp;<a name="Bookmarks"></a>Accédez aux marqueurs via les raccourcis suivants: <br>
+<ul>
+<li>b&nbsp;: montrer/cacher les marqueurs&nbsp;</li>
+<li>Shift-b : nouveau marqueur à la position de l'étoile-guide (position de verrouillage)</li>
+<li>Ctrl-b : effacer tous les marqueurs&nbsp;</li>
+<li>Ctrl-clic sur l'image : nouveau marqueur à cette position, ou effacement du marqueur se trouvant là</li>
+</ul>
+
+En ajoutant un marqueur avant d'ajuster la monture, vous pouvez voir comment et combien l'opération a déplacé la monture.<br/>
+
+<br>Ensuite, cliquez sur le bouton 'altitude' et pointez le télescope en direction de l'équateur céleste et 25 à 30° au-dessus de l'horizon.
+Cliquez sur 'dériver' pour collecter les données.
+Comme pour l'azimut, vous allez procéder à répétition pour affiner les résultats.
+Prenez des notes pour conserver une trace de comment les ajustements modifient la ligne de tendance.
+Si vous avez fait des changements importants en altitude, vous devrez recommencer la partie 'azimut'.
+Une approche systématique de ces réglages permet d'obtenir une précision inégalable.
+Une bonne mise en station est essentielle pour garantir un autoguidage de qualité, en particulier pour l'axe DEC.
+
+<br><br>
+L'outil de mise en station est encore plus simple avec une monture pilotée par ASCOM.&nbsp;
+Même si vous comptez autoguider en ST4 il est préférable d'employer une connexion ASCOM pour la MES.
+Si pour une raison quelconque vous ne le faites pas, les fonctions suivantes ne seront pas disponibles:<br>
+<ul>
+<li>
+Positionnement et mouvement du télescope. Vous devrez positionner vous-même la monture.
+Souvenez-vous que les positions alt/az sont approximatives; une grande précision n'est pas requise.
+il suffit d'obtenir un réglage approximatif et d'employer une bonne étoile-guide pour avoir de bons résultats.
+</li>
+<li>
+Le cercle magenta indiquant la cible pour le mouvement de l'étoile sera imprécis et affiché en pointillés.
+Cette ligne n'indiquera qu'une limite maximale; vous devrez probablement faire de petits ajustements pour éviter de dépasser.
+</li>
+</ul>
+Un tuto complet 'pas à pas' est disponible sur le site internet de PHD2. Ce document est fortement recommandé pour les novices.
+(https://sites.google.com/site/openphdguiding/phd2-drift-alignment)<br>
+
+
+<br><br><h3><a name="Lock_Positions"></a>Verrouillage de cible</h3><span style="font-style: italic;">PHD2</span> enregistre un 'verrouillage de position'
+là où se trouve l'étoile-guide en fin de calibration.
+En fonction du déroulement de la séquence de calibration, cet endroit n'est pas forcément le même 
+qu'au début de la calibration. Un écart de plusieurs pixels peut être constaté.
+Si vous essayez de centrer précisément votre sujet, il peut être intéressant de verrouiller sa position exacte.
+Cliquez sur l'étoile-guide <span style="font-style: italic;">avant la calibration</span>, puis activez le 'verrouillage de cible' dans le menu 'Outils'.
+En fin de calibration, <span style="font-style: italic;">PHD2</span> déplacera la monture vers ce point à la vitesse de correction.
+Cette opération peut entraîner un délai supplémentaire. Le verrouillage de cible reste actif même si l'autoguidage est interrompu puis remis en route.
+De cette façon, un emplacement rigoureux de l'étoile-guide (et donc de votre sujet sur l'image) est assuré, 
+au prix d'un délai supplémentaire pendant que <span style="font-style: italic;">PHD2</span>
+recentre la monture.
+
+
+<h3><a name="Comet_Tracking"></a>Suivi de Comète</h3>
+Une façon simple de suivre une comète avec PHD2 consiste à choisir la comète elle-même comme 'étoile-guide'.
+Ce n'est cependant pas toujours possible, 
+par exemple si le noyau ne présente pas un profil similaire à une étoile, ou si on utilise un guideur hors axe ('DO').
+<br>
+<br>
+PHD2 propose un outil de guidage pour comètes. L'idée est d'autoguider sur une étoile mais de décaler progressivement la position de verrouillage pour que la comète reste au même point.
+Ce mouvement est appelé <i>taux de suivi</i>.<br>
+<br>
+Il y a trois façons d'indiquer les taux de suivi à PHD2.
+<br>
+<br>
+<ul>
+  <li>Certains planétariums, comme Cartes du Ciel, peuvent fournir les bons paramètres directement à PHD2;</li>
+  <li>On peut aussi entrer les valeurs manuellement</li>
+  <li>PHD2 peut 'apprendre' le déplacement requis en suivant la comète pendant un moment.</li>
+</ul>
+<br>
+<br>
+<img style="width: 426px; height: 408px;" alt="" src="CometTrackingTool.png"><br>
+<br>
+<br>
+Pour entrer les valeurs manuellement, sélectionnez les unités "Arcsec/hr" et les axes 
+"AD/Dec", puis entrez les taux à l'aide des éphémérides de la comète.<br>
+<br>
+PHD2 'apprend' les taux de cette façon:<br>
+<br>
+Centrez d'abord la comète dans le champ de la caméra d'imagerie.
+Si votre application de capture possède un affichage de cible, activez-le pour déterminer avec précision la position du noyau sur le capteur.
+Quand c'est fait, choisissez une étoile-guide dans PHD2 et commencer le guidage. cliquez ensuite sur 'Démarrer' dans l'outil 'Suivi de comète'.
+<br>
+<br>
+Après un moment, vous constaterez un déplacement de la comète sur le capteur de votre imageur.
+Utilisez les contrôles de PHD2 'Ajuster la position de verrouillage' pour ramener la comète à sa position précédente.
+Une temps d'exposition court est évidemment recommandé pour constater l'effet des touches 'haut/bas/droite/gauche' de PHD2 sur l'image.
+Utilisez le bouton 'Toujours visible' dans la fenêtre 'Ajuster la position de verrouillage' pour conserver le dialogue par-dessus votre application de capture.
+<br>
+<br>
+PHD2 va rapidement apprendre les taux de suivi. Quand vous pensez que PHD2 suit correctement, appuyez sur 'stop' pour arrêter l'apprentissage.
+PHD2 continuera à appliquer les taux jusqu'à ce que vous cliquiez le bouton 'activer/désactiver'.
+<br>
+<br>
+Vous pouvez vous entraîner à cette manoeuvre en utilisant le simulateur de caméra intégré à PHD2.
+Cliquez l'option 'comète' dans le dialogue de la caméra. Utilisez un signet pour marquer la position de départ de la comète.
+Ramenez la comète à sa position de départ avec les contrôles 'Ajuster la position de verrouillage'.
+
+<br><h3><a name="Guiding_Assistant"></a>Assistant de guidage</h3>
+L'assistant de guidage est un outil 'pas à pas' vous aidant à déterminer facilement les bons paramètres de PHD2.
+Quand il tourne, la commande d'autoguidage est temporairement interrompue et la position de l'étoile-guide est mesurée à chaque nouvelle image.
+Cela permet de visualiser les déplacements de haute fréquence causés par la turbulence.
+Ceux-ci ne peuvent pas être contrés par l'autoguidage parce qu'ils sont trop rapides et trop fréquents.
+Essayer de corriger ces défauts est souvent appelé 'chasser la turbu'. Cette pratique fait plus de tort que de bien.
+Pour éviter cette situation, il est recommandé d'indiquer un déplacement minimum assez élevé pour que la turbulence ne soit pas prise en compte.
+L'assistant peut aussi indiquer d'autres comportements de la monture, comme la dérive due à une mauvaise mise en station et d'autres statistiques.
+Ces erreurs peuvent parfaitement être corrigées par l'autoguidage mais il peut être intéressant de les mesurer en vue d'améliorer les performances de la monture.
+Par exemple, une dérive importante en DEC peut être améliorée en ajustant l'alignement polaire.
+L'assistant mesure aussi le jeu mécanique (backlash) de l'axe DEC.
+<br><br>Au premier démarrage de l'assistant, vous verrez un écran de ce type: 
+<br><br>
+<img style="width: 540px; height: 580px;" alt="" src="Guiding_Assistant_Start.png">
+<br><br>
+La zone supérieure donne les instructions d'usage.
+Pour commencer les mesures il faut démarrer l'autoguidage de la façon habituelle.
+L'étoile est identifiée et les données collectées.
+Appuyez sur 'Démarrer' dans l'assistant pour commencer les mesures.
+L'autoguidage ne guide plus la monture, il est donc normal que l'étoile dérive à l'écran.
+Les statistiques sont affichées en temps réel dans l'interface.
+
+Les informations "Mouvements d'étoile à haute fréquence" sont particulièrement intéressantes.
+Après une minute à peu près, les données se stabilisent et donnent une vue exploitable des conditions de turbulence.
+Si vous attendez plus longtemps, la qualité des calculs s'améliore encore, en particulier pour l'erreur de mise en station.
+Cliquez sur 'Stop' pour interrompre les mesures.
+Si vous avez coché 'Mesurer le backlash en DEC', cette procédure va maintenant démarrer, sinon l'autoguidage normal reprendra.
+D'autres valeurs calculées seront affichées en bas d'écran, entre-autres les valeurs de dérive.
+Toutes les valeurs sont affichées en arcsecondes et en pixels.
+Le dialogue ressemble à ceci:
+<br><br><img style="width: 541px; height: 686px;" alt="" src="Guiding_Assistant_Finish_NoBL.png"><br><br>
+Le contenu du groupe 'Recommandations' au bas de la fenêtre reflète les mesures de haute fréquence.
+Si l'algorithme que vous avez choisi autorise le paramètre 'déplacement minimum', vous avez l'option de modifier ce paramètre sur base des résultats.
+Vous pouvez aussi recommencer les mesures ou fermer le dialogue.
+<br><br><span style="font-weight: bold;">Mesurer le Backlash en DEC</span><br>
+Si cette case est cochée, la procédure de mesure du backlash (jeu mécanique) débute dès que les statistiques de haute fréquence sont acquises.
+En d'autre termes, cliquer sur 'Stop' arrête les mesures HF et démarre les mesures de backlash.
+Un nouveau groupe de messages apparaît au-dessus des boutons 'Démarrer' et 'Stop' avec des informations sur les actions en cours:
+<br><br><img style="width: 536px; height: 635px;" alt="" src="Guiding_Assistant_MeasuringBL.png">
+<br><br>
+PHD2 déplace franchement l'étoile-guide, d'abord vers le nord, puis vers le sud. 
+Il est possible que l'étoile quitte le champ du capteur, c'est pourquoi il faut choisir une étoile pas trop près du bord supérieur.
+Si l'étoile a quitté la zone de recherche, vous pouvez temporairement augmenter celle-ci depuis l'onglet '<a href="Advanced_settings.htm#Guiding_Tab">Guidage</a>'
+des paramètres avancés.
+Une zone de 20 pixels devrait convenir pour la majorité des situations. Il faut cependant éviter d'avoir plusieurs étoiles dans cette zone.
+La première phase de la procédure consiste à corriger le backlash éventuel vers le nord. 
+L'assistant continue à donner des ordres jusqu'à ce qu'un mouvement soit détecté.
+L'étoile continue à bouger vers le nord pendant encore un moment, au moins 16 secondes.
+La zone de statut donne les informations sur l'action en cours.
+Après ce mouvement vers le nord, un nombre identique de pas sera effectué vers le sud.
+A cause du backlash, un temps important peut s'écouler avant qu'un mouvement soit visible.
+A la fin de cette phase, quel que soit le mouvement apparent le backlash a été mesuré.
+<span style="font-size: 12pt; font-family: &quot;Times New Roman&quot;;">Cependant, si aucun mouvement ne s'est produit vers le sud, la valeur calculée sera trop faible. <span style="">&nbsp;</span>
+Tout ce que vous saurez çà ce point c'est que le backlash excède 8 secondes, une valeur anormalement importante.</span>
+L'assistant va alors essayer de ramener l'étoile à sa position de départ pour reprendre l'autoguidage.
+Il existe à nouveau un risque de perdre l'étoile, mais cette fois sans danger de perdre les mesures. Vous pouvez simplement arrêter la procédure et reprendre l'autoguidage comme d'habitude.
+Contrairement à la phase précédente, si tout se passe bien il ne faut pas cliquer sur 'Stop' après la masure de backlash. PHD2 reprend automatiquement un autoguidage normal.
+Vous pouvez appuyer quand même sur Stop, par exemple suite à la perte de l'étoile, et reprendre quand vous êtes à nouveau prêt.
+Les résultats de la mesure de backlash sont affichés comme précédemment, en unités de pixels et en millisecondes (ms):<br><br><img style="width: 538px; height: 721px;" alt="" src="Guiding_Assistant_Finish.png">
+<br><br>
+Selon la valeur mesurée, vous verrez peut-être une recommandation pour le paramètre de compensation de backlash; 529ms dans l'exemple ci-dessus. 
+Il n'y a pas de recommandation pour une valeur inférieure à 100ms (ce qui est négligeable).
+Si le backlash dépasse 3 secondes, PHD2 recommandera d'utiliser un guidage unidirectionnel en DEC.
+En effet, compenser un jeu aussi important ne marchera probablement pas et la monture ne sera pas capable de changer de direction assez vite pour autoguider en mode 'auto'.
+Bien sûr, l'assistant ne remplace pas votre expérience ni votre jugement, ce n'est qu'une aide, pas une obligation.
+Avant de démarrer les mesures, pensez à désactiver la compensation de backlash dans la monture, si cette option existe, sinon les valeurs mesurées par PHD2 seront faussées.
+<br><br>
+Les résultats de la mesure de backlash peuvent être visualisés de façon graphique en cliquant sur 'Voir le graphique': <br><br><img style="width: 460px; height: 382px;" alt="" src="Guiding_Assistant_BL_Small.png">
+<br><br>
+Les points rouges montrent les positions mesurées en DEC, de gauche à droite et en commençant par les mouvements vers le nord.
+Les points bleus montrent le comportement du retour vers le sud d'une monture parfaite, sans backlash.
+Dans l'exemple, le backlash est minime comme l'indique le sommet légèrement aplati de la courbe rouge. 
+Un sommet fort aplati trahit un backlash plus important, comme dans l'exemple suivant:<br><br>
+<img style="width: 460px; height: 378px;" alt="" src="Guiding_Assistant_BL_Large.png">
+<br><br>
+<span style="font-weight: bold;">Compensation de backlash en DEC</span><br>
+Depuis la version 2.5, PHD2 offre un mécanisme de compensation de backlash qui peut améliorer l'autoguidage en cas de jeu modéré en DEC.
+Cette procédure est différente de celle présente dans les montures informatisées car PHD2 apprend le backlash de façon adaptative.
+Le grand danger de la compensation de jeu est d'utiliser une valeur trop importante qui force la monture dans des oscillations instables en DEC.
+PHD2 détecte cette situation et corrige en temps réel la valeur de la compensation.
+Bien sûr, la compensation n'est appliquée que lors d'un changement de sens en DEC.
+Quand on détermine une valeur à l'aide de l'assistant, il faut laisser le temps à PHD2 de l'ajuster.
+Laissez l'autoguidage travailler normalement tout en surveillant les sur-corrections éventuelles sur la courbe de guidage en DEC.
+Si vous constatez des oscillations, laissez faire PHD2. Le problème devrait petit à petit être réglé.
+<br><br>
+La valeur de compensation de backlash est visible dans l'onglet '<a href="Advanced_settings.htm#Algorithms_Tab">Algorithmes</a>' 
+du&nbsp;<span style="text-decoration: underline;"></span>dialogue de paramètres avancés. 
+La valeur peut être plus basse que celle déterminée par l'assistant si PHD2 a dû l'ajuster à la baisse.
+Vous pouvez entrer une valeur manuellement ou désactiver l'option de compensation de jeu.
+Après avoir mesuré quelques fois le backlash avec l'assistant, vous constaterez que les valeurs calculées sont semblables.
+Pour ne pas recommencer inutilement cette procédure, décochez 'Mesurer le backlash en DEC'. 
+<br><br>
+
+
+<h3><a name="Managing_Equipment_Profiles"></a>Profils de matériel</h3>Les profils de matériel ont été expliqués dans <a href="Basic_use.htm">Usage de base</a>.
+Ils sont utilisés dans le dialogue 'Connecter l'équipement'.
+Pour gérer plusieurs installations de matériel, utilisez le gestionnaire de profils dans ce dialogue.
+Avec l'option 'Profils de matériel' du menu 'Outils', vous pouvez créer un nouveau profil mais aussi supprimer, renommer ou modifier un profil existant. 
+Chaque profil 'retient' la configuration valable la dernière fois qu'il a été activé.
+Lors de la création d'un nouveau profil, importez une configuration soit des valeurs par défaut de <span style="font-style: italic;">PHD2</span>, 
+soit d'un profil existant.
+Pour éditer un profil existant, sélectionnez-le d'abord dans la liste déroulante 
+des profils d'équipement, puis cliquez sur 'paramètres' dans le menu déroulant
+'<a name="Manage_Profiles"></a>Gestionnaire des profils'. &nbsp;Ceci vous emmènera au dialogue 'cerveau', que vous pourrez modifier à votre guise. 
+Souvenez-vous que les profils sont automatiquement mis à jour chaque fois qu'un paramètre est modifié pendant une session de 
+<span style="font-style: italic;">PHD2</span>. &nbsp;
+Enfin, vous pouvez importer et exporter les profils à des fins de diagnostic, 
+sauvegarde ou même échange avec d'autres utilisateurs de <span style="font-style: italic;">PHD2</span>.
+<br><br>
+
+<h3><a name="Advanced_Settings_for_the_Simulators"></a>Paramètres du simulateur</h3>Les simulateurs de matériel ont 
+été expliqués dans <a href="Basic_use.htm">Usage de base</a>. Ce sont des outils permettant d'expérimenter avec <span style="font-style: italic;">PHD2</span>,
+ de découvrir ses possibilités et de se familiariser avec son fonctionnement.
+ Vous devez choisir 'Simulateur' comme type de caméra ainsi que la monture 'Sur caméra' pour activer le simulateur.
+ 
+Pour aller plus loin dans la découverte du simulateur, ouvrez le dialogue de caméra 
+de l'affichage principal pour modifier les paramètres de simulation:
+<br><br><img alt="" src="Tools_simulator.PNG"><br><br><br>
+
+Vous pouvez spécifier le comportement de 'backlash', de dérive d'alignement et même l'erreur périodique de la monture simulée. 
+
+Le paramètre 'Turbulence' causera des mouvements aléatoires de l'étoile-guide, comme dans la réalité.
+En modifiant ces paramètres un par un vous constaterez leur impact sur 
+la qualité de l'autoguidage et comment les différents algorithmes réagissent à ces situations.
+Bien entendu, vous simulez une monture 'parfaite', à l'exception du backlash, donc la simulation ne peut être 100% réaliste.&nbsp;
+
+<h3><a name="Keyboard_Shortcuts"></a>Raccourcis clavier</h3>
+Des raccourcis sont disponibles pour la majorité des actions courantes dans PHD2. 
+Consultez la liste dans la section <a href="KeyboardShortcuts.htm">Raccourcis clavier</a>.
+
+
+</body></html>
