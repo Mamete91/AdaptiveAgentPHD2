@@ -35,6 +35,21 @@ class TestSetupConfig(unittest.TestCase):
         s = SetupConfig()
         self.assertGreater(s.guide_pixel_scale_arcsec, 0.0)
         self.assertEqual(s.reducer_active, False)
+        # Override runtime di default disattivo
+        self.assertIsNone(s.pixel_scale_override)
+
+    def test_pixel_scale_override_wins(self):
+        """pixel_scale_override valorizzato ha priorità su native/reduced."""
+        s = SetupConfig(
+            guide_pixel_scale_arcsec_native=0.51,
+            guide_pixel_scale_arcsec_reduced=0.68,
+            reducer_active=True,   # ignorato quando c'è override
+        )
+        s.pixel_scale_override = 1.03
+        self.assertAlmostEqual(s.guide_pixel_scale_arcsec, 1.03)
+        # Rimosso l'override → torna al comportamento TOML (reduced)
+        s.pixel_scale_override = None
+        self.assertAlmostEqual(s.guide_pixel_scale_arcsec, 0.68)
 
 
 if __name__ == "__main__":

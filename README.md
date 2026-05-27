@@ -5,8 +5,9 @@
  - **`CONTESTO_PROGETTO.md`** — stato globale e roadmap
  - **`NOTE_CLAUDE.md`** — cronologia tecnica dettagliata delle modifiche
  - **`doc/CONFRONTO_GA_AGENT.md`** — analisi vs Guiding Assistant PHD2
- - **`config_askar71f.toml`**, **`config_tecnosky115.toml`**, **`config_rc8.toml`** 
- — configurazioni reali per i tre setup (i valori in questo README sono esempi del config default, non quelli operativi)
+ - **`config.toml`** — **config unico** auto-configurante (dalla §22): la pixel scale di guida è letta da PHD2 e le
+ soglie RMS sono derivate da una baseline misurata. La scelta del telescopio si fa selezionando il **profilo in PHD2**.
+ I 3 vecchi TOML per-setup e i 6 `.bat` sono stati eliminati.
 
 > Aggiornamento README completato il 2026-05-03. Ulteriori revisioni verranno fatte dopo le prossime sessioni reali se emergono nuovi comportamenti da documentare. 
 
@@ -53,13 +54,15 @@ python -m pip install -r requirements.txt
 
 ### Avvio rapido da pacchetto compilato (consigliato)
 
-Doppio click sul file .bat del tuo setup nella cartella `Pacchetto_Distribuzione/`:
+Config unico, un solo file da lanciare:
 
-| File | Setup |
-|------|-------|
-| `Avvia_Askar71F.bat` | Askar 71F — 490mm, AM5 (consigliato per iniziare) |
-| `Avvia_Tecnosky115.bat` | Tecnosky 115 — 800mm, AM5/CEM70G |
-| `Avvia_RC8.bat` | RC8 — 1624mm, CEM70G |
+1. Apri PHD2 e **seleziona il profilo del telescopio** in uso (la focale del profilo determina la pixel scale che
+   l'agente legge da solo). Abilita il server (Strumenti → Abilita Server) e avvia la guida.
+2. Doppio click su **`Avvia.bat`** nella cartella `Pacchetto_Distribuzione/`.
+3. Apri la dashboard su `http://localhost:8080`: nella card "Auto-calibrazione" vedrai la pixel scale rilevata
+   (badge **PHD2**) e il progresso della baseline.
+
+Per cambiare telescopio basta selezionare un altro profilo in PHD2: pixel scale e soglie si adattano da sole.
 
 ### Avvio da sorgente Python
 
@@ -78,10 +81,12 @@ python main.py --simulator --dry-run
 python main.py --dry-run
 ```
 
-#### 4. Controllo live (prima imposta `dry_run = false` nel config del tuo setup)
+#### 4. Controllo live (config unico, `dry_run = false` già impostato)
 ```powershell
-python main.py --config config_askar71f.toml
+python main.py --config config.toml
 ```
+> La scelta del telescopio avviene nel profilo PHD2, non nel config. I flag `--with-reducer`/`--no-reducer` restano
+> per retrocompatibilità ma sono ininfluenti con l'auto-scala attiva.
 
 ### Dashboard
 Apri il browser su: **http://localhost:8080**

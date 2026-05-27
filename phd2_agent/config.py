@@ -17,6 +17,7 @@ except ModuleNotFoundError:
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,15 @@ class SetupConfig:
     guide_pixel_scale_arcsec_native:  float = 1.0
     guide_pixel_scale_arcsec_reduced: float = 1.0
     reducer_active: bool = False
+    # Override runtime impostato da get_pixel_scale (NON parsato dal TOML).
+    # None = scala sconosciuta da PHD2 -> usa i valori native/reduced del TOML.
+    pixel_scale_override: Optional[float] = None
 
     @property
     def guide_pixel_scale_arcsec(self) -> float:
-        """Pixel scale effettiva in base allo stato reducer_active."""
+        """Pixel scale effettiva. Priorita': override runtime (da PHD2) > reduced/native (da TOML)."""
+        if self.pixel_scale_override is not None:
+            return self.pixel_scale_override
         return (self.guide_pixel_scale_arcsec_reduced
                 if self.reducer_active
                 else self.guide_pixel_scale_arcsec_native)
@@ -111,6 +117,19 @@ class ExposureDynamicConfig:
 
 
 @dataclass
+class AutoCalibrationConfig:
+    """Auto-configurazione: pixel scale da PHD2 + soglie RMS da baseline misurata."""
+    enabled: bool = False
+    use_phd2_pixel_scale: bool = True
+    rms_high_factor: float = 1.5
+    rms_low_factor: float = 0.75
+    baseline_window_frames: int = 60
+    baseline_min_snr: float = 10.0
+    rms_high_min_arcsec: float = 0.50    # clamp inferiore su rms_high derivato
+    rms_high_max_arcsec: float = 2.50    # clamp superiore su rms_high derivato
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -123,6 +142,7 @@ class AgentConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     phd2_log: PHD2LogConfig = field(default_factory=PHD2LogConfig)
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
+    auto_calibration: AutoCalibrationConfig = field(default_factory=AutoCalibrationConfig)
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -232,6 +252,20 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             hfd_min_arcsec=float(ed.get("hfd_min_arcsec", 4.0)),
             peak_to_rms_ratio_min=float(ed.get("peak_to_rms_ratio_min", 3.0)),
             nominal_for_seconds=float(ed.get("nominal_for_seconds", 60.0)),
+        )
+
+    # Auto-calibration (sezione opzionale — default se mancante per retrocompatibilita')
+    if "auto_calibration" in raw:
+        a = raw["auto_calibration"]
+        cfg.auto_calibration = AutoCalibrationConfig(
+            enabled=bool(a.get("enabled", False)),
+            use_phd2_pixel_scale=bool(a.get("use_phd2_pixel_scale", True)),
+            rms_high_factor=float(a.get("rms_high_factor", 1.5)),
+            rms_low_factor=float(a.get("rms_low_factor", 0.75)),
+            baseline_window_frames=int(a.get("baseline_window_frames", 60)),
+            baseline_min_snr=float(a.get("baseline_min_snr", 10.0)),
+            rms_high_min_arcsec=float(a.get("rms_high_min_arcsec", 0.50)),
+            rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 2.50)),
         )
 
     return cfg

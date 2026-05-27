@@ -51,23 +51,12 @@ def main():
     if diag_exe.exists():
         shutil.copy(diag_exe, final_output / "Diagnostica_Connessione.exe")
     
-    # Copia config.toml
+    # Copia config unico
     shutil.copy("config.toml", final_output / "config.toml")
-    if Path("config_askar71f.toml").exists():
-        shutil.copy("config_askar71f.toml", final_output / "config_askar71f.toml")
-    if Path("config_rc8.toml").exists():
-        shutil.copy("config_rc8.toml", final_output / "config_rc8.toml")
-    if Path("config_tecnosky115.toml").exists():
-        shutil.copy("config_tecnosky115.toml", final_output / "config_tecnosky115.toml")
-        
-    # Copia file .bat (focale piena + riduttore)
+
+    # Copia file .bat (config unico: un solo Avvia.bat + sblocco firewall)
     bat_files = [
-        "Avvia_Askar71F.bat",
-        "Avvia_Askar71F_Ridotto.bat",
-        "Avvia_RC8.bat",
-        "Avvia_RC8_Ridotto.bat",
-        "Avvia_Tecnosky115.bat",
-        "Avvia_Tecnosky115_Ridotto.bat",
+        "Avvia.bat",
         "Sblocca_Firewall_8080.bat",
     ]
     for bat_file in bat_files:
@@ -80,16 +69,25 @@ def main():
     # Crea una cartella per i logs offline
     (final_output / "phd2_log").mkdir(exist_ok=True)
     
-    # File readme "Come avviare" specifico
+    # File readme "Come avviare" specifico (flusso a config unico)
     with open(final_output / "LEGGIMI_PER_AVVIARE.txt", "w", encoding="utf-8") as f:
-        f.write("=== PHD2 Adaptive Guiding Agent ===\n\n")
-        f.write("1. ASSICURATI DI AVER APERTO PHD2\n")
-        f.write("2. IN PHD2 vai in Strumenti -> Abilita Server\n")
-        f.write("3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per vedere le tre Luci Verdi di test.\n")
-        f.write("4. Per avviare il tool, esegui 'PHD2_Agent.exe'.\n")
-        f.write("5. Dal browser vai all'indirizzo http://localhost:8080 per vedere la dashboard live.\n\n")
-        f.write("Puoi personalizzare i limiti aprendo il file config.toml con Notepad.\n")
-        f.write("NOTA: Attualmente dal config.toml è impostata la modalità DRY_RUN (solo simulazione).\n")
+        f.write("=== PHD2 Adaptive Guiding Agent - Config unico ===\n\n")
+        f.write("L'agente e' auto-configurante: legge la pixel scale di guida\n")
+        f.write("direttamente da PHD2 e deriva da solo le soglie RMS dalla\n")
+        f.write("baseline misurata sul campo. Un solo config.toml, un solo Avvia.bat.\n\n")
+        f.write("PASSI:\n")
+        f.write("1. Apri PHD2 e SELEZIONA IL PROFILO del telescopio che stai usando\n")
+        f.write("   (es. 'RC8', 'Askar 71F ridotto'). La focale del profilo determina\n")
+        f.write("   la pixel scale che l'agente legge automaticamente.\n")
+        f.write("2. In PHD2 vai in Strumenti -> Abilita Server, poi avvia la guida.\n")
+        f.write("3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per il test connessione.\n")
+        f.write("4. Esegui 'Avvia.bat' (unico) per avviare l'agente.\n")
+        f.write("5. Apri il browser su http://localhost:8080 per la dashboard live.\n")
+        f.write("   Nella card 'Auto-calibrazione' vedrai la pixel scale rilevata e\n")
+        f.write("   il progresso della baseline (es. 12/60 -> 60/60).\n\n")
+        f.write("Per cambiare telescopio basta selezionare un altro profilo in PHD2:\n")
+        f.write("pixel scale e soglie si adattano da sole, senza toccare alcun file.\n\n")
+        f.write("NOTA: config.toml e' impostato in modalita' LIVE (dry_run=false).\n")
     
     # 5. Zippa il pacchetto
     print("\n>>> Creo lo ZIP finale...")

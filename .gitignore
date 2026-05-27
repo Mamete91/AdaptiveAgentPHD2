@@ -9,3 +9,8 @@ __pycache__/
 
 # Distribution archives
 *.zip
+
+# Runtime artifacts
+logs/
+baseline.json
+runtime_state.json

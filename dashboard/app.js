@@ -258,6 +258,11 @@ function applyFullStatus(data) {
     updateExposureEscalation(ctrl);
   }
 
+  // Auto-calibrazione (pixel scale + soglie RMS adattive)
+  if (ctrl.auto_calibration) {
+    updateAutoCalibration(ctrl.auto_calibration);
+  }
+
   // Actions history
   if (ctrl.last_actions?.length) {
     el('action-log').innerHTML = ''; // prevent duplication
@@ -432,6 +437,30 @@ function updateExposureEscalation(ctrl) {
       ? 'Gate aperto: path B può intervenire sull\'esposizione'
       : 'Gate chiuso: leve RA e DEC non ancora al limite';
   }
+}
+
+function updateAutoCalibration(ac) {
+  // Pixel scale + fonte (PHD2 / TOML fallback)
+  const scale = ac.pixel_scale_arcsec;
+  el('autocal-scale').textContent = scale != null ? `${scale.toFixed(3)}"/px` : '—';
+  const srcEl = el('autocal-source');
+  const fromPhd2 = ac.pixel_scale_source === 'phd2';
+  srcEl.textContent = fromPhd2 ? 'PHD2' : 'TOML';
+  srcEl.className = `gate-status-badge ${fromPhd2 ? 'ok' : 'saturated'}`;
+
+  // Baseline RMS misurata
+  el('autocal-baseline').textContent = ac.baseline_rms_arcsec != null
+    ? `${ac.baseline_rms_arcsec.toFixed(3)}"` : '—';
+
+  // Progresso baseline (es. "42/60" o "completata")
+  el('autocal-progress').textContent = ac.baseline_done
+    ? 'completata' : (ac.baseline_progress || '—');
+
+  // Soglie RMS attive (config efficace in memoria)
+  el('autocal-rms-high').textContent = ac.rms_high_active != null
+    ? `${ac.rms_high_active.toFixed(3)}"` : '—';
+  el('autocal-rms-low').textContent = ac.rms_low_active != null
+    ? `${ac.rms_low_active.toFixed(3)}"` : '—';
 }
 
 // Log azioni

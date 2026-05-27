@@ -229,9 +229,24 @@ class PHD2Client:
         """Ritorna lo stato corrente di PHD2 (es. 'Guiding', 'Stopped')."""
         return self.call("get_app_state")
 
-    def get_pixel_scale(self) -> float:
-        """Ritorna la scala della camera in arcsec/pixel."""
-        return float(self.call("get_pixel_scale"))
+    def get_pixel_scale(self) -> float | None:
+        """Pixel scale di guida (arcsec/px) dal profilo PHD2 attivo.
+
+        Ritorna None se PHD2 risponde `null` (camera non connessa, focale non
+        impostata nel profilo, driver senza pixel size, o scala reale == 1.00"/px,
+        indistinguibile lato RPC) oppure se la chiamata RPC fallisce.
+        """
+        try:
+            result = self.call("get_pixel_scale")
+        except Exception as e:
+            logger.warning("get_pixel_scale: chiamata RPC fallita (%s)", e)
+            return None
+        if result is None:
+            return None
+        try:
+            return float(result)
+        except (TypeError, ValueError):
+            return None
 
     def get_calibrated(self) -> bool:
         return bool(self.call("get_calibrated"))

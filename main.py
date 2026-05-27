@@ -58,12 +58,14 @@ def parse_args():
     reducer_group.add_argument(
         "--with-reducer",
         action="store_true",
-        help="Attiva il riduttore di focale (sovrascrive setup.reducer_active=true)",
+        help="[retrocompat] Forza setup.reducer_active=true. Ininfluente con "
+             "auto_calibration attiva: la focale del profilo PHD2 comanda la pixel scale.",
     )
     reducer_group.add_argument(
         "--no-reducer",
         action="store_true",
-        help="Disattiva il riduttore di focale (sovrascrive setup.reducer_active=false)",
+        help="[retrocompat] Forza setup.reducer_active=false. Ininfluente con "
+             "auto_calibration attiva: la focale del profilo PHD2 comanda la pixel scale.",
     )
     return p.parse_args()
 

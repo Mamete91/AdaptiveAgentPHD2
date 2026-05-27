@@ -958,3 +958,69 @@ Nuovo formato con 6 .bat (focale piena + ridotta), nota che tutti sono LIVE.
 - `Pacchetto_Distribuzione/LEGGIMI_PER_AVVIARE.txt`: tabella 6 .bat aggiornata
 - `tests/test_get_status.py`: nuovo file, 8 test
 - `CONTESTO_PROGETTO.md`: data e sezione §21 aggiunte
+
+## 22. Auto-scala via RPC + soglie RMS adattive + config unico (2026-05-27)
+
+### Motivazione
+Fino alla §21 la pixel scale di guida era hard-coded per setup in `[setup]`, le soglie RMS erano costanti tarate a
+mano in `[thresholds]`, ed esistevano 3 TOML per-setup + 6 `.bat` (focale piena/ridotta). Ogni cambio telescopio
+richiedeva di scegliere il file giusto e ritarare a mano. Obiettivo: agente auto-configurante e a config unico.
+
+### Architettura
+1. **Pixel scale efficace**: `client.get_pixel_scale()` reso null-safe (`Optional[float]`, gestisce `null` RPC ed
+   eccezioni). `SetupConfig.pixel_scale_override` (campo runtime, NON parsato dal TOML); la property
+   `guide_pixel_scale_arcsec` ritorna l'override se valorizzato, altrimenti reduced/native (TOML).
+   `controller._apply_pixel_scale_from_phd2(context)` imposta l'override col valore PHD2 quando valido,
+   altrimenti `None` → fallback TOML.
+2. **Soglie RMS adattive**: `controller._update_rms_baseline(snap)` campiona `rms_total` solo in condizione stabile
+   (`SeeingCondition.NOMINAL`, `snr_avg ≥ baseline_min_snr`, `not implosion_detected`); a finestra piena
+   `_finalize_rms_baseline()` deriva `rms_high = clamp(rms_high_factor × mediana)` e `rms_low = rms_low_factor × mediana`,
+   aggiornando SIA `cfg.thresholds` SIA gli attributi dell'analyzer (config efficace in memoria, **TOML mai riscritto**).
+3. **Timing hook**: `_apply_pixel_scale_from_phd2("init")` è chiamato dentro `controller.initialize()`. Non esiste un
+   evento PHD2 `GuidingResumed`: `initialize()` è già il punto di convergenza, invocato a init (state Guiding), su
+   `StartGuiding`, su `AppState→Guiding` e dopo riconnessione (vedi `main.py`). Il caso `null` a freddo si auto-corregge
+   appena la camera è connessa. La baseline RMS NON viene azzerata a ogni re-init: lo stato `_rms_baseline_*` vive solo
+   in `__init__` e l'invalidazione (`_invalidate_rms_baseline`) scatta SOLO su cambio scala reale (`abs(prev-scale) > 1e-3`).
+4. **Dashboard**: blocco `auto_calibration` in `get_status()` (pixel scale efficace + fonte phd2/toml, baseline_rms,
+   progresso `n/window`, baseline_done, rms_high/low attivi); card "Auto-calibrazione" in dashboard (riusa `.exposure-card`).
+
+### Comportamento atteso
+Con `[auto_calibration].enabled = false` comportamento identico a prima (nessuna raccolta/modifica, soglie = TOML).
+Con `enabled = true`: pixel scale auto da PHD2, soglie auto dopo i primi `baseline_window_frames` frame in NOMINAL.
+MinMove e range aggressività NON toccati (già scale-independent). Backlash, esposizione dinamica (§19), escalation
+gate (§21), Baseline Guardian e RMS implosion detector invariati.
+
+### Config unico
+Unico `config.toml` con costanti unificate (max_exposure 4000ms, snr_low 8.0, spike_min 0.25, hfd_min 4.0",
+`[auto_calibration].enabled = true`, `[exposure_dynamic].enabled = true`, `dry_run = false`). Unico `Avvia.bat`.
+La scelta del telescopio si fa selezionando il profilo in PHD2 (focale → pixel scale auto-rilevata). I flag
+`--with-reducer`/`--no-reducer` restano per retrocompat (ininfluenti con auto-scala: comanda la focale del profilo).
+
+### Limiti dell'approccio
+- **Cecità di risoluzione**: `get_pixel_scale` riflette il profilo PHD2; se la focale nel profilo è errata, la scala
+  è errata. Su cercatore-guida la flessione differenziale non è osservabile dalla sola pixel scale.
+- **Baseline in seeing cattivo**: se il cielo parte turbolento la baseline non si completa (campiona solo NOMINAL):
+  comportamento atteso, le soglie restano ai valori TOML finché non c'è un periodo stabile.
+- **Scala == 1.00"/px**: PHD2 risponde `null` (indistinguibile da "scala sconosciuta") → fallback TOML.
+
+### File modificati
+- `phd2_agent/client.py`: `get_pixel_scale()` null-safe (Optional[float])
+- `phd2_agent/config.py`: `SetupConfig.pixel_scale_override` + property; nuova `AutoCalibrationConfig`; campo in
+  `AgentConfig`; parsing retrocompatibile in `load_config`
+- `phd2_agent/controller.py`: stato baseline in `__init__`; `_apply_pixel_scale_from_phd2`, `_invalidate_rms_baseline`,
+  `_update_rms_baseline`, `_finalize_rms_baseline`; chiamata in `initialize()` e in `evaluate()`; blocco
+  `auto_calibration` in `get_status()`
+- `main.py`: help `--with-reducer`/`--no-reducer` aggiornato (retrocompat)
+- `config.toml`: riscritto come config unico
+- ELIMINATI: `config_askar71f.toml`, `config_tecnosky115.toml`, `config_rc8.toml` e i 6 `Avvia_*.bat`
+  (root + Pacchetto_Distribuzione)
+- NUOVO: `Avvia.bat` (unico)
+- `build_dist.py`: copia solo `config.toml`; `bat_files = ["Avvia.bat", "Sblocca_Firewall_8080.bat"]`;
+  `LEGGIMI_PER_AVVIARE.txt` riscritto per flusso a file unico
+- `dashboard/index.html`: card "Auto-calibrazione"; `dashboard/app.js`: `updateAutoCalibration()`
+- `tests/test_auto_calibration.py`: nuovo file, 12 test; `tests/test_setup_config.py`: +1 test override
+
+### Validazione raccomandata
+Sessioni LIVE su almeno 2 profili PHD2 diversi (RC8 e Askar ridotto): verificare nella card che la pixel scale cambi
+da sola con badge "PHD2", che la baseline si completi (n/60) in cielo calmo e che `rms_high`/`rms_low` derivati siano
+plausibili. Cercare nei log `[autocal]`. Tarare `rms_high_factor` (1.5) se troppi/pochi DEGRADED.

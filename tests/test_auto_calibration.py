@@ -1,0 +1,293 @@
+"""
+test_auto_calibration.py — Test unitari per l'auto-configurazione:
+  - pixel scale di guida letta da PHD2 (con fallback TOML / null-safe)
+  - soglie RMS adattive derivate da una baseline misurata
+  - invalidazione baseline su cambio pixel scale
+  - retrocompatibilità del parsing (sezione [auto_calibration] assente)
+
+Casi coperti (1..9 come da specifica feature):
+  1. Pixel scale da PHD2 valida → override applicato, source "phd2"
+  2. Fallback su null → override None, property = valore TOML
+  3. Feature OFF → override sempre None
+  4. client.get_pixel_scale null-safe (None o eccezione → None, nessun crash)
+  5. Baseline happy path → rms_high/rms_low derivati (cfg.thresholds E analyzer)
+  6. Baseline ignora frame cattivi (SNR basso / implosion / DEGRADED)
+  7. Clamp su rms_high derivato
+  8. Invalidazione baseline su cambio pixel scale
+  9. Retrocompatibilità parsing (sezione assente → default OFF)
+"""
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from phd2_agent.analyzer import AnalysisSnapshot, SeeingCondition, StatisticsAnalyzer
+from phd2_agent.client import PHD2Client
+from phd2_agent.config import (
+    AgentConfig, AutoCalibrationConfig, AxisLimits, ControlConfig,
+    EmergencyConfig, ExposureDynamicConfig, SetupConfig, Thresholds, load_config,
+)
+from phd2_agent.controller import AdaptiveController
+
+
+# ---------------------------------------------------------------------------
+# Factory helpers
+# ---------------------------------------------------------------------------
+
+def _make_config(ac_enabled: bool = True, window: int = 5) -> AgentConfig:
+    cfg = AgentConfig()
+    cfg.control = ControlConfig(dry_run=True, cooldown_seconds=30.0)
+    cfg.thresholds = Thresholds(
+        rms_high=1.20, rms_low=0.60, snr_low=8.0,
+        spike_ratio_high=0.30, consecutive_frames=5,
+    )
+    cfg.emergency = EmergencyConfig(
+        auto_recovery=True, max_exposure_ms=4000,
+        find_star_delay=10, saturation_timeout_s=300,
+    )
+    cfg.ra = AxisLimits()
+    cfg.dec = AxisLimits()
+    cfg.setup = SetupConfig(
+        profile_name="auto",
+        guide_pixel_scale_arcsec_native=0.51,
+        guide_pixel_scale_arcsec_reduced=0.68,
+        reducer_active=False,
+    )
+    cfg.exposure_dynamic = ExposureDynamicConfig(enabled=False)
+    cfg.auto_calibration = AutoCalibrationConfig(
+        enabled=ac_enabled,
+        use_phd2_pixel_scale=True,
+        rms_high_factor=1.5,
+        rms_low_factor=0.75,
+        baseline_window_frames=window,
+        baseline_min_snr=10.0,
+        rms_high_min_arcsec=0.50,
+        rms_high_max_arcsec=2.50,
+    )
+    return cfg
+
+
+def _make_controller(cfg: AgentConfig | None = None,
+                     pixel_scale=None) -> AdaptiveController:
+    if cfg is None:
+        cfg = _make_config()
+    client = MagicMock()
+    client.get_pixel_scale.return_value = pixel_scale
+    analyzer = StatisticsAnalyzer(
+        window_size=cfg.control.window_frames,
+        rms_high=cfg.thresholds.rms_high,
+        rms_low=cfg.thresholds.rms_low,
+        snr_low=cfg.thresholds.snr_low,
+    )
+    ctrl = AdaptiveController(client=client, config=cfg, analyzer=analyzer)
+    ctrl._initialized = True
+    return ctrl
+
+
+def _nominal_snap(rms_total: float, snr: float = 20.0) -> AnalysisSnapshot:
+    snap = AnalysisSnapshot()
+    snap.condition = SeeingCondition.NOMINAL
+    snap.rms_total = rms_total
+    snap.snr_avg = snr
+    snap.implosion_detected = False
+    snap.frame_count = 30
+    return snap
+
+
+# ---------------------------------------------------------------------------
+# 1. Pixel scale da PHD2 valida
+# ---------------------------------------------------------------------------
+
+class TestPixelScaleFromPhd2(unittest.TestCase):
+
+    def test_valid_scale_applied(self):
+        ctrl = _make_controller(pixel_scale=1.03)
+        ctrl._apply_pixel_scale_from_phd2("init")
+        self.assertAlmostEqual(ctrl.cfg.setup.pixel_scale_override, 1.03)
+        self.assertAlmostEqual(ctrl.cfg.setup.guide_pixel_scale_arcsec, 1.03)
+        status = ctrl.get_status()
+        self.assertEqual(status["auto_calibration"]["pixel_scale_source"], "phd2")
+        self.assertAlmostEqual(status["auto_calibration"]["pixel_scale_arcsec"], 1.03)
+
+
+# ---------------------------------------------------------------------------
+# 2. Fallback su null → property = valore TOML
+# ---------------------------------------------------------------------------
+
+class TestPixelScaleNullFallback(unittest.TestCase):
+
+    def test_null_falls_back_to_toml(self):
+        ctrl = _make_controller(pixel_scale=None)
+        ctrl._apply_pixel_scale_from_phd2("init")
+        self.assertIsNone(ctrl.cfg.setup.pixel_scale_override)
+        # native = 0.51 (reducer_active=False)
+        self.assertAlmostEqual(ctrl.cfg.setup.guide_pixel_scale_arcsec, 0.51)
+        status = ctrl.get_status()
+        self.assertEqual(status["auto_calibration"]["pixel_scale_source"], "toml")
+
+
+# ---------------------------------------------------------------------------
+# 3. Feature OFF → override sempre None
+# ---------------------------------------------------------------------------
+
+class TestPixelScaleFeatureOff(unittest.TestCase):
+
+    def test_feature_off_no_override(self):
+        cfg = _make_config(ac_enabled=False)
+        ctrl = _make_controller(cfg=cfg, pixel_scale=1.03)
+        ctrl._apply_pixel_scale_from_phd2("init")
+        self.assertIsNone(ctrl.cfg.setup.pixel_scale_override)
+        self.assertAlmostEqual(ctrl.cfg.setup.guide_pixel_scale_arcsec, 0.51)
+        # Con feature OFF il client non deve nemmeno essere interrogato
+        ctrl.client.get_pixel_scale.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 4. client.get_pixel_scale null-safe
+# ---------------------------------------------------------------------------
+
+class TestClientNullSafe(unittest.TestCase):
+
+    def test_returns_none_on_null(self):
+        client = PHD2Client()
+        client.call = MagicMock(return_value=None)
+        self.assertIsNone(client.get_pixel_scale())
+
+    def test_returns_none_on_exception(self):
+        client = PHD2Client()
+        client.call = MagicMock(side_effect=TimeoutError("no answer"))
+        self.assertIsNone(client.get_pixel_scale())
+
+    def test_returns_float_on_value(self):
+        client = PHD2Client()
+        client.call = MagicMock(return_value=1.23)
+        self.assertAlmostEqual(client.get_pixel_scale(), 1.23)
+
+
+# ---------------------------------------------------------------------------
+# 5. Baseline happy path
+# ---------------------------------------------------------------------------
+
+class TestBaselineHappyPath(unittest.TestCase):
+
+    def test_thresholds_derived_from_median(self):
+        cfg = _make_config(window=5)
+        ctrl = _make_controller(cfg=cfg)
+        rms_values = [0.40, 0.50, 0.60, 0.50, 0.50]  # mediana = 0.50
+        for v in rms_values:
+            ctrl._update_rms_baseline(_nominal_snap(v))
+        self.assertTrue(ctrl._rms_baseline_done)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.50)
+        # rms_high = clamp(1.5 * 0.50 = 0.75) → 0.75 ; rms_low = 0.75 * 0.50 = 0.375
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.75)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.375)
+        self.assertAlmostEqual(ctrl.analyzer.rms_high, 0.75)
+        self.assertAlmostEqual(ctrl.analyzer.rms_low, 0.375)
+
+
+# ---------------------------------------------------------------------------
+# 6. Baseline ignora frame cattivi
+# ---------------------------------------------------------------------------
+
+class TestBaselineIgnoresBadFrames(unittest.TestCase):
+
+    def test_bad_frames_not_sampled(self):
+        cfg = _make_config(window=5)
+        ctrl = _make_controller(cfg=cfg)
+
+        # SNR sotto soglia
+        low_snr = _nominal_snap(0.5, snr=5.0)
+        ctrl._update_rms_baseline(low_snr)
+
+        # Implosion
+        implosion = _nominal_snap(0.5, snr=20.0)
+        implosion.implosion_detected = True
+        ctrl._update_rms_baseline(implosion)
+
+        # Condizione degradata
+        degraded = _nominal_snap(0.5, snr=20.0)
+        degraded.condition = SeeingCondition.DEGRADED_SEEING
+        ctrl._update_rms_baseline(degraded)
+
+        self.assertEqual(len(ctrl._rms_baseline_samples), 0)
+        self.assertFalse(ctrl._rms_baseline_done)
+
+
+# ---------------------------------------------------------------------------
+# 7. Clamp su rms_high derivato
+# ---------------------------------------------------------------------------
+
+class TestBaselineClamp(unittest.TestCase):
+
+    def test_high_clamped_to_max(self):
+        cfg = _make_config(window=3)
+        ctrl = _make_controller(cfg=cfg)
+        for _ in range(3):
+            ctrl._update_rms_baseline(_nominal_snap(5.0))  # baseline molto alta
+        self.assertTrue(ctrl._rms_baseline_done)
+        # 1.5 * 5.0 = 7.5 → clamp a rms_high_max_arcsec = 2.50
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 2.50)
+
+
+# ---------------------------------------------------------------------------
+# 8. Invalidazione baseline su cambio pixel scale
+# ---------------------------------------------------------------------------
+
+class TestBaselineInvalidationOnScaleChange(unittest.TestCase):
+
+    def test_scale_change_resets_baseline(self):
+        cfg = _make_config(window=3)
+        ctrl = _make_controller(cfg=cfg, pixel_scale=0.51)
+        # Prima lettura: prev None → nessuna invalidazione
+        ctrl._apply_pixel_scale_from_phd2("init")
+        for _ in range(3):
+            ctrl._update_rms_baseline(_nominal_snap(0.6))
+        self.assertTrue(ctrl._rms_baseline_done)
+
+        # Cambio scala reale → invalidazione
+        ctrl.client.get_pixel_scale.return_value = 0.68
+        ctrl._apply_pixel_scale_from_phd2("resume")
+        self.assertFalse(ctrl._rms_baseline_done)
+        self.assertIsNone(ctrl._rms_baseline_value)
+        self.assertEqual(len(ctrl._rms_baseline_samples), 0)
+
+    def test_same_scale_keeps_baseline(self):
+        cfg = _make_config(window=3)
+        ctrl = _make_controller(cfg=cfg, pixel_scale=0.51)
+        ctrl._apply_pixel_scale_from_phd2("init")
+        for _ in range(3):
+            ctrl._update_rms_baseline(_nominal_snap(0.6))
+        self.assertTrue(ctrl._rms_baseline_done)
+        # Riconnessione a scala invariata → baseline preservata
+        ctrl._apply_pixel_scale_from_phd2("resume")
+        self.assertTrue(ctrl._rms_baseline_done)
+
+
+# ---------------------------------------------------------------------------
+# 9. Retrocompatibilità parsing
+# ---------------------------------------------------------------------------
+
+class TestParsingRetrocompat(unittest.TestCase):
+
+    def test_missing_section_defaults_off(self):
+        toml = (
+            "[setup]\n"
+            'profile_name = "x"\n'
+            "[thresholds]\n"
+            "rms_high = 0.8\n"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.toml"
+            p.write_text(toml, encoding="utf-8")
+            cfg = load_config(p)
+        self.assertIsInstance(cfg.auto_calibration, AutoCalibrationConfig)
+        self.assertFalse(cfg.auto_calibration.enabled)
+        # default sani
+        self.assertTrue(cfg.auto_calibration.use_phd2_pixel_scale)
+        self.assertEqual(cfg.auto_calibration.baseline_window_frames, 60)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-12 (dashboard §21)
+## Stato attuale — aggiornato al 2026-05-27 (auto-configurazione + config unico §22)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -204,7 +204,17 @@ sospesa per 60 s (`implosion_suspended=True`), condizione forzata a NOMINAL
 (controller non agisce), contatori consecutivi non aggiornati (evita CRITICAL
 spurio al ritorno). Reset di reference e sospensione in `reset()`.
 
+### Auto-configurazione + config unico — IMPLEMENTATA (2026-05-27)
+L'agente legge la pixel scale di guida da PHD2 (`get_pixel_scale`, fallback TOML) e deriva le soglie RMS da una
+baseline misurata sul campo (config efficace in memoria, TOML mai riscritto). MinMove e aggressività restano
+scale-independent. La configurazione è collassata in un solo `config.toml` + un solo `Avvia.bat`: valori unificati
+(max_exposure 4000ms, snr_low 8.0, spike_min 0.25, hfd_min 4.0"); i 3 TOML per-setup e i 6 .bat sono stati eliminati.
+La scelta del telescopio avviene selezionando il profilo in PHD2. Dettaglio in NOTE_CLAUDE.md §22.
+
 ## Cosa NON è stato ancora fatto
+
+- Validazione LIVE dell'auto-configurazione: sessioni reali su almeno 2 profili PHD2 diversi (es. RC8 e Askar
+  ridotto), verificando che pixel scale e soglie cambino da sole. Tarare poi rms_high_factor in base ai log.
 
 - Test graceful shutdown (Ctrl+C interattivo) su PHD2 reale: verificare che
   all'uscita compaiano "Shutdown controller - restore baseline..." e

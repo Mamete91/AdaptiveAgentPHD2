@@ -1,18 +1,15 @@
-# PHD2 Adaptive Guiding Agent - Configurazione (v1.1, post-patch)
-# Modifica questi valori per adattare l'agente al tuo setup.
-#
-# IMPORTANTE: questo e' il config di default (fallback). Per i tre setup reali
-# usa config_askar71f.toml, config_tecnosky115.toml o config_rc8.toml.
-# DEVI ricalibrare rms_high, rms_low e i range minmove in base al pixel scale
-# del tuo OAG. Vedere commenti nella sezione [thresholds].
+# =============================================================================
+# CONFIG UNICO — PHD2 Adaptive Agent (auto-configurante)
+# Pixel scale: auto da PHD2 (get_pixel_scale); valori sotto = solo fallback.
+# Soglie RMS: auto da baseline misurata (vedi [auto_calibration]).
+# La scelta del telescopio si fa selezionando il PROFILO in PHD2.
+# =============================================================================
 
 [setup]
-# Identificativo profilo (usato dal Baseline Guardian per evitare di ripristinare
-# baseline cross-setup). Cambialo se passi a un setup diverso.
-profile_name                     = "default"
-guide_pixel_scale_arcsec_native  = 1.0   # "/px della tua camera guida a focale piena
-guide_pixel_scale_arcsec_reduced = 1.0   # "/px con riduttore montato
-reducer_active                   = false # true se il riduttore e' in uso (o usa --with-reducer)
+profile_name                     = "auto"
+guide_pixel_scale_arcsec_native  = 1.0    # fallback se PHD2 non riporta la scala
+guide_pixel_scale_arcsec_reduced = 1.0    # fallback
+reducer_active                   = false
 
 [phd2]
 host = "localhost"
@@ -23,94 +20,68 @@ host = "0.0.0.0"
 port = 8080
 
 [control]
-# dry_run = true -> l'agente analizza e logga, ma NON invia comandi a PHD2
-# Metti false solo dopo aver verificato il comportamento nei log per almeno
-# 3-5 sessioni reali!
-dry_run = true
-
-interval_seconds = 10    # Frequenza di valutazione del controller
-window_frames = 30       # Frame nella sliding window statistica
-cooldown_seconds = 30    # Tempo minimo tra due modifiche sullo stesso parametro
-                         # NOTA: per MinMove il cooldown e' 1.5x (45s), per
-                         # gli aumenti di Aggressivita' e' 2x (60s).
+dry_run          = false
+interval_seconds = 10
+window_frames    = 30
+cooldown_seconds = 30
 
 [thresholds]
-# Tutte le distanze sono in arcsec.
-#
-# RIFERIMENTO PIXEL SCALE PER SETUP TIPICI (per tarare le soglie):
-#   - C9.25 OAG nativo (~2350mm): seeing tipico montagna 0.4-0.8" RMS
-#   - RC8 OAG nativo (1624mm):    seeing tipico montagna 0.5-1.0" RMS
-#   - Askar 71F nativo (490mm):   seeing tipico montagna 0.4-0.8" RMS (e' OK
-#                                  con valori piu' alti perche' campiona meno)
-#   - Tecnosky 115 (800mm):       seeing tipico montagna 0.4-0.9" RMS
-#
-# Regola pratica: rms_high = circa 1.5x del miglior RMS che ottieni in
-# notti normali; rms_low = circa il miglior RMS che ottieni in notti ottime.
-rms_high         = 0.80  # Oltre questo: degraded seeing -> abbassa Aggr, alza MinMove
-rms_low          = 0.45  # Sotto questo: seeing molto calmo -> alza Aggr, abbassa MinMove
-snr_low          = 10.0  # Soglia SNR per considerarlo critico
-spike_ratio_high = 0.30  # % di frame oltre 2-sigma per considerarlo "vento/scossoni"
-consecutive_frames = 5   # Frame consecutivi oltre soglia prima di agire
+rms_high           = 1.20   # iniziale/fallback; sovrascritto dall'auto-calibrazione
+rms_low            = 0.60   # iniziale/fallback
+snr_low            = 8.0    # unificato: sopra il cuscinetto PHD2 (6.0) e il reject (3.0),
+                            #            sotto la fascia sana 15-40 -> scatta solo a degrado reale
+spike_ratio_high   = 0.30
+consecutive_frames = 5
 
 [emergency]
-auto_recovery        = true   # Abilita auto-esposizione e auto-findStar
-max_exposure_ms      = 5000   # Limite massimo (ms) per aumentare l'esposizione
-                              # ALZATO da 4000 a 5000 per setup OAG con narrowband 3nm
-                              # (su SNR critici servono esposizioni di guida piu' lunghe)
-find_star_delay      = 10     # Secondi di StarLost continuativi prima di find_star
-saturation_timeout_s = 300    # Dopo X secondi su stella satura, forza re-scan
-                              # find_star() per cercare stelle non sature
+auto_recovery        = true
+max_exposure_ms      = 4000   # unificato a 4s per tutti i setup
+find_star_delay      = 10
+saturation_timeout_s = 300
 
 [limits.ra]
-# Algoritmo RA tipico: Isteresi (Hysteresis)
-# Parametri esposti via API: Hysteresis, Aggressiveness, MinMove
-aggr_min       = 35
+aggr_min       = 40
 aggr_max       = 80
-aggr_step_down = 5      # Step riduzione aggressivita'
-aggr_step_up   = 2      # Step aumento aggressivita' (conservativo)
+aggr_step_down = 5
+aggr_step_up   = 2
 minmove_min    = 0.15
-minmove_max    = 0.60
+minmove_max    = 0.80
 minmove_step   = 0.05
 
 [limits.dec]
-# Algoritmo Dec tipico: Passa basso 2 (Low-pass 2) o Resist Switch
-# Parametri esposti via API: Aggressiveness, MinMove
 aggr_min       = 35
 aggr_max       = 75
 aggr_step_down = 5
 aggr_step_up   = 2
-minmove_min    = 0.15
-minmove_max    = 0.60
+minmove_min    = 0.18
+minmove_max    = 0.85
 minmove_step   = 0.05
 
 [logging]
-csv_dir   = "logs"        # Directory per i file CSV di sessione
-                          # NOTA: i periodi di stella satura vengono loggati qui
-                          # in saturated_periods_YYYYMMDD.csv per post-mortem
-                          # con SubframeSelector di PixInsight (FWHM/Eccentricity)
-log_level = "INFO"        # DEBUG, INFO, WARNING, ERROR
+csv_dir   = "logs"
+log_level = "INFO"
 
 [phd2_log]
-# Cartella dove PHD2 salva i suoi file di log nativi
-# Default Windows: C:\Users\<nome>\Documents\PHD2
-log_dir     = ""             # Lascia vuoto per usare il default (Documenti\PHD2)
-output_dir  = "phd2_log"     # Cartella output JSON analysis
-auto_import = true           # Importa automaticamente i log al termine sessione
+log_dir     = ""
+output_dir  = "phd2_log"
+auto_import = true
 
 [exposure_dynamic]
-# Esposizione dinamica RMS-based (oltre al path LOW_SNR esistente).
-# Si attiva su seeing degradato verificato da metriche multiple,
-# SOLO DOPO che aggressiveness e MinMove hanno saturato i loro limiti.
-# Non agisce mai durante OSCILLATING ne' LOW_SNR.
-#
-# Default config — pixel scale neutra, soglie permissive.
-# I config per setup specifici sovrascrivono questi valori.
-enabled                  = false
-# (guide_pixel_scale_arcsec spostato in [setup])
-step_factor              = 1.5
-max_steps_above_base     = 2
-cooldown_s               = 90
-spike_min                = 0.25
-hfd_min_arcsec           = 4.0
-peak_to_rms_ratio_min    = 3.0
-nominal_for_seconds      = 60
+enabled               = true
+step_factor           = 1.5
+max_steps_above_base  = 2
+cooldown_s            = 90
+spike_min             = 0.25   # unificato (mediana dei 3 setup: 0.30/0.25/0.20)
+hfd_min_arcsec        = 4.0    # unificato (mediana dei 3 setup: 4.5/4.0/4.0)
+peak_to_rms_ratio_min = 3.0
+nominal_for_seconds   = 60
+
+[auto_calibration]
+enabled                = true
+use_phd2_pixel_scale   = true
+rms_high_factor        = 1.5
+rms_low_factor         = 0.75
+baseline_window_frames = 60
+baseline_min_snr       = 10.0
+rms_high_min_arcsec    = 0.50
+rms_high_max_arcsec    = 2.50

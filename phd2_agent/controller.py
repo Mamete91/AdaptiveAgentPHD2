@@ -28,6 +28,7 @@ import csv
 import json
 import logging
 import os
+import statistics
 import time
 from dataclasses import dataclass, field
 from datetime import date
@@ -189,6 +190,13 @@ class AdaptiveController:
         # CSV log periodi satura per post-mortem PixInsight
         self._saturation_csv_dir = Path(config.logging.csv_dir)
 
+        # Auto-calibrazione soglie RMS (baseline misurata sul campo).
+        # Stato inizializzato SOLO qui: initialize()/reinitialize() non lo azzerano,
+        # cosi' una riconnessione a pixel scale invariata non ricomincia la misura.
+        self._rms_baseline_samples: list[float] = []
+        self._rms_baseline_value: Optional[float] = None
+        self._rms_baseline_done: bool = False
+
     def _read_setup_id_from_config(self) -> str:
         """Estrae profile_name dal config se presente, altrimenti default."""
         try:
@@ -249,6 +257,12 @@ class AdaptiveController:
             self._setup_axis(self._dec, params.get("dec", {}), self.cfg.dec)
             self._initialized = True
 
+            # Auto-scala: legge la pixel scale reale da PHD2 (fallback TOML).
+            # initialize() e' invocato a init, su StartGuiding, AppState->Guiding e
+            # riconnessione: il caso null a freddo si auto-corregge quando la camera
+            # e' connessa. La baseline RMS NON viene toccata qui (solo su cambio scala).
+            self._apply_pixel_scale_from_phd2("init")
+
             # Step 2: salva baseline DOPO aver letto i parametri puliti
             self.save_baseline()
 
@@ -308,6 +322,89 @@ class AdaptiveController:
         """Ri-legge i parametri da PHD2 (es. dopo cambio profilo utente)."""
         self._initialized = False
         self.initialize()
+
+    # ------------------------------------------------------------------ #
+    #  Auto-calibrazione: pixel scale da PHD2 + soglie RMS adattive       #
+    # ------------------------------------------------------------------ #
+
+    def _apply_pixel_scale_from_phd2(self, context: str = "init") -> None:
+        """Legge la pixel scale di guida da PHD2 e la applica come override runtime.
+
+        Override impostato solo se PHD2 riporta un valore valido (>0); su `null`
+        o errore RPC si azzera l'override -> fallback ai valori TOML. La baseline
+        RMS viene invalidata SOLO se la scala cambia davvero.
+        """
+        ac = self.cfg.auto_calibration
+        if not ac.enabled or not ac.use_phd2_pixel_scale:
+            self.cfg.setup.pixel_scale_override = None
+            logger.info(
+                "[autocal/%s] auto-scala OFF -> pixel scale TOML = %.3f\"/px",
+                context, self.cfg.setup.guide_pixel_scale_arcsec,
+            )
+            return
+
+        scale = self.client.get_pixel_scale()
+        prev = self.cfg.setup.pixel_scale_override
+        if scale is not None and scale > 0.0:
+            self.cfg.setup.pixel_scale_override = scale
+            logger.info(
+                "[autocal/%s] pixel scale da PHD2 = %.3f\"/px (fonte: RPC)",
+                context, scale,
+            )
+            if prev is not None and abs(prev - scale) > 1e-3:
+                self._invalidate_rms_baseline("cambio pixel scale rilevato")
+        else:
+            self.cfg.setup.pixel_scale_override = None
+            logger.warning(
+                "[autocal/%s] PHD2 non conosce la pixel scale (null) -> "
+                "fallback TOML = %.3f\"/px",
+                context, self.cfg.setup.guide_pixel_scale_arcsec,
+            )
+
+    def _invalidate_rms_baseline(self, reason: str) -> None:
+        """Azzera la baseline RMS: verra' ricalcolata al prossimo periodo stabile.
+        Le soglie attive restano agli ultimi valori validi (o TOML) nel frattempo."""
+        self._rms_baseline_samples.clear()
+        self._rms_baseline_value = None
+        self._rms_baseline_done = False
+        logger.info(
+            "[autocal] baseline RMS invalidata (%s): ricalibrazione al prossimo "
+            "periodo stabile", reason,
+        )
+
+    def _update_rms_baseline(self, snap: AnalysisSnapshot) -> None:
+        """Campiona rms_total solo in condizione stabile (NOMINAL, SNR adeguato,
+        no implosion). A finestra piena finalizza la baseline e deriva le soglie."""
+        ac = self.cfg.auto_calibration
+        if not ac.enabled or self._rms_baseline_done:
+            return
+        if (snap.snr_avg is not None and snap.snr_avg >= ac.baseline_min_snr
+                and not snap.implosion_detected
+                and snap.condition == SeeingCondition.NOMINAL):
+            self._rms_baseline_samples.append(snap.rms_total)
+        if len(self._rms_baseline_samples) >= ac.baseline_window_frames:
+            self._finalize_rms_baseline()
+
+    def _finalize_rms_baseline(self) -> None:
+        """Deriva rms_high/rms_low dalla mediana della baseline (con clamp) e
+        aggiorna la config efficace in memoria E l'analyzer. TOML mai riscritto."""
+        ac = self.cfg.auto_calibration
+        baseline = statistics.median(self._rms_baseline_samples)
+        self._rms_baseline_value = baseline
+        new_high = max(ac.rms_high_min_arcsec,
+                       min(ac.rms_high_max_arcsec, ac.rms_high_factor * baseline))
+        new_low = ac.rms_low_factor * baseline
+        self.cfg.thresholds.rms_high = new_high      # config efficace in memoria
+        self.cfg.thresholds.rms_low = new_low
+        if self.analyzer is not None:
+            self.analyzer.rms_high = new_high
+            self.analyzer.rms_low = new_low
+        self._rms_baseline_done = True
+        logger.info(
+            "[autocal] baseline RMS = %.3f\" su %d frame -> "
+            "rms_high=%.3f\" rms_low=%.3f\"",
+            baseline, len(self._rms_baseline_samples), new_high, new_low,
+        )
 
     # ------------------------------------------------------------------ #
     #  Baseline Guardian                                                  #
@@ -514,6 +611,10 @@ class AdaptiveController:
                 return []
         elif snapshot.frame_count < 5:
             return []
+
+        # Auto-calibrazione soglie RMS: campiona la baseline PRIMA della logica
+        # adattiva (no-op se auto_calibration disabilitata o baseline gia' pronta).
+        self._update_rms_baseline(snapshot)
 
         # Eval emergenza SNR
         if self.cfg.emergency.auto_recovery:
@@ -1202,6 +1303,24 @@ class AdaptiveController:
                 "enabled": self.cfg.exposure_dynamic.enabled,
                 "ra": self._axis_levers_saturated(self._ra, self.cfg.ra),
                 "dec": self._axis_levers_saturated(self._dec, self.cfg.dec),
+            },
+            "auto_calibration": {
+                "enabled": self.cfg.auto_calibration.enabled,
+                "pixel_scale_arcsec": round(self.cfg.setup.guide_pixel_scale_arcsec, 3),
+                "pixel_scale_source": (
+                    "phd2" if self.cfg.setup.pixel_scale_override is not None else "toml"
+                ),
+                "baseline_rms_arcsec": (
+                    round(self._rms_baseline_value, 3)
+                    if self._rms_baseline_value is not None else None
+                ),
+                "baseline_done": self._rms_baseline_done,
+                "baseline_progress": (
+                    f"{len(self._rms_baseline_samples)}/"
+                    f"{self.cfg.auto_calibration.baseline_window_frames}"
+                ),
+                "rms_high_active": round(self.cfg.thresholds.rms_high, 3),
+                "rms_low_active": round(self.cfg.thresholds.rms_low, 3),
             },
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],
         }
