@@ -461,6 +461,21 @@ function updateAutoCalibration(ac) {
     ? `${ac.rms_high_active.toFixed(3)}"` : '—';
   el('autocal-rms-low').textContent = ac.rms_low_active != null
     ? `${ac.rms_low_active.toFixed(3)}"` : '—';
+
+  // §23 — cap rms_high (proporzionale alla pixel scale)
+  const capEl = el('autocal-rms-high-cap');
+  const capActiveBadge = el('autocal-cap-active-badge');
+  if (ac.rms_high_cap_arcsec != null) {
+    capEl.textContent = `${ac.rms_high_cap_arcsec.toFixed(2)}"`;
+    capActiveBadge.style.display = ac.rms_high_cap_active ? 'inline-block' : 'none';
+  } else {
+    capEl.textContent = '—';
+    capActiveBadge.style.display = 'none';
+  }
+
+  // §23 — baseline rifiutata (sessione non rappresentativa)
+  el('autocal-baseline-rejected-badge').style.display =
+    ac.baseline_rejected ? 'inline-block' : 'none';
 }
 
 // Log azioni

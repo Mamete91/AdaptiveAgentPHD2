@@ -1024,3 +1024,59 @@ La scelta del telescopio si fa selezionando il profilo in PHD2 (focale → pixel
 Sessioni LIVE su almeno 2 profili PHD2 diversi (RC8 e Askar ridotto): verificare nella card che la pixel scale cambi
 da sola con badge "PHD2", che la baseline si completi (n/60) in cielo calmo e che `rms_high`/`rms_low` derivati siano
 plausibili. Cercare nei log `[autocal]`. Tarare `rms_high_factor` (1.5) se troppi/pochi DEGRADED.
+
+## 23. Clamp proporzionale + gate rifiuto baseline (2026-05-28)
+
+### Motivazione
+La §22 ha introdotto soglie RMS adattive da baseline misurata con un clamp di sicurezza fisso 0,50"-2,50".
+Su focali lunghe (RC8 a 0,51"/px) il tetto 2,50" è troppo permissivo (5 px di mossa imaging); su scale
+molto corte è troppo lasco. Inoltre una baseline misurata in nottata anomala (vento forte) può comunque
+spostare le soglie verso valori che "promuovono" un seeing scarso a normalità. Servono: (1) clamp
+proporzionale alla scala, (2) gate di rifiuto quando la baseline è palesemente non rappresentativa.
+
+### Architettura
+`_finalize_rms_baseline` (in controller.py) ora calcola:
+- `cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)`
+- `reject_threshold = max(baseline_reject_min_arcsec, baseline_reject_factor * pixel_scale)`
+- Se `baseline > reject_threshold` → rifiuta, `_rms_baseline_rejected = True`, soglie invariate (il gate
+  gira PRIMA del cap: una baseline troppo alta viene scartata, non clampata).
+- Altrimenti: `rms_high = min(cap_efficace, rms_high_factor * baseline)`,
+  `rms_low = max(rms_low_min_arcsec, rms_low_factor * baseline)`.
+- Espone su `/status`: `baseline_rejected`, `rms_high_cap_arcsec`, `rms_high_cap_active`.
+
+### Parametri scelti (configurazione "interventista")
+`rms_high_max_factor = 2.0`, `rms_high_min_arcsec = 0.70`, `rms_high_max_arcsec = 3.00`,
+`rms_low_min_arcsec = 0.25`, `baseline_reject_factor = 3.0`, `baseline_reject_min_arcsec = 1.50`.
+
+Effetto per setup di Alessandro:
+| Setup | pixel scale | cap rms_high | soglia rifiuto baseline |
+|---|---|---|---|
+| RC8 | 0,51"/px | 1,02" | 1,53" |
+| Tecnosky 115 | 1,03"/px | 2,06" | 3,09" |
+| Askar 71F | 1,58"/px | 3,00" (ceiling) | 4,74" |
+
+### File modificati
+- `phd2_agent/config.py`: 4 nuovi campi in `AutoCalibrationConfig` (`rms_high_max_factor`, `rms_low_min_arcsec`,
+  `baseline_reject_factor`, `baseline_reject_min_arcsec`) + 2 default modificati (`rms_high_min_arcsec` 0.50→0.70,
+  `rms_high_max_arcsec` 2.50→3.00); parsing esteso.
+- `phd2_agent/controller.py`: 3 nuovi flag stato (`_rms_baseline_rejected`, `_rms_high_cap_active`,
+  `_rms_high_cap_value`) in `__init__` e resettati in `_invalidate_rms_baseline`; riscritto `_finalize_rms_baseline`;
+  esteso `get_status()`.
+- `config.toml`: sezione `[auto_calibration]` estesa con nuovi parametri commentati.
+- `dashboard/index.html`, `dashboard/app.js`, `dashboard/style.css`: card estesa con riga "Cap rms_high" + badge
+  CAP ATTIVO (ambra) + badge BASELINE RIFIUTATA (rosso).
+- `tests/test_auto_calibration.py`: rimosso il vecchio `TestBaselineClamp` (baseline 5.0 ora cade nel rifiuto),
+  aggiornato `_make_config` ai nuovi default, +8 nuovi test §23 (cap RC8/ceiling Askar/floor, rifiuto RC8/floor
+  assoluto, accettazione borderline, floor rms_low, reset flag su invalidazione). Totale suite: 36 test verdi.
+
+### Limiti dell'approccio
+1. I parametri sono tarati sull'esperienza astrofotografica su OAG: su cercatore-guida (scala disaccoppiata
+   dall'imaging) il significato fisico del cap perde rigore. Per uso solo-OAG come Alessandro è ottimale.
+2. Sul rigetto la calibrazione *non* viene riapplicata fino al prossimo `_invalidate_rms_baseline` (cambio
+   pixel scale o reset esplicito). In sessioni che migliorano dopo un inizio cattivo, il rigetto resta sticky:
+   in futuro si può valutare un meccanismo di re-tentativo periodico (non implementato in §23).
+
+### Validazione raccomandata
+1. Sessione RC8 in seeing normale (mediana attesa 0,5-0,8"): cap NON attivo, baseline accettata.
+2. Sessione RC8 in seeing marginale (mediana 1,0-1,3"): cap ATTIVO, baseline accettata, rms_high a 1,02".
+3. Sessione RC8 in seeing pessimo (mediana > 1,5"): baseline RIFIUTATA, fallback a rms_high TOML 1,20.

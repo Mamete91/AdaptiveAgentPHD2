@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-27 (auto-configurazione + config unico §22)
+## Stato attuale — aggiornato al 2026-05-28 (clamp proporzionale + gate rifiuto baseline §23)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -211,10 +211,23 @@ scale-independent. La configurazione è collassata in un solo `config.toml` + un
 (max_exposure 4000ms, snr_low 8.0, spike_min 0.25, hfd_min 4.0"); i 3 TOML per-setup e i 6 .bat sono stati eliminati.
 La scelta del telescopio avviene selezionando il profilo in PHD2. Dettaglio in NOTE_CLAUDE.md §22.
 
+### Clamp proporzionale + gate rifiuto baseline (§23) — IMPLEMENTATA (2026-05-28)
+Rifinitura della §22: il clamp di sicurezza sulle soglie RMS adattive non è più fisso (0,50"-2,50") ma
+proporzionale alla pixel scale rilevata (cap = 2.0 × pixel_scale, con pavimento 0,70" e tetto 3,00"
+come safety per scale estreme). Aggiunto un gate di rifiuto della baseline misurata quando la mediana
+supera 3.0 × pixel_scale (con pavimento 1,50"): in tal caso la calibrazione non viene applicata, l'Agente
+mantiene le soglie iniziali del TOML, la dashboard segnala "BASELINE RIFIUTATA". Aggiunto floor su rms_low
+a 0,25". Setup di riferimento per la scelta dei parametri: RC8 (cap 1,02"; rifiuto >1,53"). Dettaglio in
+NOTE_CLAUDE.md §23.
+
 ## Cosa NON è stato ancora fatto
 
 - Validazione LIVE dell'auto-configurazione: sessioni reali su almeno 2 profili PHD2 diversi (es. RC8 e Askar
   ridotto), verificando che pixel scale e soglie cambino da sole. Tarare poi rms_high_factor in base ai log.
+
+- Validazione sul campo di §23 su RC8: verificare in 2-3 sessioni con seeing variabile che il cap proporzionale
+  si attivi quando previsto e che il gate di rifiuto non si attivi nelle serate normali. Tarare eventualmente
+  rms_high_max_factor o baseline_reject_factor sui log.
 
 - Test graceful shutdown (Ctrl+C interattivo) su PHD2 reale: verificare che
   all'uscita compaiano "Shutdown controller - restore baseline..." e

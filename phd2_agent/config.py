@@ -125,8 +125,16 @@ class AutoCalibrationConfig:
     rms_low_factor: float = 0.75
     baseline_window_frames: int = 60
     baseline_min_snr: float = 10.0
-    rms_high_min_arcsec: float = 0.50    # clamp inferiore su rms_high derivato
-    rms_high_max_arcsec: float = 2.50    # clamp superiore su rms_high derivato
+    # Clamp proporzionale del cap su rms_high (§23, sostituisce il clamp fisso §22):
+    # cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)
+    rms_high_max_factor: float = 2.0     # k del cap proporzionale: cap = k * pixel_scale
+    rms_high_min_arcsec: float = 0.70    # pavimento assoluto del cap (era 0.50 in §22)
+    rms_high_max_arcsec: float = 3.00    # tetto assoluto del cap, safety scale grossolane (era 2.50 in §22)
+    # Floor su rms_low derivato:
+    rms_low_min_arcsec: float = 0.25     # pavimento assoluto su rms_low
+    # Gate di rifiuto baseline: reject se baseline > max(baseline_reject_min_arcsec, baseline_reject_factor * scale)
+    baseline_reject_factor: float = 3.0
+    baseline_reject_min_arcsec: float = 1.50
 
 
 @dataclass
@@ -264,8 +272,12 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rms_low_factor=float(a.get("rms_low_factor", 0.75)),
             baseline_window_frames=int(a.get("baseline_window_frames", 60)),
             baseline_min_snr=float(a.get("baseline_min_snr", 10.0)),
-            rms_high_min_arcsec=float(a.get("rms_high_min_arcsec", 0.50)),
-            rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 2.50)),
+            rms_high_max_factor=float(a.get("rms_high_max_factor", 2.0)),
+            rms_high_min_arcsec=float(a.get("rms_high_min_arcsec", 0.70)),
+            rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 3.00)),
+            rms_low_min_arcsec=float(a.get("rms_low_min_arcsec", 0.25)),
+            baseline_reject_factor=float(a.get("baseline_reject_factor", 3.0)),
+            baseline_reject_min_arcsec=float(a.get("baseline_reject_min_arcsec", 1.50)),
         )
 
     return cfg

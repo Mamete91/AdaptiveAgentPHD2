@@ -196,6 +196,10 @@ class AdaptiveController:
         self._rms_baseline_samples: list[float] = []
         self._rms_baseline_value: Optional[float] = None
         self._rms_baseline_done: bool = False
+        # §23: gate di rifiuto + clamp proporzionale
+        self._rms_baseline_rejected: bool = False
+        self._rms_high_cap_active: bool = False
+        self._rms_high_cap_value: Optional[float] = None
 
     def _read_setup_id_from_config(self) -> str:
         """Estrae profile_name dal config se presente, altrimenti default."""
@@ -367,6 +371,9 @@ class AdaptiveController:
         self._rms_baseline_samples.clear()
         self._rms_baseline_value = None
         self._rms_baseline_done = False
+        self._rms_baseline_rejected = False
+        self._rms_high_cap_active = False
+        self._rms_high_cap_value = None
         logger.info(
             "[autocal] baseline RMS invalidata (%s): ricalibrazione al prossimo "
             "periodo stabile", reason,
@@ -386,24 +393,66 @@ class AdaptiveController:
             self._finalize_rms_baseline()
 
     def _finalize_rms_baseline(self) -> None:
-        """Deriva rms_high/rms_low dalla mediana della baseline (con clamp) e
-        aggiorna la config efficace in memoria E l'analyzer. TOML mai riscritto."""
+        """Deriva rms_high/rms_low dalla mediana della baseline e aggiorna la config
+        efficace in memoria E l'analyzer (TOML mai riscritto). §23: cap proporzionale
+        alla pixel scale, gate di rifiuto baseline non rappresentative, floor su rms_low."""
         ac = self.cfg.auto_calibration
         baseline = statistics.median(self._rms_baseline_samples)
         self._rms_baseline_value = baseline
-        new_high = max(ac.rms_high_min_arcsec,
-                       min(ac.rms_high_max_arcsec, ac.rms_high_factor * baseline))
-        new_low = ac.rms_low_factor * baseline
-        self.cfg.thresholds.rms_high = new_high      # config efficace in memoria
+        scale = self.cfg.setup.guide_pixel_scale_arcsec   # scala efficace (PHD2 o TOML fallback)
+
+        # ----- GATE DI RIFIUTO BASELINE -----
+        reject_threshold = max(ac.baseline_reject_min_arcsec,
+                               ac.baseline_reject_factor * scale)
+        if baseline > reject_threshold:
+            # Sessione non rappresentativa: NON applicare la calibrazione.
+            # Mantieni i valori esistenti di cfg.thresholds (TOML iniziali alla prima
+            # sessione, o l'ultima calibrazione buona se gia' fatta).
+            self._rms_baseline_rejected = True
+            self._rms_high_cap_active = False
+            self._rms_high_cap_value = None
+            self._rms_baseline_done = True
+            logger.warning(
+                "[autocal] baseline RMS = %.3f\" RIFIUTATA "
+                "(soglia rifiuto = %.3f\" = max(%.2f\", %.1f x %.3f\"/px)): "
+                "sessione non rappresentativa, mantengo rms_high=%.3f\" rms_low=%.3f\"",
+                baseline, reject_threshold,
+                ac.baseline_reject_min_arcsec, ac.baseline_reject_factor, scale,
+                self.cfg.thresholds.rms_high, self.cfg.thresholds.rms_low,
+            )
+            return
+
+        # ----- CLAMP PROPORZIONALE SU rms_high -----
+        cap_proporzionale = ac.rms_high_max_factor * scale
+        cap_efficace = max(ac.rms_high_min_arcsec,
+                           min(ac.rms_high_max_arcsec, cap_proporzionale))
+
+        derived_high = ac.rms_high_factor * baseline
+        new_high = min(cap_efficace, derived_high)
+        self._rms_high_cap_active = (derived_high > cap_efficace)
+        self._rms_high_cap_value = cap_efficace
+
+        # ----- FLOOR SU rms_low -----
+        derived_low = ac.rms_low_factor * baseline
+        new_low = max(ac.rms_low_min_arcsec, derived_low)
+
+        # ----- APPLICA ALLA CONFIG EFFICACE IN MEMORIA -----
+        self.cfg.thresholds.rms_high = new_high
         self.cfg.thresholds.rms_low = new_low
         if self.analyzer is not None:
             self.analyzer.rms_high = new_high
             self.analyzer.rms_low = new_low
         self._rms_baseline_done = True
+        self._rms_baseline_rejected = False
+
         logger.info(
-            "[autocal] baseline RMS = %.3f\" su %d frame -> "
-            "rms_high=%.3f\" rms_low=%.3f\"",
-            baseline, len(self._rms_baseline_samples), new_high, new_low,
+            "[autocal] baseline RMS = %.3f\" su %d frame | "
+            "cap = %.1f x %.3f\"/px = %.3f\" (efficace dopo bounds = %.3f\") | "
+            "rms_high = %.3f\"%s | rms_low = %.3f\"%s",
+            baseline, len(self._rms_baseline_samples),
+            ac.rms_high_max_factor, scale, cap_proporzionale, cap_efficace,
+            new_high, " [CAP APPLICATO]" if self._rms_high_cap_active else "",
+            new_low, " [FLOOR APPLICATO]" if derived_low < ac.rms_low_min_arcsec else "",
         )
 
     # ------------------------------------------------------------------ #
@@ -1315,12 +1364,18 @@ class AdaptiveController:
                     if self._rms_baseline_value is not None else None
                 ),
                 "baseline_done": self._rms_baseline_done,
+                "baseline_rejected": self._rms_baseline_rejected,
                 "baseline_progress": (
                     f"{len(self._rms_baseline_samples)}/"
                     f"{self.cfg.auto_calibration.baseline_window_frames}"
                 ),
                 "rms_high_active": round(self.cfg.thresholds.rms_high, 3),
                 "rms_low_active": round(self.cfg.thresholds.rms_low, 3),
+                "rms_high_cap_arcsec": (
+                    round(self._rms_high_cap_value, 3)
+                    if self._rms_high_cap_value is not None else None
+                ),
+                "rms_high_cap_active": self._rms_high_cap_active,
             },
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],
         }

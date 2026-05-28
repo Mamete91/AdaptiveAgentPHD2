@@ -77,11 +77,22 @@ peak_to_rms_ratio_min = 3.0
 nominal_for_seconds   = 60
 
 [auto_calibration]
-enabled                = true
-use_phd2_pixel_scale   = true
-rms_high_factor        = 1.5
-rms_low_factor         = 0.75
-baseline_window_frames = 60
-baseline_min_snr       = 10.0
-rms_high_min_arcsec    = 0.50
-rms_high_max_arcsec    = 2.50
+enabled                       = true
+use_phd2_pixel_scale          = true
+rms_high_factor               = 1.5
+rms_low_factor                = 0.75
+baseline_window_frames        = 60
+baseline_min_snr              = 10.0
+# --- Clamp proporzionale del cap su rms_high (§23) ---
+# cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)
+# Esempi: RC8 (0,51"/px) -> cap 1,02"; Tecnosky (1,03"/px) -> 2,06"; Askar (1,58"/px) -> 3,00" (ceiling).
+rms_high_max_factor           = 2.0
+rms_high_min_arcsec           = 0.70
+rms_high_max_arcsec           = 3.00
+# Floor su rms_low:
+rms_low_min_arcsec            = 0.25
+# --- Gate di rifiuto baseline (§23) ---
+# reject se baseline > max(baseline_reject_min_arcsec, baseline_reject_factor * pixel_scale)
+# Esempi: RC8 reject > 1,53"; Tecnosky > 3,09"; Askar > 4,74".
+baseline_reject_factor        = 3.0
+baseline_reject_min_arcsec    = 1.50

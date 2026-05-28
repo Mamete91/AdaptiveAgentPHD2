@@ -255,7 +255,18 @@
             <span class="param-label">rms_low attivo</span>
             <span class="param-val mono" id="autocal-rms-low">—</span>
           </div>
+          <div class="param-row">
+            <span class="param-label">Cap rms_high</span>
+            <span class="param-val mono">
+              <span id="autocal-rms-high-cap">—</span>
+              <span class="gate-status-badge autocal-cap-badge" id="autocal-cap-active-badge"
+                    style="display:none" title="La baseline avrebbe spinto rms_high oltre il cap proporzionale alla pixel scale">CAP ATTIVO</span>
+            </span>
+          </div>
         </div>
+        <div class="autocal-rejected-badge" id="autocal-baseline-rejected-badge"
+             style="display:none"
+             title="Sessione non rappresentativa: mantengo le soglie iniziali del TOML">BASELINE RIFIUTATA</div>
       </div>
 
     </section>

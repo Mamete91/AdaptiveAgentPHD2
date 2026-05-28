@@ -63,10 +63,18 @@ def _make_config(ac_enabled: bool = True, window: int = 5) -> AgentConfig:
         rms_low_factor=0.75,
         baseline_window_frames=window,
         baseline_min_snr=10.0,
-        rms_high_min_arcsec=0.50,
-        rms_high_max_arcsec=2.50,
+        # clamp proporzionale / reject / floor: default §23 (max_factor=2.0,
+        # min=0.70, max=3.00, rms_low_min=0.25, reject_factor=3.0, reject_min=1.50)
     )
     return cfg
+
+
+def _finalize_with(ctrl, scale: float, baseline: float, n: int = 5) -> None:
+    """Helper §23: imposta la pixel scale efficace e una baseline deterministica
+    (mediana == baseline), poi finalizza la calibrazione."""
+    ctrl.cfg.setup.pixel_scale_override = scale
+    ctrl._rms_baseline_samples = [baseline] * n
+    ctrl._finalize_rms_baseline()
 
 
 def _make_controller(cfg: AgentConfig | None = None,
@@ -216,22 +224,6 @@ class TestBaselineIgnoresBadFrames(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 7. Clamp su rms_high derivato
-# ---------------------------------------------------------------------------
-
-class TestBaselineClamp(unittest.TestCase):
-
-    def test_high_clamped_to_max(self):
-        cfg = _make_config(window=3)
-        ctrl = _make_controller(cfg=cfg)
-        for _ in range(3):
-            ctrl._update_rms_baseline(_nominal_snap(5.0))  # baseline molto alta
-        self.assertTrue(ctrl._rms_baseline_done)
-        # 1.5 * 5.0 = 7.5 → clamp a rms_high_max_arcsec = 2.50
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 2.50)
-
-
-# ---------------------------------------------------------------------------
 # 8. Invalidazione baseline su cambio pixel scale
 # ---------------------------------------------------------------------------
 
@@ -287,6 +279,102 @@ class TestParsingRetrocompat(unittest.TestCase):
         # default sani
         self.assertTrue(cfg.auto_calibration.use_phd2_pixel_scale)
         self.assertEqual(cfg.auto_calibration.baseline_window_frames, 60)
+
+
+# ===========================================================================
+# §23 — Clamp proporzionale alla pixel scale + gate di rifiuto baseline
+# ===========================================================================
+
+class TestProportionalCap(unittest.TestCase):
+
+    def test_cap_rc8(self):
+        """RC8: scala 0.51, baseline 0.8 → derived 1.20, cap 1.02 → applicato cap, attivo."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.8)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.02, places=3)
+        self.assertTrue(ctrl._rms_high_cap_active)
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 1.02, places=3)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+        # rms_low = max(0.25, 0.75*0.8=0.6) = 0.6
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.6, places=3)
+
+    def test_cap_askar_ceiling(self):
+        """Askar: scala 1.58, baseline 1.4 → cap_prop 3.16 → ceiling 3.00; derived 2.10 sotto cap."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=1.58, baseline=1.4)
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 3.00, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 2.10, places=3)
+        self.assertFalse(ctrl._rms_high_cap_active)  # derived 2.10 < cap 3.00
+
+    def test_cap_floor_fine_scale(self):
+        """Scala finissima 0.30, baseline 0.30 → cap_prop 0.60 → floor 0.70; derived 0.45 sotto cap."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.30, baseline=0.30)
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 0.70, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.45, places=3)
+        self.assertFalse(ctrl._rms_high_cap_active)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+
+
+class TestBaselineReject(unittest.TestCase):
+
+    def test_reject_rc8(self):
+        """RC8: scala 0.51, baseline 1.6 → reject 1.53 < 1.6 → rifiutata, soglie invariate."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        prev_high = ctrl.cfg.thresholds.rms_high
+        prev_low = ctrl.cfg.thresholds.rms_low
+        _finalize_with(ctrl, scale=0.51, baseline=1.6)
+        self.assertTrue(ctrl._rms_baseline_rejected)
+        self.assertTrue(ctrl._rms_baseline_done)
+        self.assertFalse(ctrl._rms_high_cap_active)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, prev_low)
+
+    def test_reject_absolute_floor_dominates(self):
+        """Scala finissima 0.20, baseline 1.6 → reject = max(1.5, 0.6) = 1.5 < 1.6 → rifiutata."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        prev_high = ctrl.cfg.thresholds.rms_high
+        _finalize_with(ctrl, scale=0.20, baseline=1.6)
+        self.assertTrue(ctrl._rms_baseline_rejected)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
+
+    def test_accept_borderline(self):
+        """RC8: scala 0.51, baseline 1.5 → reject 1.53 > 1.5 → accettata; cap 1.02 attivo."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=1.5)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.02, places=3)
+        self.assertTrue(ctrl._rms_high_cap_active)  # derived 2.25 > cap 1.02
+
+
+class TestRmsLowFloor(unittest.TestCase):
+
+    def test_rms_low_floor(self):
+        """Scala 1.0, baseline 0.25 → derived_low 0.1875 → floor 0.25."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=1.0, baseline=0.25)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.25, places=3)
+        # rms_high = derived 1.5*0.25=0.375 (cap 2.0 non vincolante)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.375, places=3)
+
+
+class TestStateResetOnInvalidation(unittest.TestCase):
+
+    def test_invalidation_resets_new_flags(self):
+        """Dopo finalize con cap attivo, _invalidate azzera tutti i flag §23."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.8)  # cap attivo
+        self.assertTrue(ctrl._rms_high_cap_active)
+        self.assertIsNotNone(ctrl._rms_high_cap_value)
+
+        ctrl._invalidate_rms_baseline("test")
+        self.assertFalse(ctrl._rms_baseline_done)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+        self.assertFalse(ctrl._rms_high_cap_active)
+        self.assertIsNone(ctrl._rms_high_cap_value)
+        self.assertIsNone(ctrl._rms_baseline_value)
+        self.assertEqual(len(ctrl._rms_baseline_samples), 0)
 
 
 if __name__ == "__main__":
