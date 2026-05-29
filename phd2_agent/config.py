@@ -82,12 +82,13 @@ class EmergencyConfig:
 
 @dataclass
 class AxisLimits:
-    aggr_min: float = 40.0
+    # Range armonizzati RA/DEC (§24): piu' dinamica nei due estremi.
+    aggr_min: float = 35.0
     aggr_max: float = 90.0
     aggr_step_down: float = 5.0
     aggr_step_up: float = 2.0
-    minmove_min: float = 0.05
-    minmove_max: float = 0.50
+    minmove_min: float = 0.15
+    minmove_max: float = 0.85
     minmove_step: float = 0.05
 
 
@@ -129,7 +130,7 @@ class AutoCalibrationConfig:
     # cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)
     rms_high_max_factor: float = 2.0     # k del cap proporzionale: cap = k * pixel_scale
     rms_high_min_arcsec: float = 0.70    # pavimento assoluto del cap (era 0.50 in §22)
-    rms_high_max_arcsec: float = 3.00    # tetto assoluto del cap, safety scale grossolane (era 2.50 in §22)
+    rms_high_max_arcsec: float = 1.00    # tetto assoluto del cap (§24: era 3.00 in §23; benchmark "guida pulita")
     # Floor su rms_low derivato:
     rms_low_min_arcsec: float = 0.25     # pavimento assoluto su rms_low
     # Gate di rifiuto baseline: reject se baseline > max(baseline_reject_min_arcsec, baseline_reject_factor * scale)
@@ -146,7 +147,7 @@ class AgentConfig:
     thresholds: Thresholds = field(default_factory=Thresholds)
     emergency: EmergencyConfig = field(default_factory=EmergencyConfig)
     ra: AxisLimits = field(default_factory=AxisLimits)
-    dec: AxisLimits = field(default_factory=lambda: AxisLimits(aggr_max=85.0))
+    dec: AxisLimits = field(default_factory=AxisLimits)   # §24: RA/DEC armonizzati
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     phd2_log: PHD2LogConfig = field(default_factory=PHD2LogConfig)
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
@@ -274,7 +275,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             baseline_min_snr=float(a.get("baseline_min_snr", 10.0)),
             rms_high_max_factor=float(a.get("rms_high_max_factor", 2.0)),
             rms_high_min_arcsec=float(a.get("rms_high_min_arcsec", 0.70)),
-            rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 3.00)),
+            rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 1.00)),
             rms_low_min_arcsec=float(a.get("rms_low_min_arcsec", 0.25)),
             baseline_reject_factor=float(a.get("baseline_reject_factor", 3.0)),
             baseline_reject_min_arcsec=float(a.get("baseline_reject_min_arcsec", 1.50)),

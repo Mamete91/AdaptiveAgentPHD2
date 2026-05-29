@@ -1080,3 +1080,58 @@ Effetto per setup di Alessandro:
 1. Sessione RC8 in seeing normale (mediana attesa 0,5-0,8"): cap NON attivo, baseline accettata.
 2. Sessione RC8 in seeing marginale (mediana 1,0-1,3"): cap ATTIVO, baseline accettata, rms_high a 1,02".
 3. Sessione RC8 in seeing pessimo (mediana > 1,5"): baseline RIFIUTATA, fallback a rms_high TOML 1,20.
+
+## 24. Taratura fine: cap a 1.00" + ranges aggr/MinMove armonizzati (2026-05-29)
+
+### Motivazione
+La §23 aveva fissato il tetto assoluto del cap auto-calibrazione a 3.00 arcsec come safety per scale
+grossolane. L'analisi dei log reali su RC8/Tecnosky 115/Askar 71F mostra però che gli RMS tipici stanno
+ben sotto 1", quindi 3.00" come tetto è eccessivo e non offre la protezione che dovrebbe nei casi limite
+(es. cercatore-guida con focale 400mm in parallelo a imaging 1000mm, dove la pixel scale di guida 1,93"/px
+porterebbe il cap proporzionale §23 a 3.86", troncato dal ceiling a 3.00" — comunque troppo permissivo
+per stelle imaging puntiformi). Abbassare il tetto a 1,00" allinea l'Agente al benchmark fisico
+universalmente riconosciuto di "guida pulita" e copre anche il caso cercatore.
+
+Sui ranges: i precedenti `[limits.ra]` (40-80 aggr, 0.15-0.80 minmove) e `[limits.dec]` (35-75 aggr,
+0.18-0.85 minmove) erano leggermente disomogenei tra i due assi. L'armonizzazione a 35-90 / 0.15-0.85
+su entrambi dà più dinamica al controller (più reattivo in cieli ottimi, più tollerante in cieli scarsi)
+e coerenza concettuale RA/DEC.
+
+### Architettura
+Zero modifiche logiche. Solo cambio di valore di default:
+- `AutoCalibrationConfig.rms_high_max_arcsec`: 3.00 → 1.00 (default dataclass + fallback parser).
+- `AxisLimits`: default armonizzati a 35-90 (aggr) e 0.15-0.85 (minmove); rimosso l'override
+  `AgentConfig.dec = AxisLimits(aggr_max=85.0)` → ora `default_factory=AxisLimits` (RA/DEC identici).
+- `config.toml`: `[auto_calibration].rms_high_max_arcsec = 1.00`, `[limits.ra]`/`[limits.dec]` armonizzati.
+
+### Effetto sui setup
+| Setup | pixel scale | cap §23 (era) | cap §24 (ora) |
+|---|---|---|---|
+| RC8 | 0,51 | 1,02" | 1,00" |
+| Tecnosky 115 | 1,03 | 2,06" | 1,00" |
+| Askar 71F | 1,58 | 3,00" (ceiling) | 1,00" |
+| Cercatore 400mm + ASI120 (1,93) | 1,93 | 3,00" (ceiling) | 1,00" |
+
+A scala finissima (es. 0,30"/px) il cap proporzionale (0,60") viene comunque alzato dal pavimento
+`rms_high_min_arcsec = 0.70`: il tetto globale 1,00" non è vincolante perché la formula proporzionale
+già taglia più stretto.
+
+### File modificati
+- `phd2_agent/config.py`: default `rms_high_max_arcsec` 3.00 → 1.00 (+ fallback in `load_config`);
+  default `AxisLimits` ranges aggiornati; `AgentConfig.dec` armonizzato a `default_factory=AxisLimits`.
+- `config.toml`: `[auto_calibration]` aggiornato; `[limits.ra]` e `[limits.dec]` armonizzati e identici.
+- `tests/test_auto_calibration.py`: 3 test §23 aggiornati al nuovo cap (RC8 1.02→1.00; Askar ceiling
+  3.00→1.00 con cap ora attivo; borderline 1.02→1.00), +2 nuovi test §24 (cap globale 1.00 su quattro
+  scale incl. cercatore; pavimento proporzionale prevale a scala 0.30). Totale suite: 38 test verdi.
+
+### Limiti dell'approccio
+1. Il cap a 1,00" è ancora "globale assoluto", non personalizzato per la specifica ottica di ripresa.
+   Per i guide-scope users esiste ancora un margine di imprecisione (es. cercatore 200mm + imaging 3000mm
+   vorrebbe cap ancora più stretto). Soluzione futura: introdurre un campo opzionale
+   `imaging_pixel_scale_arcsec` in `[setup]` che, quando valorizzato, sostituisce la pixel scale di guida
+   nella formula del cap. Non implementato in §24.
+
+### Validazione raccomandata
+1. Sessione RC8 in seeing normale: cap NON attivo, badge non compare.
+2. Sessione RC8 in seeing scarso/vento: cap attivo, badge "CAP ATTIVO" visibile.
+3. Verifica sui log dei ranges effettivi che il controller può raggiungere (aggr 35-90, minmove 0.15-0.85).

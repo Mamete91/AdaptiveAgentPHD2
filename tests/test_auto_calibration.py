@@ -288,23 +288,23 @@ class TestParsingRetrocompat(unittest.TestCase):
 class TestProportionalCap(unittest.TestCase):
 
     def test_cap_rc8(self):
-        """RC8: scala 0.51, baseline 0.8 → derived 1.20, cap 1.02 → applicato cap, attivo."""
+        """RC8: scala 0.51, baseline 0.8 → cap_prop 1.02 → ceiling 1.00 (§24); derived 1.20 → cap attivo."""
         ctrl = _make_controller(cfg=_make_config(window=5))
         _finalize_with(ctrl, scale=0.51, baseline=0.8)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.02, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.00, places=3)
         self.assertTrue(ctrl._rms_high_cap_active)
-        self.assertAlmostEqual(ctrl._rms_high_cap_value, 1.02, places=3)
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 1.00, places=3)
         self.assertFalse(ctrl._rms_baseline_rejected)
         # rms_low = max(0.25, 0.75*0.8=0.6) = 0.6
         self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.6, places=3)
 
     def test_cap_askar_ceiling(self):
-        """Askar: scala 1.58, baseline 1.4 → cap_prop 3.16 → ceiling 3.00; derived 2.10 sotto cap."""
+        """Askar: scala 1.58, baseline 1.4 → cap_prop 3.16 → ceiling 1.00 (§24); derived 2.10 → cap attivo."""
         ctrl = _make_controller(cfg=_make_config(window=5))
         _finalize_with(ctrl, scale=1.58, baseline=1.4)
-        self.assertAlmostEqual(ctrl._rms_high_cap_value, 3.00, places=3)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 2.10, places=3)
-        self.assertFalse(ctrl._rms_high_cap_active)  # derived 2.10 < cap 3.00
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 1.00, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.00, places=3)
+        self.assertTrue(ctrl._rms_high_cap_active)  # derived 2.10 > cap 1.00
 
     def test_cap_floor_fine_scale(self):
         """Scala finissima 0.30, baseline 0.30 → cap_prop 0.60 → floor 0.70; derived 0.45 sotto cap."""
@@ -339,12 +339,12 @@ class TestBaselineReject(unittest.TestCase):
         self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
 
     def test_accept_borderline(self):
-        """RC8: scala 0.51, baseline 1.5 → reject 1.53 > 1.5 → accettata; cap 1.02 attivo."""
+        """RC8: scala 0.51, baseline 1.5 → reject 1.53 > 1.5 → accettata; cap 1.00 attivo (§24)."""
         ctrl = _make_controller(cfg=_make_config(window=5))
         _finalize_with(ctrl, scale=0.51, baseline=1.5)
         self.assertFalse(ctrl._rms_baseline_rejected)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.02, places=3)
-        self.assertTrue(ctrl._rms_high_cap_active)  # derived 2.25 > cap 1.02
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.00, places=3)
+        self.assertTrue(ctrl._rms_high_cap_active)  # derived 2.25 > cap 1.00
 
 
 class TestRmsLowFloor(unittest.TestCase):
@@ -375,6 +375,36 @@ class TestStateResetOnInvalidation(unittest.TestCase):
         self.assertIsNone(ctrl._rms_high_cap_value)
         self.assertIsNone(ctrl._rms_baseline_value)
         self.assertEqual(len(ctrl._rms_baseline_samples), 0)
+
+
+# ===========================================================================
+# §24 — Cap globale a 1.00" + (verifica) pavimento proporzionale a scala fine
+# ===========================================================================
+
+class TestGlobalCeiling(unittest.TestCase):
+
+    def test_cap_1_on_all_setups(self):
+        """Stessa baseline 0.8 su scale diverse → cap sempre 1.00" (§24).
+        Era 1.02 / 2.06 / 3.00 in §23; ora il tetto assoluto domina."""
+        for scale in (0.51, 1.03, 1.58, 1.93):  # RC8, Tecnosky, Askar, cercatore 400mm
+            ctrl = _make_controller(cfg=_make_config(window=5))
+            _finalize_with(ctrl, scale=scale, baseline=0.8)
+            self.assertFalse(ctrl._rms_baseline_rejected,
+                             f"scala {scale}: baseline 0.8 non deve essere rifiutata")
+            self.assertAlmostEqual(ctrl._rms_high_cap_value, 1.00, places=3,
+                                   msg=f"scala {scale}: cap atteso 1.00")
+            self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.00, places=3,
+                                   msg=f"scala {scale}: rms_high atteso 1.00")
+            self.assertTrue(ctrl._rms_high_cap_active,
+                            f"scala {scale}: cap deve risultare attivo (derived 1.2 > 1.00)")
+
+    def test_proportional_floor_prevails_fine_scale(self):
+        """Scala finissima 0.30: cap_prop 0.60 → pavimento 0.70; il tetto globale 1.00 NON si applica."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.30, baseline=0.30)
+        self.assertAlmostEqual(ctrl._rms_high_cap_value, 0.70, places=3)
+        self.assertLess(ctrl._rms_high_cap_value, 1.00)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.45, places=3)
 
 
 if __name__ == "__main__":

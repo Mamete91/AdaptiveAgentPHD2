@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-28 (clamp proporzionale + gate rifiuto baseline §23)
+## Stato attuale — aggiornato al 2026-05-29 (taratura fine cap 1.00" + ranges armonizzati §24)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -220,10 +220,22 @@ mantiene le soglie iniziali del TOML, la dashboard segnala "BASELINE RIFIUTATA".
 a 0,25". Setup di riferimento per la scelta dei parametri: RC8 (cap 1,02"; rifiuto >1,53"). Dettaglio in
 NOTE_CLAUDE.md §23.
 
+### Taratura fine: cap a 1.00" + ranges aggr/MinMove armonizzati (§24) — IMPLEMENTATA (2026-05-29)
+Refinement parametrico di §22/§23. Tetto assoluto del cap auto-calibrazione abbassato da 3.00 a 1.00
+arcsec dopo analisi log che mostrano RMS reali sotto il secondo d'arco su tutti i setup di sviluppo;
+la scelta allinea l'Agente al benchmark fisico di "guida pulita" e risolve il caso cercatore-guida con
+focale diversa dall'imaging (la pixel scale grossolana del cercatore non porta più a soglie troppo lasche
+per l'ottica di ripresa). Ranges aggressività e MinMove armonizzati a 35-90 e 0.15-0.85 px su entrambi gli
+assi RA e DEC, per dare al controller più dinamica nei due estremi. Zero modifiche logiche, solo parametri.
+Dettaglio in NOTE_CLAUDE.md §24.
+
 ## Cosa NON è stato ancora fatto
 
 - Validazione LIVE dell'auto-configurazione: sessioni reali su almeno 2 profili PHD2 diversi (es. RC8 e Askar
   ridotto), verificando che pixel scale e soglie cambino da sole. Tarare poi rms_high_factor in base ai log.
+
+- Validazione sul campo di §24: confermare in 2-3 sessioni reali che il cap a 1.00" non si attivi nelle
+  nottate normali su RC8 e che si attivi correttamente in caso di vento o seeing scarso.
 
 - Validazione sul campo di §23 su RC8: verificare in 2-3 sessioni con seeing variabile che il cap proporzionale
   si attivi quando previsto e che il gate di rifiuto non si attivi nelle serate normali. Tarare eventualmente
