@@ -1,6 +1,6 @@
 # 🌌 Manuale Rapido: PHD2 Adaptive Agent
 
-L'**Adaptive Agent** è il tuo copilota astrofotografico. Lavora "sotto il cofano" assieme a PHD2 e alla tua suite principale (come NINA), agendo come un utente umano molto reattivo che fissa in modo continuativo lo schermo della guida per fare micro-aggiustamenti che ti salvano la nottata.
+L'**Adaptive Agent** è il tuo copilota astrofotografico. Lavora "sotto il cofano" assieme a PHD2 e alla tua suite principale (come NINA), agendo come un utente umano molto reattivo che fissa in modo continuativo lo schermo della guida per fare micro-aggiustamenti che ti salvano la nottata. **Si configura da solo sul tuo setup**: legge dal profilo PHD2 la scala di campionamento del tuo treno ottico e tara le sue soglie sul cielo reale che sta misurando, notte per notte.
 
 ## ⚠️ Prima di iniziare (importante)
 
@@ -23,6 +23,7 @@ L'Agente è un **assistente**, non un sistema di guida completo. Non calibra e n
 
 * PHD2 stia già guidando correttamente su una stella;
 * in PHD2 sia attivo il server (menu **Strumenti → Abilita Server**, porta 4400): è il canale con cui l'Agente comunica;
+* nel profilo PHD2 in uso siano impostate correttamente **focale di guida** e **dimensione pixel della camera di guida**: da qui l'Agente ricava in automatico la scala di campionamento. Se questi dati non ci sono, l'Agente userà un valore di fallback e la dashboard te lo segnalerà;
 * l'AI Star Finder possa scaricare le immagini di guida (serve per il recupero della stella persa).
 
 E per tua tranquillità: l'Agente **non tocca mai** la calibrazione della montatura né la compensazione del backlash. Lavora solo su leve "morbide" e reversibili.
@@ -80,26 +81,35 @@ Quando PHD2 stacca il tracciamento e mostra "Stella Persa", invece di restare l�
 
 ---
 
-## 🔭 Un Agente, tre telescopi (e i riduttori di focale)
+## ⚙️ Auto-configurazione: si tara da solo sul tuo setup
 
-Lo stesso Agente lavora con tutti e tre i tuoi setup, perché sa che ognuno ha una "scala" diversa (quanti secondi d'arco vede ogni pixel di guida). Questo è importante: a focale lunga ha senso intervenire sull'esposizione per il seeing, a focale corta molto meno.
+Questa è la novità che rende l'Agente "plug and play" su qualunque telescopio o camera di guida. Non devi più dirgli a mano la pixel scale, né tarare manualmente le soglie RMS per ogni rig: lo fa lui all'avvio.
 
-Non devi configurare nulla a mano: per ogni setup esiste un file di avvio (`.bat`) già pronto. Ti basta fare doppio clic su quello giusto. In tutto sono **sei file di avvio**, una coppia per ciascun telescopio:
+**Pixel scale automatica.** All'avvio l'Agente chiede a PHD2 la scala di campionamento del profilo attivo (calcolata da focale di guida × dimensione pixel della camera, considerando il binning). Quel numero diventa la sua "regola in arcsec" per tutta la sessione. Se cambi telescopio, monti un riduttore o passi ad altro profilo PHD2, basta selezionare il profilo giusto in PHD2 prima di lanciare l'Agente: si riadatta da solo. Se PHD2 non conosce la scala (focale di guida non impostata nel profilo), l'Agente usa il valore di fallback nel file di configurazione e te lo segnala sulla dashboard con un badge esplicito.
 
-* **Askar 71F** → `Avvia_Askar71F.bat` (focale piena) / `Avvia_Askar71F_Ridotto.bat` (con riduttore 0,75x)
-* **Tecnosky 115/800** → `Avvia_Tecnosky115.bat` (focale piena) / `Avvia_Tecnosky115_Ridotto.bat` (con riduttore 0,80x)
-* **RC8** → `Avvia_RC8.bat` (focale piena) / `Avvia_RC8_Ridotto.bat` (con riduttore 0,75x)
+**Soglie RMS adattive.** Le soglie che decidono quando il cielo è "degradato" o "eccellente" non sono più costanti fisse tarate a mano per ogni setup, ma si calcolano da una **baseline misurata sul tuo cielo reale**. Nei primi minuti di guida calma l'Agente raccoglie un campione di RMS in condizione normale, ne fa la mediana, e da quella deriva le soglie. In pratica: la *tua* notte sul *tuo* rig diventa il punto di riferimento, automaticamente. Una nottata "buona" tara soglie strette, una nottata mediocre soglie più larghe, sempre coerenti col cielo che hai davvero sopra la testa.
+
+**Reti di sicurezza sulla calibrazione.** L'Agente non lascia che una serata fuori scala "promuova" valori sbagliati a normalità. Se la baseline misurata è palesemente troppo alta, la calibrazione viene **rifiutata** e l'Agente mantiene le soglie iniziali del file di configurazione (dashboard: badge **BASELINE RIFIUTATA**). Se invece la baseline è normale ma la soglia derivata supererebbe **1 arcsec** — il riferimento universale di "guida pulita" indipendente dal setup — scatta il **cap**: la soglia viene "tagliata" a 1" (dashboard: badge **CAP ATTIVO**). Entrambe le reti tengono l'Agente sempre dentro un perimetro di qualità di guida riconosciuto, sia che tu usi un OAG sia che usi un cercatore-guida.
 
 > [!TIP]
-> Monti il riduttore di focale? Avvia il `.bat` con la dicitura **"_Ridotto"**. Lo smonti? Torna a quello normale. L'Agente ricalcola da solo la scala in secondi d'arco e adatta tutte le sue soglie. **Niente più modifiche manuali al file di configurazione.**
+> Hai un setup diverso da quelli su cui l'Agente è stato sviluppato? Non serve toccare nulla. Crea il profilo in PHD2 col tuo telescopio e la tua camera di guida (con focale e pixel size corrette), lancia `Avvia.bat`, e l'Agente farà il resto. Niente file da modificare a mano, niente versioni "per setup".
 
-> [!NOTE]
-> **Vuoi usare l'Agente con un altro setup (telescopio o camera di guida diversi)?**
-> L'Agente è preconfigurato per i tre setup qui sopra. Per adattarlo a una combinazione diversa occorre aggiornare la *scala di campionamento* della camera di guida, che si calcola così:
->
-> **scala (arcsec/px) = 206,3 × (dimensione pixel in µm) ÷ (focale di guida in mm)**
->
-> Attenzione: un valore errato fa lavorare male la logica dell'esposizione **senza dare alcun avviso**. Per questo, prima di modificare la configurazione, ti consiglio di **richiedere all'autore dell'Agente la procedura guidata e i valori corretti** per il tuo setup.
+---
+
+## 🚀 Avvio rapido
+
+Tutta la configurazione vive in **un solo file** e si lancia con **un solo eseguibile**:
+
+* **`config.toml`** — l'unico file di configurazione, lo stesso per qualsiasi setup.
+* **`Avvia.bat`** — l'unico file di avvio, lo stesso per qualsiasi setup.
+
+Il workflow è in tre passi:
+
+1. Apri PHD2 e seleziona il **profilo del telescopio** che stai usando (con focale di guida e dimensione pixel camera corrette).
+2. Avvia la guida su una stella in PHD2.
+3. Doppio clic su `Avvia.bat` e apri il browser su `http://localhost:8080`.
+
+Niente più "versione ridotta" del .bat: se monti il riduttore di focale, basta che il profilo PHD2 abbia la focale ridotta inserita (puoi avere due profili distinti, uno a focale piena e uno ridotta, e scegliere quello giusto a PHD2). L'Agente legge la scala reale da PHD2 e si adatta da sé, senza che tu cambi un solo file.
 
 ---
 
@@ -109,25 +119,29 @@ La pagina web è la cabina di pilotaggio dove l'Agente ti espone in tempo reale 
 
 * **Grafici e Numeri (RMS / HFD / SNR)**: una supervisione istantanea delle oscillazioni e della nitidezza stellare (condizione del cielo: *DEGRADED*, *OSCILLATING*, *NORMAL*).
 
-* **Pannello "Stato Esposizione & Escalation Gate"** *(novità)*: ti mostra a colpo d'occhio cosa sta facendo l'Agente sull'esposizione e perché.
-  * **Badge di stato esposizione**: ti dice in che regime sei — `NOMINAL` (esposizione base), `BOOSTED_FOR_SNR` (alzata perché la stella era debole) o `BOOSTED_FOR_SEEING` (alzata per gradini a causa della turbolenza).
+* **Pannello "Auto-calibrazione"** *(novità)*: ti mostra come l'Agente si è tarato sul tuo setup.
+  * **Pixel scale rilevata** con badge **PHD2** (letta dal profilo PHD2) oppure **TOML** (fallback se PHD2 non la conosce — significa che nel profilo PHD2 manca la focale di guida).
+  * **Progresso baseline**: i frame raccolti finora (es. "42/60") finché non si completa la misura, poi il valore di mediana misurato in arcsec.
+  * **Soglie attive**: `rms_high` e `rms_low` derivate dalla baseline (le soglie con cui l'Agente sta giudicando il cielo in questo momento).
+  * Badge **CAP ATTIVO** (ambra): la soglia `rms_high` derivata avrebbe superato 1 arcsec (il riferimento universale di guida pulita), ed è stata "tagliata" al cap. L'Agente è in modalità più severa del normale: significa che il cielo è ai limiti di quello che si considera una guida ancora accettabile.
+  * Badge **BASELINE RIFIUTATA** (rosso): la sessione è troppo compromessa per ricavarne una baseline rappresentativa. L'Agente usa le soglie iniziali del file di configurazione invece di calibrare su questa nottata.
+
+* **Pannello "Stato Esposizione & Escalation Gate"**: ti mostra a colpo d'occhio cosa sta facendo l'Agente sull'esposizione e perché.
+  * **Badge di stato esposizione**: in che regime sei — `NOMINAL` (esposizione base), `BOOSTED_FOR_SNR` (alzata perché la stella era debole) o `BOOSTED_FOR_SEEING` (alzata per gradini a causa della turbolenza).
   * **Valori di esposizione**: il tempo di posa corrente in millisecondi e quanti gradini sei sopra la base.
   * **Barre di saturazione delle leve (RA e DEC)**: ti fanno vedere quanto sono "tirate" aggressività e MinMove su ciascun asse. Quando entrambe sono al limite, il *cancello di escalation* è aperto: è il segnale che l'Agente è autorizzato ad allungare l'esposizione.
-  * **Cooldown residuo**: i secondi che mancano prima che l'Agente possa fare un nuovo cambio di esposizione (serve a evitare che si agiti troppo).
+  * **Cooldown residuo**: i secondi che mancano prima che l'Agente possa fare un nuovo cambio di esposizione.
   * **Marker sul grafico RMS**: ogni cambio di esposizione lascia un triangolino sul grafico (giallo = esposizione alzata, verde = riportata giù), così puoi collegare visivamente "ho cambiato esposizione qui" con l'andamento dell'RMS prima e dopo.
 
 * **Interruttore "AI Finder (Forzato)"**:
-  * **Attivo**: ordina all'Agente di intervenire in caso d'emergenza o perdita stella, forzando la visione AI sui sensori (accettando i famosi palloni saturi se non c'è nient'altro a cui aggrapparsi).
+  * **Attivo**: ordina all'Agente di intervenire in caso d'emergenza o perdita stella, forzando la visione AI sui sensori.
   * **Spento**: l'emergenza stella si comporta come il classico PHD2 limitato.
 
 * **Interruttore "MODALITÀ TEST"**:
   > [!TIP]
-  > Se `MODALITÀ TEST` (Dry Run) è **ATTIVA**, l'Agente emulerà le sue deduzioni logiche nel "Log Decisioni Controller" dicendoti cosa farebbe, **ma senza agire fisicamente in PHD2**.
-  > Spegnila e passa in **`LIVE CONTROL`** per lasciare che l'Agente prenda attivamente il controllo del telescopio.
-  >
-  > 📌 **Nota**: tutti e tre i setup sono ormai configurati per partire **già in LIVE**, proprio perché il valore dell'esposizione dinamica si vede solo osservandone l'effetto reale sul grafico, non nei log di una simulazione.
+  > Se `MODALITÀ TEST` (Dry Run) è **ATTIVA**, l'Agente emulerà le sue deduzioni nel "Log Decisioni Controller" dicendoti cosa farebbe, **ma senza agire fisicamente in PHD2**. Spegnila e passa in **`LIVE CONTROL`** per lasciare che l'Agente prenda attivamente il controllo del telescopio. Di default il pacchetto distribuito parte già in LIVE.
 
-* **Log Decisioni Controller**: un tabellone cronologico con i messaggi. Ad esempio: *"RA Aggressività 70 → 65 | Abbasso aggressività perché Oscillazione rilevata"* oppure *"Esposizione 2000ms → 3000ms | Seeing degradato, leve sature"*. Se è vuoto, significa semplicemente che la guida sta performando in modo sano e non serve intervenire.
+* **Log Decisioni Controller**: un tabellone cronologico con i messaggi (per es. *"RA Aggressività 70 → 65 | Abbasso aggressività perché Oscillazione rilevata"* oppure *"Esposizione 2000ms → 3000ms | Seeing degradato, leve sature"*). Se è vuoto, significa semplicemente che la guida sta performando in modo sano e non serve intervenire.
 
 ---
 
@@ -142,7 +156,9 @@ In questo modo ottieni frame ultra-nitidi perché PHD2 è aiutato dall'Agente, e
 
 ## 🔒 In breve: di cosa puoi fidarti
 
+* L'Agente **si configura da solo sul tuo setup**: pixel scale letta dal profilo PHD2, soglie RMS tarate sulla baseline misurata del tuo cielo reale.
 * L'Agente **interviene per gradi**: prima le manopole leggere (aggressività, MinMove), poi l'esposizione, e solo come ultima risorsa la visione AI per recuperare la stella.
 * L'esposizione **non scende mai sotto la tua base** e ha un tetto massimo: le tue scelte di partenza sono rispettate.
+* Le **reti di sicurezza** sulla calibrazione (cap proporzionale + rigetto baseline) impediscono che una serata compromessa "promuova" soglie sbagliate a nuova normalità.
 * Se chiudi l'Agente o va in crash, un sistema di salvaguardia (*Baseline Guardian*) **ripristina i parametri originali** di PHD2, esposizione compresa.
 * L'Agente **non tocca** la compensazione del backlash né altri parametri di calibrazione delicati: lavora solo sulle leve "morbide" e reversibili.
