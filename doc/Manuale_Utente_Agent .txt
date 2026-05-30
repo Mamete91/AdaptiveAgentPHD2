@@ -91,6 +91,8 @@ Questa è la novità che rende l'Agente "plug and play" su qualunque telescopio 
 
 **Reti di sicurezza sulla calibrazione.** L'Agente non lascia che una serata fuori scala "promuova" valori sbagliati a normalità. Se la baseline misurata è palesemente troppo alta, la calibrazione viene **rifiutata** e l'Agente mantiene le soglie iniziali del file di configurazione (dashboard: badge **BASELINE RIFIUTATA**). Se invece la baseline è normale ma la soglia derivata supererebbe **1 arcsec** — il riferimento universale di "guida pulita" indipendente dal setup — scatta il **cap**: la soglia viene "tagliata" a 1" (dashboard: badge **CAP ATTIVO**). Entrambe le reti tengono l'Agente sempre dentro un perimetro di qualità di guida riconosciuto, sia che tu usi un OAG sia che usi un cercatore-guida.
 
+**Refresh ciclico della baseline.** Una sessione astrofotografica può durare ore, e il cielo può cambiare nel frattempo. Per questo l'Agente non si "congela" sulla calibrazione iniziale: ogni 30 minuti la baseline viene ri-misurata silenziosamente (mentre le soglie correnti continuano a lavorare normalmente, senza buchi di copertura). Se la nuova baseline risulta **più stretta** della precedente — segno che il cielo è migliorato — viene sostituita e le soglie si stringono di conseguenza, rendendo l'Agente più reattivo. Se invece è uguale o più larga, viene **ignorata**: l'Agente non concede mai terreno al peggioramento del cielo. È la regola "tightest-wins", e ti garantisce che le soglie si tarino sempre sulle migliori condizioni della notte.
+
 > [!TIP]
 > Hai un setup diverso da quelli su cui l'Agente è stato sviluppato? Non serve toccare nulla. Crea il profilo in PHD2 col tuo telescopio e la tua camera di guida (con focale e pixel size corrette), lancia `Avvia.bat`, e l'Agente farà il resto. Niente file da modificare a mano, niente versioni "per setup".
 
@@ -125,6 +127,8 @@ La pagina web è la cabina di pilotaggio dove l'Agente ti espone in tempo reale 
   * **Soglie attive**: `rms_high` e `rms_low` derivate dalla baseline (le soglie con cui l'Agente sta giudicando il cielo in questo momento).
   * Badge **CAP ATTIVO** (ambra): la soglia `rms_high` derivata avrebbe superato 1 arcsec (il riferimento universale di guida pulita), ed è stata "tagliata" al cap. L'Agente è in modalità più severa del normale: significa che il cielo è ai limiti di quello che si considera una guida ancora accettabile.
   * Badge **BASELINE RIFIUTATA** (rosso): la sessione è troppo compromessa per ricavarne una baseline rappresentativa. L'Agente usa le soglie iniziali del file di configurazione invece di calibrare su questa nottata.
+  * **Refresh ciclico** *(novità §25)*: mostra il countdown al prossimo refresh automatico della baseline (es. "Prossimo tra 24m 12s"), oppure "In corso: 23/60" quando la ri-misura è attiva. Durante la ri-misura le soglie precedenti continuano a essere applicate normalmente — non c'è mai un buco di copertura.
+  * Badge **Ultimo: APPLICATO** (verde) o **Ultimo: RIFIUTATO** (grigio): esito dell'ultimo ciclo di refresh. APPLICATO = il cielo è migliorato e le soglie si sono strette. RIFIUTATO = le condizioni sono rimaste uguali o sono peggiorate, l'Agente mantiene le soglie attive senza concedere reattività al peggioramento.
 
 * **Pannello "Stato Esposizione & Escalation Gate"**: ti mostra a colpo d'occhio cosa sta facendo l'Agente sull'esposizione e perché.
   * **Badge di stato esposizione**: in che regime sei — `NOMINAL` (esposizione base), `BOOSTED_FOR_SNR` (alzata perché la stella era debole) o `BOOSTED_FOR_SEEING` (alzata per gradini a causa della turbolenza).
@@ -160,5 +164,6 @@ In questo modo ottieni frame ultra-nitidi perché PHD2 è aiutato dall'Agente, e
 * L'Agente **interviene per gradi**: prima le manopole leggere (aggressività, MinMove), poi l'esposizione, e solo come ultima risorsa la visione AI per recuperare la stella.
 * L'esposizione **non scende mai sotto la tua base** e ha un tetto massimo: le tue scelte di partenza sono rispettate.
 * Le **reti di sicurezza** sulla calibrazione (cap proporzionale + rigetto baseline) impediscono che una serata compromessa "promuova" soglie sbagliate a nuova normalità.
+* Le soglie si **adattano nel tempo**: la baseline viene ri-misurata periodicamente con la regola "tightest-wins" — l'Agente si stringe se il cielo migliora, ma non concede mai terreno se peggiora.
 * Se chiudi l'Agente o va in crash, un sistema di salvaguardia (*Baseline Guardian*) **ripristina i parametri originali** di PHD2, esposizione compresa.
 * L'Agente **non tocca** la compensazione del backlash né altri parametri di calibrazione delicati: lavora solo sulle leve "morbide" e reversibili.
