@@ -1135,3 +1135,62 @@ già taglia più stretto.
 1. Sessione RC8 in seeing normale: cap NON attivo, badge non compare.
 2. Sessione RC8 in seeing scarso/vento: cap attivo, badge "CAP ATTIVO" visibile.
 3. Verifica sui log dei ranges effettivi che il controller può raggiungere (aggr 35-90, minmove 0.15-0.85).
+
+## 25. Refresh ciclico baseline (tightest-wins) + rms_high_factor 1.3 (2026-05-30)
+
+### Motivazione
+Validazione sul campo della prima sessione §22-§24 (Askar 71F, baseline 0,571" misurata con cielo già velato):
+le soglie derivate restavano "congelate" su una calibrazione di cielo mediocre per tutta la nottata. La feature
+risolve introducendo un refresh periodico (default 30 min) della baseline, con regola "tightest-wins"
+(applica solo se più stretta della corrente). L'Agente si adatta a un cielo che migliora ma non si lascia
+trascinare da uno che peggiora.
+
+Inoltre `rms_high_factor` abbassato da 1.5 a 1.3: il cuscinetto del 50% sopra la baseline produceva su RC8
+(0,51"/px) soglie DEGRADED già fuori scala per il campionamento (0,82-0,90" su baseline tipica 0,55-0,60");
+il 30% (= f=1.3) produce soglie 0,72-0,78" — protezione reale per le focali lunghe, zero effetti pratici sulle
+corte (dove l'RMS reale tipico sta comunque sotto entrambe le soglie).
+
+### Architettura
+- Nuovi campi `AutoCalibrationConfig`: `refresh_enabled`, `refresh_interval_seconds`, `refresh_only_if_tighter`.
+- Cambio default `rms_high_factor`: 1.5 → 1.3 (default dataclass + fallback parser + TOML).
+- Nuovo stato `AdaptiveController`: `_baseline_finalize_time` (timestamp monotonic dell'ultima applicazione),
+  `_baseline_refresh_in_progress`, `_last_refresh_action` ("applicato"/"rifiutato"/None), `_last_refresh_baseline`.
+  Tutti azzerati in `_invalidate_rms_baseline`.
+- Nuovo metodo `_maybe_start_refresh()` chiamato in `evaluate()` prima di `_update_rms_baseline`: se il timer
+  è scaduto e la baseline è applicata, azzera samples e `_rms_baseline_done` per riaprire la raccolta.
+  **Le soglie correnti restano attive** durante la ri-misura.
+- `_finalize_rms_baseline()` ristrutturato: cattura `prev_baseline` PRIMA di sovrascrivere. Tre branch:
+  (1) gate §23 prevale sempre; se in refresh, `_last_refresh_action="rifiutato"` e baseline corrente preservata;
+  (2) tightest-wins: se in refresh e `new >= prev`, rifiuta e mantieni soglie correnti;
+  (3) applica (primo finalize OR refresh accettato): aggiorna soglie + setta `_baseline_finalize_time = now`.
+- `get_status()` esteso con 6 nuovi campi (`refresh_enabled`, `refresh_interval_seconds`, `refresh_in_progress`,
+  `refresh_progress`, `refresh_seconds_to_next`, `last_refresh_action`, `last_refresh_baseline_arcsec`).
+- Dashboard: nuova riga "Refresh" nella card Auto-calibrazione (countdown / "in corso N/W" / "spento")
+  + badge "ULTIMO: APPLICATO" (verde) / "ULTIMO: RIFIUTATO" (neutro). Riusa palette `gate-status-badge` esistente.
+
+### File modificati
+- `phd2_agent/config.py`: 3 nuovi campi `AutoCalibrationConfig` + parsing + cambio default `rms_high_factor`.
+- `phd2_agent/controller.py`: 4 nuovi stati `__init__` + reset in `_invalidate_rms_baseline` +
+  `_maybe_start_refresh()` + `_finalize_rms_baseline()` ristrutturato + chiamata in `evaluate()` +
+  `get_status()` esteso.
+- `config.toml`: `rms_high_factor = 1.3` + 3 nuovi parametri refresh commentati.
+- `dashboard/index.html`, `dashboard/app.js`: riga "Refresh" + badge esito (CSS riusa `.gate-status-badge.ok`).
+- `tests/test_auto_calibration.py`: `_make_config` non specifica più `rms_high_factor` (usa nuovo default 1.3);
+  4 asserzioni numeriche aggiornate (HappyPath 0.75→0.65, cap_floor 0.45→0.39, rms_low_floor 0.375→0.325,
+  proportional_floor_§24 0.45→0.39); +8 nuovi test §25 (tightest-wins applica/rifiuta-peggiore/rifiuta-uguale;
+  trigger disabilitato/abilitato; refresh con gate §23; due test stato `/status`). Totale: 46 test verdi.
+
+### Limiti dell'approccio
+1. Il refresh è "puramente temporale": ogni `refresh_interval_seconds` ri-misura. Non c'è euristica di
+   "ri-misura subito se il cielo è cambiato drasticamente" (es. fine di cloud passing). Possibile evoluzione
+   futura: trigger di refresh anche su cambio condizione sostenuto.
+2. Se il timer scade durante un seeing molto degradato, il refresh raccoglierà campioni solo in frame NOMINAL
+   (filtro §22), quindi può richiedere molto tempo per completarsi o non completarsi affatto se le condizioni
+   non migliorano. Comportamento corretto, ma da tenere a mente.
+
+### Validazione raccomandata
+1. Sessione con cielo stabile (almeno 1h): verificare che il primo refresh dopo 30 min sia "rifiutato"
+   (baseline simile o leggermente più alta per fluttuazioni naturali).
+2. Sessione con cielo che migliora (es. velatura che si dirada): dovrebbe arrivare un "applicato" con
+   baseline più stretta e soglie ristrette.
+3. Sessione con cielo che peggiora: serie di "rifiutato", soglie iniziali mantenute.

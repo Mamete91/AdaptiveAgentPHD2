@@ -200,6 +200,11 @@ class AdaptiveController:
         self._rms_baseline_rejected: bool = False
         self._rms_high_cap_active: bool = False
         self._rms_high_cap_value: Optional[float] = None
+        # §25: refresh ciclico baseline (tightest-wins)
+        self._baseline_finalize_time: Optional[float] = None  # time.monotonic() dell'ultima applicazione
+        self._baseline_refresh_in_progress: bool = False
+        self._last_refresh_action: Optional[str] = None       # "applicato" / "rifiutato" / None
+        self._last_refresh_baseline: Optional[float] = None   # baseline misurata nell'ultimo refresh
 
     def _read_setup_id_from_config(self) -> str:
         """Estrae profile_name dal config se presente, altrimenti default."""
@@ -374,6 +379,11 @@ class AdaptiveController:
         self._rms_baseline_rejected = False
         self._rms_high_cap_active = False
         self._rms_high_cap_value = None
+        # §25: azzera anche lo stato del refresh ciclico
+        self._baseline_finalize_time = None
+        self._baseline_refresh_in_progress = False
+        self._last_refresh_action = None
+        self._last_refresh_baseline = None
         logger.info(
             "[autocal] baseline RMS invalidata (%s): ricalibrazione al prossimo "
             "periodo stabile", reason,
@@ -394,49 +404,81 @@ class AdaptiveController:
 
     def _finalize_rms_baseline(self) -> None:
         """Deriva rms_high/rms_low dalla mediana della baseline e aggiorna la config
-        efficace in memoria E l'analyzer (TOML mai riscritto). §23: cap proporzionale
-        alla pixel scale, gate di rifiuto baseline non rappresentative, floor su rms_low."""
+        efficace in memoria E l'analyzer (TOML mai riscritto). §23: cap proporzionale +
+        gate rifiuto + floor rms_low. §25: durante refresh ciclico applica la regola
+        tightest-wins (nuova baseline accettata solo se piu' stretta della corrente)."""
         ac = self.cfg.auto_calibration
-        baseline = statistics.median(self._rms_baseline_samples)
-        self._rms_baseline_value = baseline
+        new_baseline = statistics.median(self._rms_baseline_samples)
         scale = self.cfg.setup.guide_pixel_scale_arcsec   # scala efficace (PHD2 o TOML fallback)
+        prev_baseline = self._rms_baseline_value   # None al primo finalize, valore corrente in refresh
+        in_refresh = self._baseline_refresh_in_progress
 
-        # ----- GATE DI RIFIUTO BASELINE -----
+        # ----- GATE DI RIFIUTO BASELINE (§23) -----
         reject_threshold = max(ac.baseline_reject_min_arcsec,
                                ac.baseline_reject_factor * scale)
-        if baseline > reject_threshold:
-            # Sessione non rappresentativa: NON applicare la calibrazione.
-            # Mantieni i valori esistenti di cfg.thresholds (TOML iniziali alla prima
-            # sessione, o l'ultima calibrazione buona se gia' fatta).
+        if new_baseline > reject_threshold:
             self._rms_baseline_rejected = True
             self._rms_high_cap_active = False
             self._rms_high_cap_value = None
             self._rms_baseline_done = True
-            logger.warning(
-                "[autocal] baseline RMS = %.3f\" RIFIUTATA "
-                "(soglia rifiuto = %.3f\" = max(%.2f\", %.1f x %.3f\"/px)): "
-                "sessione non rappresentativa, mantengo rms_high=%.3f\" rms_low=%.3f\"",
-                baseline, reject_threshold,
-                ac.baseline_reject_min_arcsec, ac.baseline_reject_factor, scale,
-                self.cfg.thresholds.rms_high, self.cfg.thresholds.rms_low,
+            if in_refresh:
+                # Durante refresh: soglie correnti mantenute, baseline corrente preservata,
+                # esito del refresh = rifiutato; il timer riparte da ora.
+                self._last_refresh_action = "rifiutato"
+                self._last_refresh_baseline = new_baseline
+                self._baseline_refresh_in_progress = False
+                self._baseline_finalize_time = time.monotonic()
+                logger.warning(
+                    "[autocal] refresh: baseline %.3f\" RIFIUTATA dal gate (> %.3f\"); "
+                    "soglie correnti mantenute (corrente = %.3f\")",
+                    new_baseline, reject_threshold, prev_baseline if prev_baseline is not None else 0.0,
+                )
+            else:
+                # Primo finalize rifiutato: aggiorniamo _rms_baseline_value per il display.
+                self._rms_baseline_value = new_baseline
+                logger.warning(
+                    "[autocal] baseline RMS = %.3f\" RIFIUTATA "
+                    "(soglia rifiuto = %.3f\" = max(%.2f\", %.1f x %.3f\"/px)): "
+                    "sessione non rappresentativa, mantengo rms_high=%.3f\" rms_low=%.3f\"",
+                    new_baseline, reject_threshold,
+                    ac.baseline_reject_min_arcsec, ac.baseline_reject_factor, scale,
+                    self.cfg.thresholds.rms_high, self.cfg.thresholds.rms_low,
+                )
+            return
+
+        # ----- REGOLA TIGHTEST-WINS (§25, solo durante refresh) -----
+        if (in_refresh and ac.refresh_only_if_tighter
+                and prev_baseline is not None and new_baseline >= prev_baseline):
+            # Nuova baseline non piu' stretta -> rifiuto; soglie e baseline correnti restano.
+            self._last_refresh_action = "rifiutato"
+            self._last_refresh_baseline = new_baseline
+            self._baseline_refresh_in_progress = False
+            self._rms_baseline_samples.clear()
+            self._rms_baseline_done = True
+            self._baseline_finalize_time = time.monotonic()   # timer riparte da ora
+            logger.info(
+                "[autocal] refresh: nuova baseline %.3f\" >= corrente %.3f\" "
+                "(tightest-wins) -> soglie correnti mantenute",
+                new_baseline, prev_baseline,
             )
             return
 
-        # ----- CLAMP PROPORZIONALE SU rms_high -----
+        # ----- APPLICAZIONE (primo finalize OR refresh accettato) -----
+        self._rms_baseline_value = new_baseline
+
+        # Clamp proporzionale (§23):
         cap_proporzionale = ac.rms_high_max_factor * scale
         cap_efficace = max(ac.rms_high_min_arcsec,
                            min(ac.rms_high_max_arcsec, cap_proporzionale))
-
-        derived_high = ac.rms_high_factor * baseline
+        derived_high = ac.rms_high_factor * new_baseline
         new_high = min(cap_efficace, derived_high)
         self._rms_high_cap_active = (derived_high > cap_efficace)
         self._rms_high_cap_value = cap_efficace
 
-        # ----- FLOOR SU rms_low -----
-        derived_low = ac.rms_low_factor * baseline
+        # Floor rms_low (§23):
+        derived_low = ac.rms_low_factor * new_baseline
         new_low = max(ac.rms_low_min_arcsec, derived_low)
 
-        # ----- APPLICA ALLA CONFIG EFFICACE IN MEMORIA -----
         self.cfg.thresholds.rms_high = new_high
         self.cfg.thresholds.rms_low = new_low
         if self.analyzer is not None:
@@ -444,15 +486,51 @@ class AdaptiveController:
             self.analyzer.rms_low = new_low
         self._rms_baseline_done = True
         self._rms_baseline_rejected = False
+        self._baseline_finalize_time = time.monotonic()   # §25: timer del prossimo refresh
 
+        if in_refresh:
+            self._last_refresh_action = "applicato"
+            self._last_refresh_baseline = new_baseline
+            self._baseline_refresh_in_progress = False
+            logger.info(
+                "[autocal] refresh: nuova baseline %.3f\" < corrente %.3f\" -> APPLICATA. "
+                "rms_high=%.3f\"%s rms_low=%.3f\"",
+                new_baseline, prev_baseline,
+                new_high, " [CAP]" if self._rms_high_cap_active else "", new_low,
+            )
+        else:
+            logger.info(
+                "[autocal] baseline RMS = %.3f\" su %d frame | "
+                "cap = %.1f x %.3f\"/px = %.3f\" (efficace dopo bounds = %.3f\") | "
+                "rms_high = %.3f\"%s | rms_low = %.3f\"%s",
+                new_baseline, len(self._rms_baseline_samples),
+                ac.rms_high_max_factor, scale, cap_proporzionale, cap_efficace,
+                new_high, " [CAP APPLICATO]" if self._rms_high_cap_active else "",
+                new_low, " [FLOOR APPLICATO]" if derived_low < ac.rms_low_min_arcsec else "",
+            )
+
+    def _maybe_start_refresh(self) -> None:
+        """§25: se il refresh ciclico e' abilitato, la baseline e' applicata e il timer
+        e' scaduto, riapre la raccolta. Le soglie correnti restano attive durante la
+        ri-misura: solo al termine si decide se applicare o rifiutare (tightest-wins)."""
+        ac = self.cfg.auto_calibration
+        if (not ac.enabled or not ac.refresh_enabled
+                or self._baseline_refresh_in_progress
+                or not self._rms_baseline_done
+                or self._baseline_finalize_time is None):
+            return
+        elapsed = time.monotonic() - self._baseline_finalize_time
+        if elapsed < ac.refresh_interval_seconds:
+            return
+        # Avvia il refresh: NON tocchiamo cfg.thresholds ne' analyzer (restano correnti).
+        # Azzeriamo i campioni e _rms_baseline_done per riaprire la raccolta (§22 logic).
+        self._rms_baseline_samples.clear()
+        self._rms_baseline_done = False
+        self._baseline_refresh_in_progress = True
         logger.info(
-            "[autocal] baseline RMS = %.3f\" su %d frame | "
-            "cap = %.1f x %.3f\"/px = %.3f\" (efficace dopo bounds = %.3f\") | "
-            "rms_high = %.3f\"%s | rms_low = %.3f\"%s",
-            baseline, len(self._rms_baseline_samples),
-            ac.rms_high_max_factor, scale, cap_proporzionale, cap_efficace,
-            new_high, " [CAP APPLICATO]" if self._rms_high_cap_active else "",
-            new_low, " [FLOOR APPLICATO]" if derived_low < ac.rms_low_min_arcsec else "",
+            "[autocal] refresh ciclico avviato (intervallo %.0fs scaduto, "
+            "soglie correnti restano attive durante la ri-misura)",
+            ac.refresh_interval_seconds,
         )
 
     # ------------------------------------------------------------------ #
@@ -663,6 +741,8 @@ class AdaptiveController:
 
         # Auto-calibrazione soglie RMS: campiona la baseline PRIMA della logica
         # adattiva (no-op se auto_calibration disabilitata o baseline gia' pronta).
+        # §25: prima del campionamento valuta se avviare un refresh ciclico.
+        self._maybe_start_refresh()
         self._update_rms_baseline(snapshot)
 
         # Eval emergenza SNR
@@ -1376,6 +1456,27 @@ class AdaptiveController:
                     if self._rms_high_cap_value is not None else None
                 ),
                 "rms_high_cap_active": self._rms_high_cap_active,
+                # §25 — refresh ciclico baseline (tightest-wins)
+                "refresh_enabled": self.cfg.auto_calibration.refresh_enabled,
+                "refresh_interval_seconds": self.cfg.auto_calibration.refresh_interval_seconds,
+                "refresh_in_progress": self._baseline_refresh_in_progress,
+                "refresh_progress": (
+                    f"{len(self._rms_baseline_samples)}/"
+                    f"{self.cfg.auto_calibration.baseline_window_frames}"
+                    if self._baseline_refresh_in_progress else None
+                ),
+                "refresh_seconds_to_next": (
+                    round(max(0.0, self.cfg.auto_calibration.refresh_interval_seconds
+                              - (time.monotonic() - self._baseline_finalize_time)), 1)
+                    if (self._baseline_finalize_time is not None
+                        and not self._baseline_refresh_in_progress
+                        and self.cfg.auto_calibration.refresh_enabled) else None
+                ),
+                "last_refresh_action": self._last_refresh_action,
+                "last_refresh_baseline_arcsec": (
+                    round(self._last_refresh_baseline, 3)
+                    if self._last_refresh_baseline is not None else None
+                ),
             },
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],
         }

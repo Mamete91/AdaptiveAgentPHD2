@@ -59,12 +59,11 @@ def _make_config(ac_enabled: bool = True, window: int = 5) -> AgentConfig:
     cfg.auto_calibration = AutoCalibrationConfig(
         enabled=ac_enabled,
         use_phd2_pixel_scale=True,
-        rms_high_factor=1.5,
+        # rms_high_factor: default §25 (1.3) - non specificato di proposito
         rms_low_factor=0.75,
         baseline_window_frames=window,
         baseline_min_snr=10.0,
-        # clamp proporzionale / reject / floor: default §23 (max_factor=2.0,
-        # min=0.70, max=3.00, rms_low_min=0.25, reject_factor=3.0, reject_min=1.50)
+        # clamp proporzionale / reject / floor / refresh: default
     )
     return cfg
 
@@ -188,10 +187,10 @@ class TestBaselineHappyPath(unittest.TestCase):
             ctrl._update_rms_baseline(_nominal_snap(v))
         self.assertTrue(ctrl._rms_baseline_done)
         self.assertAlmostEqual(ctrl._rms_baseline_value, 0.50)
-        # rms_high = clamp(1.5 * 0.50 = 0.75) → 0.75 ; rms_low = 0.75 * 0.50 = 0.375
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.75)
+        # §25 (f=1.3): rms_high = 1.3 * 0.50 = 0.65 ; rms_low = 0.75 * 0.50 = 0.375
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.65)
         self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.375)
-        self.assertAlmostEqual(ctrl.analyzer.rms_high, 0.75)
+        self.assertAlmostEqual(ctrl.analyzer.rms_high, 0.65)
         self.assertAlmostEqual(ctrl.analyzer.rms_low, 0.375)
 
 
@@ -307,11 +306,11 @@ class TestProportionalCap(unittest.TestCase):
         self.assertTrue(ctrl._rms_high_cap_active)  # derived 2.10 > cap 1.00
 
     def test_cap_floor_fine_scale(self):
-        """Scala finissima 0.30, baseline 0.30 → cap_prop 0.60 → floor 0.70; derived 0.45 sotto cap."""
+        """Scala finissima 0.30, baseline 0.30 → cap_prop 0.60 → floor 0.70; derived 1.3*0.30=0.39 sotto cap."""
         ctrl = _make_controller(cfg=_make_config(window=5))
         _finalize_with(ctrl, scale=0.30, baseline=0.30)
         self.assertAlmostEqual(ctrl._rms_high_cap_value, 0.70, places=3)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.45, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.39, places=3)  # §25: 1.3*0.30
         self.assertFalse(ctrl._rms_high_cap_active)
         self.assertFalse(ctrl._rms_baseline_rejected)
 
@@ -355,8 +354,8 @@ class TestRmsLowFloor(unittest.TestCase):
         _finalize_with(ctrl, scale=1.0, baseline=0.25)
         self.assertFalse(ctrl._rms_baseline_rejected)
         self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, 0.25, places=3)
-        # rms_high = derived 1.5*0.25=0.375 (cap 2.0 non vincolante)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.375, places=3)
+        # §25 (f=1.3): rms_high = 1.3*0.25 = 0.325 (cap 1.0 non vincolante)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.325, places=3)
 
 
 class TestStateResetOnInvalidation(unittest.TestCase):
@@ -404,7 +403,154 @@ class TestGlobalCeiling(unittest.TestCase):
         _finalize_with(ctrl, scale=0.30, baseline=0.30)
         self.assertAlmostEqual(ctrl._rms_high_cap_value, 0.70, places=3)
         self.assertLess(ctrl._rms_high_cap_value, 1.00)
-        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.45, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.39, places=3)  # §25: 1.3*0.30
+
+
+# ===========================================================================
+# §25 — Refresh ciclico baseline (tightest-wins) + rms_high_factor 1.3
+# ===========================================================================
+
+import time
+
+
+def _start_refresh(ctrl, new_baseline: float, n: int = 5) -> None:
+    """Simula l'inizio di un ciclo di refresh con N campioni della nuova baseline,
+    senza dipendere dal timer reale: imposta il flag in_progress e popola samples,
+    poi chiama _finalize_rms_baseline come farebbe _update_rms_baseline a finestra piena."""
+    ctrl._baseline_refresh_in_progress = True
+    ctrl._rms_baseline_done = False
+    ctrl._rms_baseline_samples = [new_baseline] * n
+    ctrl._finalize_rms_baseline()
+
+
+class TestRefreshTightestWins(unittest.TestCase):
+
+    def test_apply_when_tighter(self):
+        """Baseline corrente 0.6 → nuova 0.4: applicata, soglie ristrette."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.6)        # corrente
+        prev_high = ctrl.cfg.thresholds.rms_high
+
+        _start_refresh(ctrl, new_baseline=0.4)
+        self.assertEqual(ctrl._last_refresh_action, "applicato")
+        self.assertAlmostEqual(ctrl._last_refresh_baseline, 0.4)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.4)
+        self.assertFalse(ctrl._baseline_refresh_in_progress)
+        # Nuova rms_high = 1.3 * 0.4 = 0.52 (sotto cap 1.00) → strettamente minore della precedente
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.52, places=3)
+        self.assertLess(ctrl.cfg.thresholds.rms_high, prev_high)
+
+    def test_reject_when_worse(self):
+        """Baseline corrente 0.5 → nuova 0.8 (peggiore): rifiutata, soglie e baseline correnti preservate."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+        prev_high = ctrl.cfg.thresholds.rms_high
+        prev_low = ctrl.cfg.thresholds.rms_low
+        prev_baseline = ctrl._rms_baseline_value
+
+        _start_refresh(ctrl, new_baseline=0.8)
+        self.assertEqual(ctrl._last_refresh_action, "rifiutato")
+        self.assertAlmostEqual(ctrl._last_refresh_baseline, 0.8)
+        self.assertFalse(ctrl._baseline_refresh_in_progress)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, prev_baseline)   # baseline corrente preservata
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_low, prev_low)
+        # Il timer riparte: _baseline_finalize_time aggiornato a "adesso"
+        self.assertIsNotNone(ctrl._baseline_finalize_time)
+
+    def test_reject_when_equal(self):
+        """Baseline uguale (new == current): regola new >= current → rifiutata."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+        prev_high = ctrl.cfg.thresholds.rms_high
+
+        _start_refresh(ctrl, new_baseline=0.5)
+        self.assertEqual(ctrl._last_refresh_action, "rifiutato")
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
+
+
+class TestRefreshTrigger(unittest.TestCase):
+
+    def test_disabled_does_not_start(self):
+        """Con refresh_enabled=False, _maybe_start_refresh è no-op anche con timer scaduto."""
+        cfg = _make_config(window=5)
+        cfg.auto_calibration.refresh_enabled = False
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+        # Forza il timer scaduto
+        ctrl._baseline_finalize_time = time.monotonic() - 1e6
+        ctrl._maybe_start_refresh()
+        self.assertFalse(ctrl._baseline_refresh_in_progress)
+        self.assertTrue(ctrl._rms_baseline_done)   # la baseline corrente resta "done"
+
+    def test_enabled_starts_on_elapsed_timer(self):
+        """Con refresh_enabled=True e timer scaduto, _maybe_start_refresh riapre la raccolta."""
+        cfg = _make_config(window=5)
+        cfg.auto_calibration.refresh_interval_seconds = 1.0
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+        ctrl._baseline_finalize_time = time.monotonic() - 5.0   # 5s fa, oltre soglia 1s
+        ctrl._maybe_start_refresh()
+        self.assertTrue(ctrl._baseline_refresh_in_progress)
+        self.assertFalse(ctrl._rms_baseline_done)
+        self.assertEqual(len(ctrl._rms_baseline_samples), 0)
+
+
+class TestRefreshAndRejectGate(unittest.TestCase):
+
+    def test_refresh_with_reject_gate(self):
+        """Durante refresh, baseline che supera il gate §23 → refresh esito 'rifiutato'.
+        Soglie correnti e baseline corrente preservate (NON aggiornate dal rigetto)."""
+        ctrl = _make_controller(cfg=_make_config(window=5))
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+        prev_high = ctrl.cfg.thresholds.rms_high
+        prev_baseline = ctrl._rms_baseline_value
+
+        # 1.6" a scala 0.51 → reject = max(1.5, 1.53) = 1.53 < 1.6 → gate scatta
+        _start_refresh(ctrl, new_baseline=1.6)
+        self.assertEqual(ctrl._last_refresh_action, "rifiutato")
+        self.assertAlmostEqual(ctrl._last_refresh_baseline, 1.6)
+        self.assertTrue(ctrl._rms_baseline_rejected)
+        self.assertFalse(ctrl._baseline_refresh_in_progress)
+        # Soglie e baseline corrente PRESERVATE
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, prev_high)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, prev_baseline)
+
+
+class TestRefreshStatus(unittest.TestCase):
+
+    def test_status_fields_after_finalize(self):
+        """Dopo il primo finalize, /status espone refresh_seconds_to_next e nessun refresh in corso."""
+        cfg = _make_config(window=5)
+        cfg.auto_calibration.refresh_interval_seconds = 1800.0
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.5)
+
+        ac = ctrl.get_status()["auto_calibration"]
+        self.assertTrue(ac["refresh_enabled"])
+        self.assertEqual(ac["refresh_interval_seconds"], 1800.0)
+        self.assertFalse(ac["refresh_in_progress"])
+        self.assertIsNone(ac["refresh_progress"])
+        self.assertIsNotNone(ac["refresh_seconds_to_next"])
+        # Subito dopo finalize, secondi rimanenti ~ intervallo (entro tolleranza)
+        self.assertGreater(ac["refresh_seconds_to_next"], 1700.0)
+        self.assertLessEqual(ac["refresh_seconds_to_next"], 1800.0)
+
+    def test_status_fields_during_refresh(self):
+        """Durante refresh, refresh_in_progress True e refresh_progress popolato."""
+        cfg = _make_config(window=10)
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.5, n=10)
+        # Forza l'inizio di un refresh manualmente
+        ctrl._baseline_finalize_time = time.monotonic() - 1e6
+        ctrl._maybe_start_refresh()
+        # Aggiungi 3 campioni (su finestra 10) per simulare raccolta in corso
+        ctrl._rms_baseline_samples = [0.4, 0.45, 0.5]
+
+        ac = ctrl.get_status()["auto_calibration"]
+        self.assertTrue(ac["refresh_in_progress"])
+        self.assertEqual(ac["refresh_progress"], "3/10")
+        self.assertIsNone(ac["refresh_seconds_to_next"])   # None mentre in corso
 
 
 if __name__ == "__main__":

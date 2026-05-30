@@ -122,7 +122,7 @@ class AutoCalibrationConfig:
     """Auto-configurazione: pixel scale da PHD2 + soglie RMS da baseline misurata."""
     enabled: bool = False
     use_phd2_pixel_scale: bool = True
-    rms_high_factor: float = 1.5
+    rms_high_factor: float = 1.3   # cuscinetto sopra baseline (§25: 1.5 -> 1.3 protegge focali lunghe)
     rms_low_factor: float = 0.75
     baseline_window_frames: int = 60
     baseline_min_snr: float = 10.0
@@ -136,6 +136,11 @@ class AutoCalibrationConfig:
     # Gate di rifiuto baseline: reject se baseline > max(baseline_reject_min_arcsec, baseline_reject_factor * scale)
     baseline_reject_factor: float = 3.0
     baseline_reject_min_arcsec: float = 1.50
+    # §25 — Refresh ciclico baseline (regola tightest-wins): l'Agente non concede
+    # mai reattività al cielo che peggiora, ma si adatta quando migliora.
+    refresh_enabled: bool = True
+    refresh_interval_seconds: float = 1800.0     # 30 minuti
+    refresh_only_if_tighter: bool = True
 
 
 @dataclass
@@ -269,7 +274,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         cfg.auto_calibration = AutoCalibrationConfig(
             enabled=bool(a.get("enabled", False)),
             use_phd2_pixel_scale=bool(a.get("use_phd2_pixel_scale", True)),
-            rms_high_factor=float(a.get("rms_high_factor", 1.5)),
+            rms_high_factor=float(a.get("rms_high_factor", 1.3)),
             rms_low_factor=float(a.get("rms_low_factor", 0.75)),
             baseline_window_frames=int(a.get("baseline_window_frames", 60)),
             baseline_min_snr=float(a.get("baseline_min_snr", 10.0)),
@@ -279,6 +284,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rms_low_min_arcsec=float(a.get("rms_low_min_arcsec", 0.25)),
             baseline_reject_factor=float(a.get("baseline_reject_factor", 3.0)),
             baseline_reject_min_arcsec=float(a.get("baseline_reject_min_arcsec", 1.50)),
+            refresh_enabled=bool(a.get("refresh_enabled", True)),
+            refresh_interval_seconds=float(a.get("refresh_interval_seconds", 1800.0)),
+            refresh_only_if_tighter=bool(a.get("refresh_only_if_tighter", True)),
         )
 
     return cfg

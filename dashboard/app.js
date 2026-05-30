@@ -476,6 +476,34 @@ function updateAutoCalibration(ac) {
   // §23 — baseline rifiutata (sessione non rappresentativa)
   el('autocal-baseline-rejected-badge').style.display =
     ac.baseline_rejected ? 'inline-block' : 'none';
+
+  // §25 — refresh ciclico baseline (tightest-wins)
+  const refreshEl = el('autocal-refresh-status');
+  if (ac.refresh_enabled === false) {
+    refreshEl.textContent = 'spento';
+  } else if (ac.refresh_in_progress) {
+    refreshEl.textContent = 'in corso: ' + (ac.refresh_progress || '0/0');
+  } else if (ac.refresh_seconds_to_next != null) {
+    const total = Math.max(0, Math.floor(ac.refresh_seconds_to_next));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    refreshEl.textContent = `prossimo tra ${m}m ${s.toString().padStart(2, '0')}s`;
+  } else {
+    refreshEl.textContent = '—';
+  }
+
+  const lastBadge = el('autocal-last-refresh-badge');
+  if (ac.last_refresh_action === 'applicato') {
+    lastBadge.textContent = 'ULTIMO: APPLICATO';
+    lastBadge.className = 'gate-status-badge ok';
+    lastBadge.style.display = 'inline-block';
+  } else if (ac.last_refresh_action === 'rifiutato') {
+    lastBadge.textContent = 'ULTIMO: RIFIUTATO';
+    lastBadge.className = 'gate-status-badge';   // neutro grigio (palette di default)
+    lastBadge.style.display = 'inline-block';
+  } else {
+    lastBadge.style.display = 'none';
+  }
 }
 
 // Log azioni

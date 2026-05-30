@@ -80,7 +80,9 @@ nominal_for_seconds   = 60
 [auto_calibration]
 enabled                       = true
 use_phd2_pixel_scale          = true
-rms_high_factor               = 1.5
+# Taratura §25: cuscinetto sopra baseline ridotto dal 50% al 30% per protezione
+# focali lunghe (es. RC8 a 0,51"/px, dove 1,5 x baseline tipica = soglie gia' fuori scala).
+rms_high_factor               = 1.3        # era 1.5 (§24)
 rms_low_factor                = 0.75
 baseline_window_frames        = 60
 baseline_min_snr              = 10.0
@@ -100,3 +102,10 @@ rms_low_min_arcsec            = 0.25
 # Esempi: RC8 reject > 1,53"; Tecnosky > 3,09"; Askar > 4,74".
 baseline_reject_factor        = 3.0
 baseline_reject_min_arcsec    = 1.50
+# --- Refresh ciclico baseline (§25) ---
+# La baseline si ri-misura ogni refresh_interval_seconds; la nuova sostituisce
+# la corrente SOLO se piu' stretta ("tightest-wins"). L'Agente non concede mai
+# terreno al peggioramento del cielo, ma si adatta quando il cielo migliora.
+refresh_enabled               = true
+refresh_interval_seconds      = 1800.0     # 30 minuti
+refresh_only_if_tighter       = true

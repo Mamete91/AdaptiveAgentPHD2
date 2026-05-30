@@ -33,7 +33,7 @@ Un agente Python che si connette a **PHD2** via TCP/IP (JSON-RPC 2.0) per monito
 | **Dithering aware** | Sospende valutazioni durante SettleBegin/SettleDone, reset statistiche al SettleDone |
 | **find_star backoff** | Anti-loop sterile su crash camera: 3 tier (normale/slow/sospeso) con max 10 tentativi |
 | **RMS implosion detector** | Rileva RMS che esplode 8x rispetto al riferimento EMA, sospende decisioni per 60s |
-| **Soglie RMS adattive** | Clamp proporzionale alla pixel scale e rigetto delle baseline non rappresentative (§23) |
+| **Soglie RMS adattive** | Clamp proporzionale alla pixel scale, rigetto baseline non rappresentative (§23) e refresh ciclico tightest-wins (§25) |
 
 ---
 

@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-29 (taratura fine cap 1.00" + ranges armonizzati §24)
+## Stato attuale — aggiornato al 2026-05-30 (refresh ciclico baseline tightest-wins + rms_high_factor 1.3 §25)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -220,6 +220,16 @@ mantiene le soglie iniziali del TOML, la dashboard segnala "BASELINE RIFIUTATA".
 a 0,25". Setup di riferimento per la scelta dei parametri: RC8 (cap 1,02"; rifiuto >1,53"). Dettaglio in
 NOTE_CLAUDE.md §23.
 
+### Refresh ciclico baseline (tightest-wins) + rms_high_factor 1.3 (§25) — IMPLEMENTATA (2026-05-30)
+Refinement architetturale di §22 dopo osservazioni sul campo della prima sessione reale (Askar 71F): la baseline
+misurata all'inizio della sessione si "congelava" anche se le condizioni meteo cambiavano (caso osservato: baseline
+0,571" con cielo già velato → soglie troppo larghe per il resto della notte). La §25 introduce un refresh periodico
+(default ogni 30 min) della baseline: la nuova mediana sostituisce la corrente SOLO se più stretta ("tightest-wins").
+L'Agente non concede mai reattività al peggioramento del cielo, ma si adatta automaticamente quando il cielo migliora.
+Durante il refresh le soglie correnti restano attive (non si va mai "senza soglie"). Inoltre `rms_high_factor`
+abbassato da 1.5 a 1.3 dopo verifica numerica: protegge meglio le focali lunghe (su RC8 0,51"/px riduce le soglie
+DEGRADED da 0,82-0,90" a 0,72-0,78") senza danneggiare le corte. Dettaglio in NOTE_CLAUDE.md §25.
+
 ### Taratura fine: cap a 1.00" + ranges aggr/MinMove armonizzati (§24) — IMPLEMENTATA (2026-05-29)
 Refinement parametrico di §22/§23. Tetto assoluto del cap auto-calibrazione abbassato da 3.00 a 1.00
 arcsec dopo analisi log che mostrano RMS reali sotto il secondo d'arco su tutti i setup di sviluppo;
@@ -236,6 +246,9 @@ Dettaglio in NOTE_CLAUDE.md §24.
 
 - Validazione sul campo di §24: confermare in 2-3 sessioni reali che il cap a 1.00" non si attivi nelle
   nottate normali su RC8 e che si attivi correttamente in caso di vento o seeing scarso.
+
+- Validazione sul campo di §25 in 2-3 sessioni reali, idealmente almeno una con cielo che migliora durante
+  la nottata: verificare che il refresh applicato sia visibile sulla dashboard e che le soglie si stringano.
 
 - Validazione sul campo di §23 su RC8: verificare in 2-3 sessioni con seeing variabile che il cap proporzionale
   si attivi quando previsto e che il gate di rifiuto non si attivi nelle serate normali. Tarare eventualmente
