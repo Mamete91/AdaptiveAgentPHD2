@@ -25,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+from phd2_agent.__about__ import banner_lines
 from phd2_agent.client import PHD2Client, PHD2ConnectionError
 from phd2_agent.analyzer import StatisticsAnalyzer, SeeingCondition
 from phd2_agent.controller import AdaptiveController
@@ -86,12 +87,12 @@ def main():
         cfg.setup.reducer_active = False
         log.info("CLI override: --no-reducer → reducer_active=False")
 
+    # Banner branded (§26): prime righe del log, identità single source of truth.
+    for _line in banner_lines():
+        log.info(_line)
     mode_str = "DRY_RUN" if cfg.control.dry_run else "LIVE CONTROL"
-    log.info("=" * 60)
-    log.info("PHD2 Adaptive Guiding Agent v1.1.0 (patched)")
-    log.info("   Modalita: %s", mode_str)
-    log.info("   PHD2 target: %s:%d", cfg.phd2.host, cfg.phd2.port)
-    log.info("=" * 60)
+    log.info("Modalita: %s | PHD2 target: %s:%d",
+             mode_str, cfg.phd2.host, cfg.phd2.port)
 
     # --- Inizializzazione componenti ---
 

@@ -1194,3 +1194,118 @@ corte (dove l'RMS reale tipico sta comunque sotto entrambe le soglie).
 2. Sessione con cielo che migliora (es. velatura che si dirada): dovrebbe arrivare un "applicato" con
    baseline più stretta e soglie ristrette.
 3. Sessione con cielo che peggiora: serie di "rifiutato", soglie iniziali mantenute.
+
+---
+
+## 26. Branding progetto + identità autore (rilascio pubblico v2.2) (2026-05-30)
+
+### Motivazione
+Dopo §25, il software è funzionalmente pronto per il primo rilascio pubblico
+in un gruppo Telegram italiano di astrofotografia (~1000 utenti). Distribuire
+uno ZIP anonimo perderebbe sia la paternità del lavoro sia il valore del
+feedback strutturato. Serve un livello di branding consistente che attraversi
+ogni touchpoint del software: banner console, dashboard, manuale, metadata
+Windows, file ZIP. Single source of truth in un solo modulo Python così che
+bumpare la versione in futuro richieda un solo edit.
+
+### Architettura
+- Nuovo modulo `phd2_agent/__about__.py`: costanti `__project_name__`,
+  `__short_name__`, `__author__`, `__version__`, `__version_tuple__`,
+  `__copyright__`, `__license__`, `__contact_telegram__` (NO
+  `__contact_email__`: l'unico canale di contatto è il gruppo Telegram della
+  community, hard-coded a `https://t.me/+eewRNpvElSs5OWY8`).
+  Helper `banner_lines()` e `about_payload()`.
+- `phd2_agent/__init__.py` ri-esporta le costanti principali (compatibilità con
+  eventuali import esterni). Il vecchio `__version__ = "1.0.0"` è stato
+  rimosso a favore dell'import da `__about__` (versione bumpata a 2.2).
+- `main.py` logga `banner_lines()` come prime righe del log della sessione,
+  sostituendo il mini-banner statico v1.1.0.
+- `server.py` espone endpoint `/about` che ritorna `about_payload()`. Scelta
+  esplicita di NON gonfiare `/status` (chiamato a ~1Hz) con costanti
+  invarianti.
+- Dashboard (`index.html`/`app.js`/`style.css`): byline sotto il logo + footer
+  a piè pagina popolati da `/about` al `DOMContentLoaded`. Footer ha link
+  Telegram cliccabile (`<a target="_blank" rel="noopener noreferrer">`).
+  CSS riusa variabili esistenti `--text-muted`, `--border`, `--blue` (non
+  `--accent` che non esisteva nello stylesheet).
+- `version_info_template.py` (nuovo): genera `version_info.txt` PyInstaller
+  da `__about__`. Richiamato da `build_dist.py` prima di PyInstaller.
+- `PHD2_Agent.spec`: aggiunto parametro `version='version_info.txt'` nel
+  blocco `EXE(...)`. Verificato che le stringhe (`Adaptive Agent for PHD2`,
+  `Alessandro Curci`, copyright) finiscano effettivamente nelle resource
+  UTF-16 del PE finale.
+- `build_dist.py`: ZIP rinominato in `Adaptive_Agent_PHD2_v<version>.zip`;
+  template `LEGGIMI_PER_AVVIARE.txt` aggiornato con copertina branded.
+- `config.toml`, `Avvia.bat`: header brandizzato (commenti `(c)` ASCII per
+  compatibilità shell legacy).
+- `doc/Manuale_Utente_Agent.md`: copertina branded (markdown).
+- `doc/Manuale_Utente_Agent .txt`: copertina branded (plain text, no
+  asterischi). NB: rompe leggermente la byte-identity `.md`/`.txt` che
+  c'era da §25, ma solo nelle prime ~10 righe della copertina (resto
+  del documento ancora identico).
+- `doc/build_manual_pdf.py` (nuovo nel repo): copia versionata dello script
+  outputs/ (già adattato cross-platform in §25), con metadata PDF
+  (title/author/subject/creator/keywords) letti da `__about__`. Path output
+  default = `doc/Manuale_Utente_Agent.pdf` relativo al file stesso, override
+  via `argv[1]`.
+
+### Comportamento atteso
+- Nessuna modifica logica all'Agente: tutte le feature §1-§25 inalterate.
+- Banner Python presente nei log della sessione (7 righe).
+- Endpoint `/about` ritorna JSON con tutti i campi, niente `contact_email`.
+- Dashboard mostra byline + footer.
+- Proprietà Windows dell'`.exe` mostrano `Adaptive Agent for PHD2`,
+  `Alessandro Curci`, `2.2`, copyright.
+- PDF manuale ha metadata branded (Title/Author/Subject/Creator).
+- ZIP finale: `Adaptive_Agent_PHD2_v2.2.zip`.
+
+### File modificati
+- NUOVO: `phd2_agent/__about__.py`
+- NUOVO: `version_info_template.py` (root)
+- NUOVO: `doc/build_manual_pdf.py` (versionato; lo script outputs/ resta lì
+  come copia storica)
+- NUOVO: `tests/test_about.py` (13 test in 5 classi)
+- `phd2_agent/__init__.py`: ri-esporto da `__about__`, rimossa versione 1.0.0
+- `main.py`: import `banner_lines`, sostituito mini-banner statico
+- `server.py`: import `about_payload`, endpoint `/about`
+- `dashboard/index.html`: meta tag author, byline nel logo, footer
+- `dashboard/app.js`: `loadBrandInfo()` su DOMContentLoaded
+- `dashboard/style.css`: classi `.brand-byline`, `.brand-footer`,
+  `.brand-contact` (usano `--text-muted`/`--border`/`--blue`)
+- `PHD2_Agent.spec`: parametro `version='version_info.txt'` in `EXE(...)`
+- `build_dist.py`: chiama `write_version_info()`, ZIP rinominato, LEGGIMI
+  template branded
+- `config.toml`: header commento brandizzato (commento, zero valori toccati)
+- `Avvia.bat`: echo di banner branded
+- `doc/Manuale_Utente_Agent.md`: copertina markdown
+- `doc/Manuale_Utente_Agent .txt`: copertina plain text
+
+### Test
+- 59 test verdi (46 pre-§26 + 13 nuovi in `test_about.py`).
+- Test anti-regressione email espliciti: `__contact_email__` non esiste;
+  `contact_email` non è nel payload; `@` e `mail` assenti dal banner.
+
+### Limiti dell'approccio
+1. L'`.exe` PyInstaller mostra i metadata Windows solo dopo che
+   `version_info_template.py` viene eseguito **prima** della build. Se per
+   errore si lancia PyInstaller a mano senza passare da `build_dist.py`, i
+   metadata possono restare vuoti.
+2. Il footer della dashboard è statico per sessione (caricato a
+   `DOMContentLoaded`). Se in futuro si bumpa la versione mentre la dashboard
+   è aperta, l'utente deve ricaricare la pagina per vederla.
+3. L'unico canale di feedback è il gruppo Telegram. Utenti che non hanno
+   Telegram (caso raro nella nicchia astrofotografica italiana, ma esiste)
+   non hanno un canale alternativo. Decisione consapevole per il primo
+   rilascio: tutta la community converge in un solo posto, gestione
+   centralizzata.
+4. Il glifo `©` nel banner Python viene visualizzato come `?` sulla console
+   Windows con code page legacy (cp1252) — è una limitazione del terminale,
+   il file di log su disco mantiene il glifo UTF-8 corretto. Nei `.bat` e
+   `.toml` si è scelto `(c)` ASCII per compatibilità totale.
+
+### Validazione raccomandata
+1. Build completa con `python build_dist.py` → ispezione proprietà `.exe`.
+2. Avvio `Avvia.bat` → verifica banner console.
+3. Apertura dashboard → verifica byline + footer + `/about` JSON.
+4. Apertura PDF → verifica metadata (Adobe Reader o anteprima file manager).
+5. Verifica nome ZIP finale = `Adaptive_Agent_PHD2_v2.2.zip`.

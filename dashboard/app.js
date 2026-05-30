@@ -607,8 +607,38 @@ el('ai-find-switch').addEventListener('change', async function () {
 function el(id) { return document.getElementById(id); }
 
 
+// ===== BRANDING (§26): byline + footer da /about (chiamato 1x al load) =====
+async function loadBrandInfo() {
+  try {
+    const resp = await fetch('/about');
+    if (!resp.ok) return;
+    const a = await resp.json();
+
+    const byline = el('brand-byline');
+    if (byline) byline.textContent = `${a.project_name} v${a.version} — by ${a.author}`;
+
+    const footer = el('brand-footer');
+    if (footer) {
+      // Costruzione sicura: textContent + nodo <a> per il link Telegram
+      footer.textContent = '';
+      footer.append(`${a.project_name} v${a.version} · by ${a.author} · ${a.copyright} · `);
+      const tgLink = document.createElement('a');
+      tgLink.href = a.contact_telegram;
+      tgLink.textContent = 'Community Telegram';
+      tgLink.target = '_blank';
+      tgLink.rel = 'noopener noreferrer';
+      tgLink.className = 'brand-contact';
+      footer.appendChild(tgLink);
+    }
+  } catch (_e) {
+    // silent: branding non critico, la dashboard funziona comunque
+  }
+}
+
+
 // ===== AVVIO =====
 document.addEventListener('DOMContentLoaded', () => {
+  loadBrandInfo();
   connectWS();
 
   // Poll status ogni 5s come fallback se il WS non manda aggiornamenti

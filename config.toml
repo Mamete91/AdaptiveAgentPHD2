@@ -1,9 +1,18 @@
-# =============================================================================
-# CONFIG UNICO — PHD2 Adaptive Agent (auto-configurante)
-# Pixel scale: auto da PHD2 (get_pixel_scale); valori sotto = solo fallback.
-# Soglie RMS: auto da baseline misurata (vedi [auto_calibration]).
-# La scelta del telescopio si fa selezionando il PROFILO in PHD2.
-# =============================================================================
+# ============================================================
+# Adaptive Agent for PHD2 v2.2
+# by Alessandro Curci
+# Copyright (c) 2026 Alessandro Curci
+# Community Telegram: https://t.me/+eewRNpvElSs5OWY8
+# ============================================================
+#
+# Configurazione unica. La scelta del telescopio avviene selezionando
+# il profilo dentro PHD2 (focale -> pixel scale auto-rilevata).
+# Vedi NOTE_CLAUDE.md sezione 22 per il refactor a config unico.
+#
+# Per editare un parametro: trovare la sezione, leggere il commento
+# inline, modificare il valore. Le sezioni feature-specific (es.
+# [auto_calibration], [exposure_dynamic]) hanno default attivi.
+#
 
 [setup]
 profile_name                     = "auto"

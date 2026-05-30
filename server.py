@@ -23,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel
 
+from phd2_agent.__about__ import about_payload
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PHD2 Adaptive Agent Dashboard", version="1.0.0")
@@ -125,6 +127,13 @@ async def root():
 # ------------------------------------------------------------------ #
 #  REST API                                                           #
 # ------------------------------------------------------------------ #
+
+@app.get("/about")
+async def about() -> dict:
+    """Identità del progetto: nome, autore, versione, copyright, contatto Telegram.
+    Chiamato una volta sola al caricamento della dashboard (NON a ogni tick)."""
+    return about_payload()
+
 
 @app.get("/status")
 async def get_status():

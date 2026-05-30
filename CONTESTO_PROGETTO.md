@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-30 (refresh ciclico baseline tightest-wins + rms_high_factor 1.3 §25)
+## Stato attuale — aggiornato al 2026-05-30 (branding identità autore + rilascio pubblico v2.2 §26)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -220,6 +220,20 @@ mantiene le soglie iniziali del TOML, la dashboard segnala "BASELINE RIFIUTATA".
 a 0,25". Setup di riferimento per la scelta dei parametri: RC8 (cap 1,02"; rifiuto >1,53"). Dettaglio in
 NOTE_CLAUDE.md §23.
 
+### Branding progetto + identità autore (§26) — IMPLEMENTATA (2026-05-30)
+Introdotto il modulo `phd2_agent/__about__.py` come single source of truth per
+nome progetto, autore, versione, copyright e canale di contatto (gruppo
+Telegram della community, unico canale di feedback — nessuna email). Il banner
+d'avvio in console, l'endpoint `/about` della dashboard, il footer della
+dashboard (con link Telegram cliccabile), i metadata dell'`.exe` Windows
+(VSVersionInfo via PyInstaller), la copertina e i metadata del manuale PDF,
+l'header di `config.toml` e di `Avvia.bat`, e il nome del file ZIP di
+distribuzione leggono tutti da questo modulo. Copyright semplificato a
+`Copyright © 2026 Alessandro Curci`. Bumpare la versione richiede ora l'edit di
+un solo file. Nessuna modifica logica all'Agente: tutte le feature §1-§25
+invariate. Pacchetto pronto per il primo rilascio pubblico v2.2 nel gruppo
+Telegram di astrofotografia. Dettaglio in NOTE_CLAUDE.md §26.
+
 ### Refresh ciclico baseline (tightest-wins) + rms_high_factor 1.3 (§25) — IMPLEMENTATA (2026-05-30)
 Refinement architetturale di §22 dopo osservazioni sul campo della prima sessione reale (Askar 71F): la baseline
 misurata all'inizio della sessione si "congelava" anche se le condizioni meteo cambiavano (caso osservato: baseline
@@ -249,6 +263,10 @@ Dettaglio in NOTE_CLAUDE.md §24.
 
 - Validazione sul campo di §25 in 2-3 sessioni reali, idealmente almeno una con cielo che migliora durante
   la nottata: verificare che il refresh applicato sia visibile sulla dashboard e che le soglie si stringano.
+
+- Distribuzione pubblica v2.2 nel gruppo Telegram di astrofotografia (~1000 utenti): raccolta feedback nel
+  gruppo Telegram della community (https://t.me/+eewRNpvElSs5OWY8), triage delle segnalazioni, eventuali
+  patch v2.2.x.
 
 - Validazione sul campo di §23 su RC8: verificare in 2-3 sessioni con seeing variabile che il cap proporzionale
   si attivi quando previsto e che il gate di rifiuto non si attivi nelle serate normali. Tarare eventualmente

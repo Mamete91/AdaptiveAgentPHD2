@@ -41,6 +41,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version='version_info.txt',   # §26: metadata Windows (Adaptive Agent for PHD2 v2.2)
 )
 coll = COLLECT(
     exe,

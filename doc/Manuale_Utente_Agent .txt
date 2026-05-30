@@ -1,4 +1,14 @@
-# 🌌 Manuale Rapido: PHD2 Adaptive Agent
+ADAPTIVE AGENT FOR PHD2 - Manuale Utente
+
+Versione 2.2
+Autore: Alessandro Curci
+Copyright (c) 2026 Alessandro Curci
+
+Community e supporto:
+
+  https://t.me/+eewRNpvElSs5OWY8
+
+============================================================
 
 L'**Adaptive Agent** è il tuo copilota astrofotografico. Lavora "sotto il cofano" assieme a PHD2 e alla tua suite principale (come NINA), agendo come un utente umano molto reattivo che fissa in modo continuativo lo schermo della guida per fare micro-aggiustamenti che ti salvano la nottata. **Si configura da solo sul tuo setup**: legge dal profilo PHD2 la scala di campionamento del tuo treno ottico e tara le sue soglie sul cielo reale che sta misurando, notte per notte.
 

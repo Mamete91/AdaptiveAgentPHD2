@@ -7,6 +7,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from phd2_agent.__about__ import (
+    __project_name__, __short_name__, __version__,
+    __author__, __copyright__, __contact_telegram__,
+)
+from version_info_template import write_version_info
+
+
 def run_cmd(cmd):
     print(f"Eseguo: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
@@ -14,13 +21,18 @@ def run_cmd(cmd):
 def main():
     base_dir = Path(os.getcwd())
     dist_dir = base_dir / "dist" / "PHD2_AdaptiveAgent"
-    
+
     # 1. Pulisci la build folder
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
     dist_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 2. Build dell'agente principale (usa il .spec che include scipy hidden imports)
+
+    # 2. Genera version_info.txt da phd2_agent/__about__.py (§26: metadata
+    # Windows dell'.exe — Adaptive Agent for PHD2 v2.2 by Alessandro Curci).
+    print("\n>>> Genero version_info.txt da __about__.py...")
+    write_version_info("version_info.txt")
+
+    # 3. Build dell'agente principale (usa il .spec che include scipy hidden imports)
     print("\n>>> Costruisco PHD2_Agent.exe (da PHD2_Agent.spec)...")
     run_cmd(["pyinstaller", "--noconfirm", "PHD2_Agent.spec"])
     
@@ -69,9 +81,14 @@ def main():
     # Crea una cartella per i logs offline
     (final_output / "phd2_log").mkdir(exist_ok=True)
     
-    # File readme "Come avviare" specifico (flusso a config unico)
+    # File readme "Come avviare" - copertina branded §26
     with open(final_output / "LEGGIMI_PER_AVVIARE.txt", "w", encoding="utf-8") as f:
-        f.write("=== PHD2 Adaptive Guiding Agent - Config unico ===\n\n")
+        f.write("============================================================\n")
+        f.write(f" {__project_name__} v{__version__}\n")
+        f.write(f" by {__author__}\n")
+        f.write(" Copyright (c) 2026 Alessandro Curci\n")
+        f.write(f" Community Telegram: {__contact_telegram__}\n")
+        f.write("============================================================\n\n")
         f.write("L'agente e' auto-configurante: legge la pixel scale di guida\n")
         f.write("direttamente da PHD2 e deriva da solo le soglie RMS dalla\n")
         f.write("baseline misurata sul campo. Un solo config.toml, un solo Avvia.bat.\n\n")
@@ -87,13 +104,16 @@ def main():
         f.write("   il progresso della baseline (es. 12/60 -> 60/60).\n\n")
         f.write("Per cambiare telescopio basta selezionare un altro profilo in PHD2:\n")
         f.write("pixel scale e soglie si adattano da sole, senza toccare alcun file.\n\n")
+        f.write("FEEDBACK / SEGNALAZIONI:\n")
+        f.write(f"  Community Telegram: {__contact_telegram__}\n\n")
         f.write("NOTA: config.toml e' impostato in modalita' LIVE (dry_run=false).\n")
-    
-    # 5. Zippa il pacchetto
+
+    # 5. Zippa il pacchetto con nome brandizzato §26: Adaptive_Agent_PHD2_v<version>.zip
     print("\n>>> Creo lo ZIP finale...")
-    shutil.make_archive(str(base_dir / "PHD2_Agent_Distribuzione"), 'zip', final_output)
-    
-    print("\n[OK] Completato! Il file 'PHD2_Agent_Distribuzione.zip' e' pronto per essere eseguito sul pc.")
+    zip_basename = f"Adaptive_Agent_PHD2_v{__version__}"
+    shutil.make_archive(str(base_dir / zip_basename), 'zip', final_output)
+
+    print(f"\n[OK] Completato! Il file '{zip_basename}.zip' e' pronto per essere eseguito sul pc.")
 
 if __name__ == "__main__":
     main()
