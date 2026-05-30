@@ -11,6 +11,7 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from phd2_agent.__about__ import (
     __project_name__, __version__, __author__, __copyright__,
+    __contact_telegram__,
 )
 
 from reportlab.lib.pagesizes import A4
@@ -169,13 +170,18 @@ class Cover(Flowable):
         c.setStrokeColor(colors.HexColor("#5b7cff")); c.setLineWidth(2)
         c.line(20*mm, self.h-34*mm, 70*mm, self.h-34*mm)
         c.setFillColor(colors.HexColor("#aebbff")); c.setFont("DJB",10.5)
-        c.drawString(20*mm, self.h-30*mm, "MANUALE RAPIDO")
-        c.setFillColor(colors.white); c.setFont("DJB",30)
-        c.drawString(20*mm, self.h-50*mm, "PHD2 Adaptive Agent")
-        c.setFillColor(colors.HexColor("#c9d4ff")); c.setFont("DJI",13)
-        c.drawString(20*mm, self.h-60*mm, "Il tuo copilota astrofotografico")
+        c.drawString(20*mm, self.h-30*mm, "MANUALE UTENTE")
+        # §26: titolo branded — letto da phd2_agent.__about__ (single source of truth)
+        c.setFillColor(colors.white); c.setFont("DJB",28)
+        c.drawString(20*mm, self.h-50*mm, __project_name__)
+        c.setFillColor(colors.HexColor("#c9d4ff")); c.setFont("DJB",16)
+        c.drawString(20*mm, self.h-62*mm, f"Versione {__version__}  ·  by {__author__}")
+        c.setFillColor(colors.HexColor("#c9d4ff")); c.setFont("DJI",12)
+        c.drawString(20*mm, self.h-72*mm, "Il tuo copilota astrofotografico")
+        # Footer cover: copyright + community Telegram (al posto della lista setup di sviluppo)
         c.setFillColor(colors.HexColor("#8a99c9")); c.setFont("DJ",9)
-        c.drawString(20*mm, 16*mm, "Sviluppato e validato su  ·  Askar 71F  ·  Tecnosky 115/800  ·  RC8")
+        c.drawString(20*mm, 20*mm, __copyright__)
+        c.drawString(20*mm, 14*mm, f"Community e supporto:  {__contact_telegram__}")
 
 S(Cover(170*mm, 150*mm))
 S(Spacer(1,8*mm))
@@ -507,7 +513,7 @@ def on_page(canvas, doc):
     canvas.saveState()
     canvas.setFont("DJ",8); canvas.setFillColor(MUTED)
     if doc.page > 1:
-        canvas.drawString(20*mm, 12*mm, "PHD2 Adaptive Agent - Manuale Rapido")
+        canvas.drawString(20*mm, 12*mm, f"{__project_name__} - Manuale Utente v{__version__}")
         canvas.drawRightString(190*mm, 12*mm, "pag. %d" % doc.page)
         canvas.setStrokeColor(LINEC); canvas.setLineWidth(0.4)
         canvas.line(20*mm,15*mm,190*mm,15*mm)
