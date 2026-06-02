@@ -34,6 +34,7 @@ Un agente Python che si connette a **PHD2** via TCP/IP (JSON-RPC 2.0) per monito
 | **find_star backoff** | Anti-loop sterile su crash camera: 3 tier (normale/slow/sospeso) con max 10 tentativi |
 | **RMS implosion detector** | Rileva RMS che esplode 8x rispetto al riferimento EMA, sospende decisioni per 60s |
 | **Soglie RMS adattive** | Clamp proporzionale alla pixel scale, rigetto baseline non rappresentative (§23) e refresh ciclico tightest-wins (§25) |
+| **Plugin NINA opzionale** | Pannello dockable in NINA che incorpora la dashboard via WebView2 — l'utente non deve aprire il browser. Progetto separato (§27) |
 
 ---
 
@@ -64,6 +65,10 @@ Config unico, un solo file da lanciare:
    (badge **PHD2**) e il progresso della baseline.
 
 Per cambiare telescopio basta selezionare un altro profilo in PHD2: pixel scale e soglie si adattano da sole.
+
+#### Plugin NINA opzionale (alternativa al browser)
+
+Per chi usa NINA come suite di acquisizione esiste un plugin C# separato — **Adaptive Agent for PHD2 — Dashboard** — che aggiunge a NINA un pannello dockable contenente la dashboard stessa, caricata via WebView2 da `http://localhost:8080`. Il plugin è opzionale: il browser web resta sempre il modo "ufficiale" di accedere alla dashboard, ed è obbligatorio per chi vuole guardarla da tablet, secondo monitor o PC remoto sulla stessa rete. Il plugin è solo una comodità per gli utenti NINA che vogliono evitare di tenere un browser aperto. Sequenza di avvio consigliata: PHD2 → `Avvia.bat` → NINA (il pannello carica la dashboard automaticamente; se NINA era già aperto basta premere "Riprova" nel pannello). Dettagli architetturali in `NOTE_CLAUDE.md §27`.
 
 ### Avvio da sorgente Python
 

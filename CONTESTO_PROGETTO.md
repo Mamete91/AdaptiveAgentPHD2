@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-05-30 (branding identità autore + rilascio pubblico v2.2 §26)
+## Stato attuale — aggiornato al 2026-06-02 (plugin NINA opzionale per dashboard embedded §27)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -252,6 +252,17 @@ focale diversa dall'imaging (la pixel scale grossolana del cercatore non porta p
 per l'ottica di ripresa). Ranges aggressività e MinMove armonizzati a 35-90 e 0.15-0.85 px su entrambi gli
 assi RA e DEC, per dare al controller più dinamica nei due estremi. Zero modifiche logiche, solo parametri.
 Dettaglio in NOTE_CLAUDE.md §24.
+
+### Plugin NINA opzionale per dashboard embedded (§27) — IMPLEMENTATO (2026-06-02)
+Creato un plugin C# separato per NINA 3.3 — **Adaptive Agent for PHD2 — Dashboard** v1.0.0.0 — che aggiunge a NINA
+un pannello dockable contenente la dashboard `http://localhost:8080` caricata via WebView2 direttamente nell'interfaccia
+NINA. Il plugin è opzionale: la dashboard web tramite browser resta il canale primario (obbligatorio per accesso da
+tablet/secondo monitor/PC remoto). Il plugin è una pura shell WebView2, non interagisce con PHD2 né con il codice Python
+dell'Agente: il lifecycle dei due processi è completamente separato. GUID univoco stabile del plugin:
+`6F2E9C19-4F66-4F69-B7D3-E21D5AD7458B` (NON cambiare mai nei rilasci futuri). DLL installata in
+`%LOCALAPPDATA%\NINA\Plugins\3.0.0\AdaptiveAgentForPHD2.NinaPlugin\`. Progetto repo separato in
+`C:\Users\aless\Documents\N.I.N.A\AdaptiveAgentForPHD2.NinaPlugin\`, build pulita 0 errori 0 warning. Dettaglio in
+NOTE_CLAUDE.md §27.
 
 ## Cosa NON è stato ancora fatto
 

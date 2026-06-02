@@ -159,6 +159,28 @@ La pagina web è la cabina di pilotaggio dove l'Agente ti espone in tempo reale 
 
 ---
 
+## 🧩 Bonus: usare la dashboard dentro NINA (plugin opzionale)
+
+Se usi **NINA** come suite di acquisizione, esiste un plugin C# separato — **Adaptive Agent for PHD2 — Dashboard** — che aggiunge a NINA un pannello dockable con la stessa dashboard `http://localhost:8080` caricata via WebView2 direttamente dentro l'interfaccia NINA. Vantaggio pratico: non devi più tenere aperta una finestra del browser accanto a NINA, la dashboard è una scheda dockable come tutte le altre.
+
+> [!IMPORTANT]
+> Il plugin è **opzionale**: l'Agente funziona perfettamente senza. La dashboard web su `http://localhost:8080` resta sempre il canale primario, ed è obbligatoria per chi vuole accedere da **tablet, secondo monitor o PC remoto** sulla stessa rete. Il plugin NINA non sostituisce il browser, lo affianca.
+
+**Sequenza di avvio consigliata se usi anche il plugin NINA**:
+
+1. Apri PHD2 e seleziona il profilo del telescopio.
+2. Lancia `Avvia.bat` (l'Agente parte in background e serve la dashboard).
+3. Apri NINA: il pannello "Adaptive Agent for PHD2" si carica e mostra la dashboard automaticamente.
+
+Se NINA era già aperto prima dell'Agente, il pannello mostrerà inizialmente il messaggio "Agente non raggiungibile" con il pulsante **Riprova**: basta premerlo dopo che `Avvia.bat` è partito e la dashboard appare. È la stessa logica di fallback del browser: niente di rotto, solo l'ordine di avvio sbagliato.
+
+**Installazione del plugin** (una sola volta): la DLL del plugin va copiata in `%LOCALAPPDATA%\NINA\Plugins\3.0.0\AdaptiveAgentForPHD2.NinaPlugin\` e NINA va riavviato. Il pannello compare poi nel menu dockable di NINA. Per il dettaglio tecnico di build/install vedi il repository del plugin (progetto separato, distribuito sul gruppo Telegram della community insieme al pacchetto Agente).
+
+> [!TIP]
+> Se il pannello mostra schermo bianco al primo apertura senza messaggio di fallback, manca il **runtime Microsoft Edge WebView2**: scaricalo dal sito Microsoft e riavvia NINA. Su Windows 11 è preinstallato, su Windows 10 aggiornato di solito anche, sui Windows 10 più datati può mancare.
+
+---
+
 ## 🤝 In Sintonia perfetta con NINA
 
 L'Agente non calpesta le azioni di NINA. Si pone allo strato sottostante.

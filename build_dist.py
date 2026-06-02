@@ -81,32 +81,96 @@ def main():
     # Crea una cartella per i logs offline
     (final_output / "phd2_log").mkdir(exist_ok=True)
     
-    # File readme "Come avviare" - copertina branded §26
+    # File readme "Come avviare" - copertina branded §26 + nota plugin NINA §27
+    leggimi_text = f"""\
+============================================================
+ {__project_name__} v{__version__}
+ by {__author__}
+ Copyright (c) 2026 Alessandro Curci
+ Community Telegram: {__contact_telegram__}
+============================================================
+
+L'agente e' auto-configurante: legge la pixel scale di guida
+direttamente da PHD2 e deriva da solo le soglie RMS dalla
+baseline misurata sul campo. Un solo config.toml, un solo Avvia.bat.
+
+PASSI:
+1. Apri PHD2 e SELEZIONA IL PROFILO del telescopio che stai usando
+   (es. 'RC8', 'Askar 71F ridotto'). La focale del profilo determina
+   la pixel scale che l'agente legge automaticamente.
+2. In PHD2 vai in Strumenti -> Abilita Server, poi avvia la guida.
+3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per il test connessione.
+4. Esegui 'Avvia.bat' (unico) per avviare l'agente.
+5. Apri la dashboard live (DUE MODI - scegli quello che preferisci):
+   a) Browser web: http://localhost:8080 (sempre disponibile, anche da
+      tablet/secondo monitor/PC remoto sulla stessa rete).
+   b) Plugin NINA opzionale: se hai installato (*) il plugin "Adaptive
+      Agent for PHD2 - Dashboard" dentro NINA, la dashboard appare gia'
+      dentro il pannello dockable di NINA - non serve aprire il browser.
+   Nella card 'Auto-calibrazione' vedrai la pixel scale rilevata e
+   il progresso della baseline (es. 12/60 -> 60/60).
+
+SEQUENZA TIPICA SE USI ANCHE IL PLUGIN NINA:
+   PHD2 -> Avvia.bat -> NINA. Il pannello NINA carica la dashboard
+   automaticamente. Se NINA era gia' aperto prima dell'agente, basta
+   premere 'Riprova' nel pannello dopo aver lanciato Avvia.bat.
+
+Per cambiare telescopio basta selezionare un altro profilo in PHD2:
+pixel scale e soglie si adattano da sole, senza toccare alcun file.
+
+FEEDBACK / SEGNALAZIONI:
+  Community Telegram: {__contact_telegram__}
+
+NOTA: config.toml e' impostato in modalita' LIVE (dry_run=false).
+
+============================================================
+ (*) COME INSTALLARE IL PLUGIN NINA (opzionale, semplicissimo)
+============================================================
+
+Il plugin "Adaptive Agent for PHD2 - Dashboard" e' una semplice
+cartella che va copiata dentro la cartella plugin di NINA. Non
+servono installer, non servono permessi di amministratore.
+
+PASSI:
+
+1. Chiudi NINA se e' aperto.
+
+2. Apri Esplora Risorse di Windows e nella barra in alto incolla
+   questo indirizzo, poi premi Invio:
+
+      %LOCALAPPDATA%\\NINA\\Plugins\\3.0.0
+
+   Si aprira' la cartella plugin di NINA (il path completo e'
+   C:\\Users\\<TuoNomeUtente>\\AppData\\Local\\NINA\\Plugins\\3.0.0\\).
+
+3. Copia dentro quella cartella la cartella
+   "AdaptiveAgentForPHD2.NinaPlugin" che hai ricevuto.
+
+   Risultato finale (esempio):
+      C:\\Users\\Mario\\AppData\\Local\\NINA\\Plugins\\3.0.0\\
+         AdaptiveAgentForPHD2.NinaPlugin\\
+            AdaptiveAgentForPHD2.NinaPlugin.dll
+            (eventuali altri file)
+
+4. Riavvia NINA. Il pannello "Adaptive Agent for PHD2" comparira'
+   tra i pannelli dockable di NINA: aprilo e trascinalo dove
+   preferisci nel layout.
+
+REQUISITI:
+- NINA versione 3.x (testato su 3.3).
+- Microsoft Edge WebView2 Runtime installato (su Windows 11 c'e'
+  gia', su Windows 10 aggiornato di solito anche; se vedi schermo
+  bianco scaricalo dal sito Microsoft e riavvia NINA).
+
+PER DISINSTALLARLO: chiudi NINA, cancella la cartella
+"AdaptiveAgentForPHD2.NinaPlugin" dal path qui sopra, riavvia NINA.
+Nessuna traccia residua nel sistema.
+
+NOTA: il plugin e' opzionale. La dashboard via browser su
+http://localhost:8080 funziona sempre, anche senza plugin.
+"""
     with open(final_output / "LEGGIMI_PER_AVVIARE.txt", "w", encoding="utf-8") as f:
-        f.write("============================================================\n")
-        f.write(f" {__project_name__} v{__version__}\n")
-        f.write(f" by {__author__}\n")
-        f.write(" Copyright (c) 2026 Alessandro Curci\n")
-        f.write(f" Community Telegram: {__contact_telegram__}\n")
-        f.write("============================================================\n\n")
-        f.write("L'agente e' auto-configurante: legge la pixel scale di guida\n")
-        f.write("direttamente da PHD2 e deriva da solo le soglie RMS dalla\n")
-        f.write("baseline misurata sul campo. Un solo config.toml, un solo Avvia.bat.\n\n")
-        f.write("PASSI:\n")
-        f.write("1. Apri PHD2 e SELEZIONA IL PROFILO del telescopio che stai usando\n")
-        f.write("   (es. 'RC8', 'Askar 71F ridotto'). La focale del profilo determina\n")
-        f.write("   la pixel scale che l'agente legge automaticamente.\n")
-        f.write("2. In PHD2 vai in Strumenti -> Abilita Server, poi avvia la guida.\n")
-        f.write("3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per il test connessione.\n")
-        f.write("4. Esegui 'Avvia.bat' (unico) per avviare l'agente.\n")
-        f.write("5. Apri il browser su http://localhost:8080 per la dashboard live.\n")
-        f.write("   Nella card 'Auto-calibrazione' vedrai la pixel scale rilevata e\n")
-        f.write("   il progresso della baseline (es. 12/60 -> 60/60).\n\n")
-        f.write("Per cambiare telescopio basta selezionare un altro profilo in PHD2:\n")
-        f.write("pixel scale e soglie si adattano da sole, senza toccare alcun file.\n\n")
-        f.write("FEEDBACK / SEGNALAZIONI:\n")
-        f.write(f"  Community Telegram: {__contact_telegram__}\n\n")
-        f.write("NOTA: config.toml e' impostato in modalita' LIVE (dry_run=false).\n")
+        f.write(leggimi_text)
 
     # 5. Zippa il pacchetto con nome brandizzato §26: Adaptive_Agent_PHD2_v<version>.zip
     print("\n>>> Creo lo ZIP finale...")

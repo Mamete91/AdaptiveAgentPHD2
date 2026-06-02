@@ -1309,3 +1309,107 @@ bumpare la versione in futuro richieda un solo edit.
 3. Apertura dashboard → verifica byline + footer + `/about` JSON.
 4. Apertura PDF → verifica metadata (Adobe Reader o anteprima file manager).
 5. Verifica nome ZIP finale = `Adaptive_Agent_PHD2_v2.2.zip`.
+
+---
+
+## 27. Plugin NINA opzionale per dashboard embedded — Adaptive Agent for PHD2 — Dashboard (2026-06-02)
+
+### Motivazione
+La dashboard web `http://localhost:8080` è già il canale primario di osservazione dello stato dell'Agente, accessibile
+da qualsiasi browser (incluso tablet, secondo monitor, PC remoto sulla stessa rete). Tuttavia per chi usa NINA come
+suite di acquisizione l'esperienza richiede una finestra browser separata da tenere aperta accanto a NINA. Decisione:
+realizzare un plugin C# minimale per NINA che aggiunga a NINA un pannello dockable contenente la stessa dashboard,
+caricata via WebView2 embedded. **Valore puramente UX**, zero logica nuova: la dashboard è quella di sempre, solo che
+ora vive dentro NINA come scheda dockable.
+
+### Vie considerate prima della scelta
+1. **Pubblicazione su GitHub del progetto Python** — accantonata. Niente basi di ritorno economico, niente struttura di
+   marketing, e la distribuzione via gruppo Telegram alla community italiana (~1000 utenti) basta come bacino di
+   feedback qualificato. GitHub aprirà la porta a internazionalizzazione/contributors solo quando il progetto sarà
+   rodato.
+2. **Plugin NINA nativo con logica C# riscritta** — scartata. Riscrivere controller, analyzer, baseline, escalation gate,
+   auto-calibrazione, refresh ciclico in C# significherebbe mesi di lavoro, doppia implementazione da mantenere allineata
+   (debito tecnico permanente), e perdita totale della velocità di iterazione di Python. Tecnicamente sconsigliato anche
+   nel lungo termine.
+3. **Plugin NINA come WebView locale** — **scelta**. Nessuna logica da riscrivere, nessuna duplicazione, valore puramente
+   UX. Costo: un paio di giorni di sviluppo C# minimale.
+
+### Architettura del plugin (progetto separato, non parte del repo Python)
+- Repository: `C:\Users\aless\Documents\N.I.N.A\AdaptiveAgentForPHD2.NinaPlugin\`
+- Linguaggio: C# WPF, `TargetFramework = net8.0-windows10.0.17763.0` (Windows 10 RS5 minimum, richiesto da WebView2)
+- SDK NINA: `NINA.Plugin 3.2.0.9001` (stable, compatibile con NINA 3.3)
+- WebView2: `Microsoft.Web.WebView2 1.0.3650.58` (match esatto con la versione che NINA porta nella sua directory;
+  `ExcludeAssets=runtime` per evitare duplicati)
+- GUID univoco stabile: `6F2E9C19-4F66-4F69-B7D3-E21D5AD7458B` (MAI cambiare nei rilasci futuri — è l'identità del
+  plugin per NINA, cambiare significa che NINA tratta la nuova versione come plugin diverso, con doppia voce e perdita
+  settings).
+- Base classi: `PluginBase` (export come `IPluginManifest`), `DockableVM(IProfileService)` (export come `IDockableVM`)
+- Cartella di installazione runtime: `%LOCALAPPDATA%\NINA\Plugins\3.0.0\AdaptiveAgentForPHD2.NinaPlugin\` —
+  importante: la cartella `3.0.0\` non è la versione applicazione di NINA, è la versione **API compatibility folder**
+  che TUTTA la serie NINA 3.x usa (3.0, 3.1, 3.2, 3.3 leggono tutti i plugin da lì). Ogni plugin vive in una sua
+  sotto-cartella per assembly name.
+
+### Componenti del plugin
+- `AdaptiveAgentForPHD2Plugin` — entry point `PluginBase`, manifest via `AssemblyMetadata` (Id, Name, Author, Homepage =
+  link Telegram community, ChangelogURL, MinimumApplicationVersion = `3.3.0.0`)
+- `AdaptiveAgentDashboardVM` — `DockableVM` con `Title = "Adaptive Agent for PHD2"`, `ContentId` e property
+  `DashboardUrl = "http://localhost:8080"`. Costruttore `[ImportingConstructor]` riceve `IProfileService`.
+- `AdaptiveAgentDashboardView` — UserControl WPF con WebView2, header (titolo + URL + pulsante Reload), pannello di
+  fallback "Agente non raggiungibile" con pulsante Riprova (visibile quando `NavigationCompleted.IsSuccess == false`),
+  footer copyright.
+- `Resources/DataTemplates.xaml` con `[Export(typeof(ResourceDictionary))]` code-behind (convenzione NINA: il key del
+  DataTemplate segue il pattern `FullNamespace.ClassName_Dockable`).
+- `scripts/install-plugin.ps1` — copia automatica della DLL dalla build nella cartella plugin di NINA.
+
+### Comportamento atteso
+- All'avvio NINA carica il plugin e registra il pannello dockable. L'utente può attivarlo dal menu pannelli di NINA.
+- Aprendo il pannello: il WebView2 si carica e naviga a `http://localhost:8080`. Se l'Agente Python è in esecuzione, la
+  dashboard appare entro 2-3 secondi.
+- Se l'Agente NON è in esecuzione (URL non raggiungibile): il pannello di fallback mostra "Agente non raggiungibile.
+  Avvia `Avvia.bat` dal pacchetto Adaptive Agent for PHD2, attendi qualche secondo, poi premi Riprova." con pulsante
+  Riprova che ri-tenta il caricamento.
+- Sequenza di avvio consigliata: PHD2 → `Avvia.bat` → NINA. Se NINA era già aperto, basta il pulsante Riprova dopo
+  l'avvio dell'Agente.
+- Il plugin **non avvia** `PHD2_Agent.exe`, **non legge** alcun file dell'Agente, **non comunica** con PHD2 in alcun
+  modo: i due lifecycle sono completamente separati.
+
+### File modificati nel repo Python (solo documentazione)
+- `Pacchetto_Distribuzione/LEGGIMI_PER_AVVIARE.txt` — passo 5 esteso con "DUE MODI" (browser web o plugin NINA);
+  nota sequenza di avvio se si usa anche il plugin.
+- `README.md` — riga "Plugin NINA opzionale" nella tabella feature; sotto-sezione dedicata in "Avvio rapido".
+- `doc/Manuale_Utente_Agent.md` — nuova sezione "Bonus: usare la dashboard dentro NINA (plugin opzionale)" dopo
+  la sezione Web Dashboard.
+- `doc/Manuale_Utente_Agent .txt` — gemello allineato.
+- `doc/build_manual_pdf.py` — sezione equivalente nel PDF (header viola ACCENT2, callout importante sul fatto che il
+  plugin è opzionale, lista sequenza di avvio, callout suggerimento WebView2 runtime).
+- `doc/Manuale_Utente_Agent.pdf` — rigenerato, 11 pagine, 110 KB.
+- `CONTESTO_PROGETTO.md` — data aggiornata, paragrafo §27 aggiunto, voce in "Cosa NON è stato ancora fatto" per la
+  validazione del plugin in NINA reale.
+- Nessuna modifica al codice Python dell'Agente: `controller.py`, `analyzer.py`, `client.py`, `config.py`, `server.py`,
+  `main.py` e i test sono **invariati**.
+
+### Validazione raccomandata (manuale)
+1. Riavviare NINA 3.3, andare in Settings → Plugins, verificare che "Adaptive Agent for PHD2 — Dashboard" appaia
+   nella lista con stato OK e versione 1.0.0.0.
+2. Aprire il menu dockable di NINA, attivare il pannello "Adaptive Agent for PHD2", trascinarlo in posizione.
+3. Lanciare `Avvia.bat` → la dashboard deve caricare nel pannello entro pochi secondi.
+4. Chiudere l'Agente (Ctrl+C nella console del .bat) → premere Reload sul pannello → il pannello di fallback deve
+   apparire con il messaggio e il pulsante Riprova.
+5. Rilanciare `Avvia.bat`, premere Riprova → la dashboard torna visibile.
+
+### Limiti dell'approccio
+1. URL fisso a `http://localhost:8080`. Se in futuro la porta della dashboard viene resa configurabile nel `config.toml`
+   dell'Agente, il plugin non si aggiorna automaticamente. Evoluzione possibile v1.1: settings page del plugin.
+2. WebView2 runtime non installato su Windows 10 datati → schermo bianco senza fallback (il fallback scatta solo dopo
+   un fallimento di navigazione, non se il controllo WebView2 non riesce neanche a inizializzare). Documentato nel
+   manuale: nota su come scaricare il runtime da Microsoft.
+3. Nessun health-check proattivo dell'Agente: il fallback scatta solo al primo tentativo di navigazione. Va bene per
+   v1.0, evoluzione possibile v1.1: GET periodico su `/about` per mostrare badge "Agente online v2.2".
+4. Versione plugin slegata dalla versione Agente: la 1.0.0.0 del plugin è progettata per girare con Agente v2.2 ma non
+   c'è enforcement. Pratica accettabile finché lo schema dashboard non cambia in modo breaking.
+
+### Stato finale
+Plugin compilato `Release/x64` con 0 errori, 0 warning. DLL installata nel path corretto. README + LICENSE creati nel
+repo del plugin. Pronto per la validazione sul campo, e successivamente per la distribuzione opzionale sul gruppo
+Telegram della community (probabilmente come ZIP separato dal pacchetto Agente, con istruzioni di installazione
+incluse).

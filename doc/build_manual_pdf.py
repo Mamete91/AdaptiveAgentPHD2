@@ -6,13 +6,23 @@ modulo phd2_agent/__about__.py — single source of truth del branding.
 Usa font DejaVu (no emoji font disponibile) -> marcatori grafici al posto
 delle emoji.
 """
-# §26: import branding dal modulo radice (sys.path patch per script in subdir)
+# §26: import branding direttamente dal file __about__.py via importlib.
+# Evita di passare per phd2_agent/__init__.py (che carica controller/analyzer
+# e richiede tomli/numpy/scipy non necessari per la generazione del PDF).
 import os as _os, sys as _sys
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from phd2_agent.__about__ import (
-    __project_name__, __version__, __author__, __copyright__,
-    __contact_telegram__,
+import importlib.util as _ilu
+_ABOUT_PATH = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "phd2_agent", "__about__.py"
 )
+_about_spec = _ilu.spec_from_file_location("_phd2_about_isolated", _ABOUT_PATH)
+_about = _ilu.module_from_spec(_about_spec)
+_about_spec.loader.exec_module(_about)
+__project_name__    = _about.__project_name__
+__version__         = _about.__version__
+__author__          = _about.__author__
+__copyright__       = _about.__copyright__
+__contact_telegram__ = _about.__contact_telegram__
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -477,6 +487,44 @@ S(Paragraph(
     "leve sature». Se è vuoto, significa semplicemente che la guida sta performando in modo sano e non "
     "serve intervenire.", body))
 
+# ---------- BONUS: PLUGIN NINA ----------
+S(Spacer(1,6))
+S(SectionHeader("Bonus: usare la dashboard dentro NINA (plugin opzionale)", ACCENT2))
+S(HRFlowable(width="100%", thickness=0.6, color=LINEC, spaceAfter=8))
+S(Paragraph(
+    "Se usi %s come suite di acquisizione, esiste un plugin C# separato — %s — che aggiunge a NINA un "
+    "pannello dockable con la stessa dashboard «http://localhost:8080» caricata via WebView2 direttamente "
+    "dentro l'interfaccia NINA. Vantaggio pratico: non devi più tenere aperta una finestra del browser "
+    "accanto a NINA, la dashboard è una scheda dockable come tutte le altre."
+    % (B("NINA"), B("Adaptive Agent for PHD2 — Dashboard")), body))
+S(callout("IMPORTANTE", GOLD,
+    "Il plugin è %s: l'Agente funziona perfettamente senza. La dashboard web su http://localhost:8080 resta "
+    "sempre il canale primario, ed è obbligatoria per chi vuole accedere da %s sulla stessa rete. Il plugin "
+    "NINA non sostituisce il browser, lo affianca."
+    % (B("opzionale"), B("tablet, secondo monitor o PC remoto"))))
+S(Paragraph(B("Sequenza di avvio consigliata se usi anche il plugin NINA:"), h3))
+S(blist([
+    "Apri PHD2 e seleziona il profilo del telescopio.",
+    "Lancia %s (l'Agente parte in background e serve la dashboard)." % B("Avvia.bat"),
+    "Apri NINA: il pannello «Adaptive Agent for PHD2» si carica e mostra la dashboard automaticamente.",
+]))
+S(Paragraph(
+    "Se NINA era già aperto prima dell'Agente, il pannello mostrerà inizialmente il messaggio «Agente non "
+    "raggiungibile» con il pulsante %s: basta premerlo dopo che Avvia.bat è partito e la dashboard appare. "
+    "È la stessa logica di fallback del browser: niente di rotto, solo l'ordine di avvio sbagliato."
+    % B("Riprova"), body))
+S(Paragraph(B("Installazione del plugin (una sola volta):"), h3))
+S(Paragraph(
+    "La DLL del plugin va copiata in %s e NINA va riavviato. Il pannello compare poi nel menu dockable di "
+    "NINA. Per il dettaglio tecnico di build/install vedi il repository del plugin (progetto separato, "
+    "distribuito sul gruppo Telegram della community insieme al pacchetto Agente)."
+    % B("%LOCALAPPDATA%\\NINA\\Plugins\\3.0.0\\AdaptiveAgentForPHD2.NinaPlugin\\"), body))
+S(callout("SUGGERIMENTO", GREEN,
+    "Se il pannello mostra schermo bianco alla prima apertura senza messaggio di fallback, manca il "
+    "%s: scaricalo dal sito Microsoft e riavvia NINA. Su Windows 11 è preinstallato, su Windows 10 "
+    "aggiornato di solito anche, sui Windows 10 più datati può mancare."
+    % B("runtime Microsoft Edge WebView2")))
+
 # ---------- NINA ----------
 S(Spacer(1,6))
 S(SectionHeader("In sintonia perfetta con NINA", ACCENT))
@@ -507,6 +555,129 @@ S(blist([
     "L'Agente %s la compensazione del backlash né altri parametri di calibrazione delicati: lavora solo "
     "sulle leve «morbide» e reversibili." % B("non tocca"),
 ]))
+
+# ---------- TROUBLESHOOTING (solo PDF — appendice per beta tester) ----------
+S(Spacer(1,6))
+S(SectionHeader("Troubleshooting rapido", GOLD))
+S(HRFlowable(width="100%", thickness=0.6, color=LINEC, spaceAfter=8))
+S(Paragraph(
+    "Otto situazioni tipiche e cosa fare. Se non risolvi, riporta il caso sul gruppo Telegram della "
+    "community (link in fondo) seguendo la sezione %s." % B("Come dare feedback"), body))
+
+tshoot_rows = [
+    [Paragraph(B("Sintomo"), small),
+     Paragraph(B("Causa probabile"), small),
+     Paragraph(B("Cosa fare"), small)],
+    [Paragraph("La dashboard non si apre su localhost:8080", small),
+     Paragraph("Firewall di Windows blocca la porta 8080.", small),
+     Paragraph("Esegui una volta %s nella cartella del pacchetto (richiede privilegi di amministratore)." % B("Sblocca_Firewall_8080.bat"), small)],
+    [Paragraph("Pixel scale nella card Auto-calibrazione resta con badge %s e non passa a %s" % (B("TOML"), B("PHD2")), small),
+     Paragraph("Nel profilo PHD2 in uso mancano focale di guida o dimensione pixel della camera.", small),
+     Paragraph("Apri %s in PHD2, completa i campi mancanti, salva il profilo e riavvia l'Agente." % B("Strumenti → Gestione profili"), small)],
+    [Paragraph("Badge %s non sparisce dopo molti minuti" % B("BASELINE RIFIUTATA"), small),
+     Paragraph("Seeing molto degradato o vento forte: l'Agente non riesce a campionare frame in condizione NOMINAL stabile.", small),
+     Paragraph("Comportamento atteso, non è un bug. L'Agente sta usando le soglie del config.toml. Se persiste su una nottata buona, segnala il caso.", small)],
+    [Paragraph("Progresso baseline resta fermo a 0/60 o n/60 a lungo", small),
+     Paragraph("L'Agente raccoglie solo frame NOMINAL con SNR sufficiente. Cielo turbolento, stella debole o implosion detector attivo.", small),
+     Paragraph("Aspetta condizioni più stabili. Verifica nei log che SNR sia sopra 8 e che non compaiano CRITICAL di tipo \"RMS IMPLOSION\".", small)],
+    [Paragraph("L'AI Star Finder non aggancia nulla in emergenza", small),
+     Paragraph("Interruttore %s spento sulla dashboard, oppure PHD2 non sta più scattando frame (camera scollegata)." % B("AI Finder Forzato"), small),
+     Paragraph("Attiva l'interruttore in dashboard. Se PHD2 non scatta nemmeno frame, è un problema USB/camera, non dell'Agente.", small)],
+    [Paragraph("Triangoli (giallo/verde) non appaiono mai sul grafico RMS", small),
+     Paragraph("Escalation gate chiuso (le leve aggr/MinMove non sono ancora sature), oppure il cielo è troppo stabile per richiedere il path B.", small),
+     Paragraph("Normale: il path B esposizione scatta solo dopo che le leve cheap sono al limite da almeno un cooldown. Su cieli buoni può non scattare mai.", small)],
+    [Paragraph("L'Agente si spegne da solo dopo X secondi/minuti", small),
+     Paragraph("Connessione JSON-RPC a PHD2 caduta, oppure errore Python in un componente.", small),
+     Paragraph("Controlla %s in cerca di righe ERROR/CRITICAL. Verifica che PHD2 sia attivo e che il server (porta 4400) sia abilitato." % B("Pacchetto_Distribuzione/logs/controller_*.log"), small)],
+    [Paragraph("Tutti i parametri PHD2 tornano ai valori originali al riavvio", small),
+     Paragraph("Non è un bug: è il %s che ripristina lo stato iniziale alla chiusura pulita o al rilevamento di una baseline orfana." % I("Baseline Guardian"), small),
+     Paragraph("Comportamento corretto e desiderato. L'Agente parte sempre da una base nota, mai da uno stato ereditato.", small)],
+]
+tshoot_tbl = Table(tshoot_rows, colWidths=[48*mm, 55*mm, 60*mm])
+tshoot_tbl.setStyle(TableStyle([
+    ("BACKGROUND",(0,0),(-1,0),GOLD),
+    ("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"DJB"),
+    ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,BGCARD]),
+    ("LINEBELOW",(0,0),(-1,-1),0.4,LINEC),("BOX",(0,0),(-1,-1),0.5,LINEC),
+    ("VALIGN",(0,0),(-1,-1),"TOP"),
+    ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+    ("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),
+]))
+S(tshoot_tbl)
+
+# ---------- COME DARE FEEDBACK (solo PDF — appendice per beta tester) ----------
+S(Spacer(1,6))
+S(SectionHeader("Come dare feedback (gruppo Telegram)", ACCENT))
+S(HRFlowable(width="100%", thickness=0.6, color=LINEC, spaceAfter=8))
+S(Paragraph(
+    "Questa è la versione beta del software. Il tuo feedback è prezioso e serve a far evolvere l'Agente "
+    "sui setup reali della community, non solo sui tre su cui è nato. Tutti i feedback transitano dal "
+    "gruppo Telegram (link a fondo pagina). Per essere utile e veloce da diagnosticare, un buon report "
+    "include alcune informazioni di base.", body))
+
+S(Paragraph(B("Cosa allegare a un report di bug o comportamento strano"), h3))
+S(blist([
+    "%s del tuo setup: telescopio, focale di guida, camera di guida (modello + pixel size), montatura, eventuale riduttore." % B("Descrizione"),
+    "%s del profilo PHD2 in uso e algoritmo di guida selezionato (es. Hysteresis su RA, Resist Switch su DEC)." % B("Nome"),
+    "%s della card Auto-calibrazione e del pannello Stato Esposizione & Escalation Gate al momento del problema." % B("Screenshot"),
+    "%s dalla cartella Pacchetto_Distribuzione/logs/ — almeno: decisions_*.jsonl della sessione in cui è capitato il problema, controller_*.log della stessa sessione, e se possibile session_*.summary.json (sono file di testo, pesano pochi KB)." % B("File di log"),
+]))
+S(callout("SUGGERIMENTO", GREEN,
+    "Se non sei sicuro che sia un bug o un comportamento corretto, %s. È molto più facile spiegare "
+    "perché qualcosa è atteso che dover indovinare perché qualcosa è andato storto. Anche i \"falsi "
+    "allarmi\" sono utili: aiutano a capire cosa non è chiaro nel manuale."
+    % B("scrivilo lo stesso")))
+
+S(Paragraph(B("Cosa NON serve riportare (e perché)"), h3))
+S(blist([
+    "%s in sessioni con vento forte o seeing turbolento: è il comportamento corretto, l'Agente sta proteggendoti da una calibrazione su nottata anomala." % B("\"BASELINE RIFIUTATA\""),
+    "%s: il path B esposizione scatta solo dopo saturazione delle leve cheap e una persistenza di seeing degradato. Su cieli buoni può non scattare mai per ore." % B("\"L'esposizione non si alza mai\""),
+    "%s: NINA non riceve l'evento di settle finché PHD2 stesso non lo dichiara. L'Agente lavora sotto PHD2, non sopra NINA." % B("\"NINA non scatta finché RMS non scende sotto soglia\""),
+    "%s: è la regola \"tightest-wins\" — l'Agente non concede mai reattività al peggioramento del cielo. È una scelta di design, non un limite." % B("\"Il refresh non applica mai una baseline più larga\""),
+]))
+
+# ---------- GLOSSARIO RAPIDO (solo PDF — appendice per beta tester) ----------
+S(Spacer(1,6))
+S(SectionHeader("Glossario rapido", ACCENT2))
+S(HRFlowable(width="100%", thickness=0.6, color=LINEC, spaceAfter=8))
+S(Paragraph(
+    "I termini più ricorrenti che incontri nella dashboard, nei log e nelle conversazioni della community. "
+    "Sono tutti definiti inline nel manuale, ma averli riuniti qui è utile come riferimento veloce.", body))
+
+gloss_rows = [
+    [Paragraph(B("Termine"), small), Paragraph(B("Cosa significa"), small)],
+    [Paragraph(B("Aggressività"), small),
+     Paragraph("Quanto PHD2 reagisce a una correzione di guida. Alta = molto reattivo, ottima in cielo perfetto ma pericolosa in turbolenza (rincorre il rumore). L'Agente la abbassa quando il seeing peggiora.", small)],
+    [Paragraph(B("MinMove"), small),
+     Paragraph("Soglia minima (in pixel) sotto la quale PHD2 ignora i movimenti della stella. Bassa = corregge anche micro-spostamenti, alta = ignora più rumore. L'Agente la alza in seeing degradato per non rincorrere la turbolenza.", small)],
+    [Paragraph(B("Baseline"), small),
+     Paragraph("Mediana dell'RMS misurato in condizione NOMINAL stabile sui primi 60 frame buoni. È il punto di riferimento da cui l'Agente deriva le soglie rms_high e rms_low della tua sessione.", small)],
+    [Paragraph(B("Cap"), small),
+     Paragraph("Tetto fisso a 1 arcsec sulla soglia rms_high derivata dalla baseline. Il riferimento universale di \"guida pulita\" indipendente dal setup, OAG o cercatore-guida che sia. Se la soglia derivata supera 1\", viene tagliata al cap (badge CAP ATTIVO).", small)],
+    [Paragraph(B("Escalation gate"), small),
+     Paragraph("\"Cancello\" che si apre solo quando aggressività e MinMove sono entrambe sature da almeno un cooldown. Finché è chiuso, l'esposizione resta al valore base. È il meccanismo che garantisce la gerarchia \"prima le leve leggere, poi quella pesante\".", small)],
+    [Paragraph(B("Tightest-wins"), small),
+     Paragraph("Regola del refresh ciclico: ogni 30 minuti la baseline viene ri-misurata e applicata SOLO se più stretta della corrente. L'Agente si adatta se il cielo migliora, non concede mai terreno se peggiora.", small)],
+    [Paragraph(B("NOMINAL / BOOSTED_FOR_SNR / BOOSTED_FOR_SEEING"), small),
+     Paragraph("I tre stati della macchina esposizione. NOMINAL = posa al valore base. BOOSTED_FOR_SNR = posa raddoppiata perché la stella è debole. BOOSTED_FOR_SEEING = posa alzata per gradini ×1,5 per mediare la turbolenza.", small)],
+    [Paragraph(B("Baseline Guardian"), small),
+     Paragraph("Sistema di salvaguardia: alla partenza salva i parametri PHD2 originali e li ripristina alla chiusura pulita (Ctrl+C) o quando rileva una baseline.json orfana di una sessione crashata. Garantisce che l'Agente non lasci mai PHD2 in uno stato modificato che tu non hai voluto.", small)],
+]
+gloss_tbl = Table(gloss_rows, colWidths=[55*mm, 108*mm])
+gloss_tbl.setStyle(TableStyle([
+    ("BACKGROUND",(0,0),(-1,0),ACCENT2),
+    ("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"DJB"),
+    ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,BGCARD]),
+    ("LINEBELOW",(0,0),(-1,-1),0.4,LINEC),("BOX",(0,0),(-1,-1),0.5,LINEC),
+    ("VALIGN",(0,0),(-1,-1),"TOP"),
+    ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+    ("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),
+]))
+S(gloss_tbl)
+
+S(Spacer(1,6))
+S(callout("NOTA FINALE", ACCENT,
+    "Se hai qualsiasi domanda scrivi nel gruppo Telegram %s" % __contact_telegram__))
 
 # ---------- DOC ----------
 def on_page(canvas, doc):
