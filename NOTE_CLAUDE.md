@@ -1413,3 +1413,245 @@ Plugin compilato `Release/x64` con 0 errori, 0 warning. DLL installata nel path 
 repo del plugin. Pronto per la validazione sul campo, e successivamente per la distribuzione opzionale sul gruppo
 Telegram della community (probabilmente come ZIP separato dal pacchetto Agente, con istruzioni di installazione
 incluse).
+
+## 28. Plugin NINA v1.1 — Launch Agent + badge stato (2026-06-03)
+
+### Motivazione
+Chiusura dei limiti #1 e #3 di §27, emersi come evoluzioni naturali: in v1.0 l'URL della dashboard era hard-coded e non
+c'era alcun health-check proattivo (il fallback scattava solo dopo un fallimento di navigazione). v1.1 aggiunge due
+rifiniture UX leggere che condividono lo stesso piccolo poller: (1) un **badge di stato** sopra il WebView che mostra
+"Agente online vX.Y" (verde) o "Agente offline" (grigio), e (2) un pulsante **"Avvia Adaptive Agent"** che lancia
+`Avvia.bat` con un click, senza che l'utente debba aprire Esplora Risorse. Resta **valore puramente UX**: nessuna pausa
+automatica della sequenza NINA, nessun `ISequenceMediator`, nessuna logica su `/status`, nessuna interferenza col
+Sequencer. La logica adattiva continua a vivere interamente nel pacchetto Python.
+
+### Architettura del plugin (progetto separato, repo invariato per path/GUID)
+- Repository: `C:\Users\aless\Documents\N.I.N.A\AdaptiveAgentForPHD2.NinaPlugin\` (stesso di §27)
+- GUID `6F2E9C19-4F66-4F69-B7D3-E21D5AD7458B` **invariato**; versione plugin `1.0.0.0 → 1.1.0.0` (AssemblyVersion +
+  AssemblyFileVersion; `PluginBase.Version` legge `AssemblyFileVersion`).
+- **Composition root statico `AgentServices.cs`** invece di MEF `[ImportingConstructor]` nel DockableVM. Decisione
+  architetturale chiave: per non rischiare di rompere il caricamento del pannello dockable di v1.0, la firma del
+  costruttore di `AdaptiveAgentDashboardVM` resta **identica** (solo `IProfileService`). I tre servizi condivisi
+  (`PluginSettings`, `AgentHealthChecker`, `AgentLauncher`) vivono in un singleton `AgentServices.Instance` (Lazy) letto
+  sia dal plugin (lifecycle del poller in `Initialize`/`Teardown`) sia dal VM (sottoscrizione a `StatusChanged`). Il
+  pragmatismo "non rompere ciò che funziona" ha priorità sulla purezza del pattern DI.
+- **Pre-flight con `ilspycmd`** (decompilazione di NINA reale in `C:\Program Files\N.I.N.A...`) per estrarre i nomi
+  veri delle API NINA invece di indovinarli:
+  - Logger: `NINA.Core.Utility.Logger.Info/Warning/Error(string)`
+  - Toast: `NINA.Core.Utility.Notification.Notification.ShowInformation/ShowWarning/ShowError(string)`
+  - INPC base: `NINA.Core.Utility.BaseINPC : CommunityToolkit.Mvvm.ComponentModel.ObservableObject`,
+    `RaisePropertyChanged()`
+  - Command: `CommunityToolkit.Mvvm.Input.AsyncRelayCommand` (NINA ships 8.4.0.1; AssemblyVersion 8.4.0.0 identico →
+    bind a runtime OK; `PackageReference` con `ExcludeAssets=runtime`)
+  - **Chiave pagina opzioni**: `NINA.ViewModel.Plugins.PluginOptionsDataTemplateSelector` risolve un `DataTemplate` con
+    chiave `IPluginManifest.Name + "_Options"`, e `PluginBase.Name` deriva da `AssemblyTitle`. Quindi la chiave è
+    `"Adaptive Agent for PHD2 — Dashboard_Options"` con **EM DASH U+2014**, verificata **byte-per-byte nel BAML
+    compilato** (prefisso lunghezza 0x2D = 45 byte UTF-8, sequenza E2 80 94). Il DataContext del template è l'istanza
+    reale del plugin (i plugin installati sono `IDictionary<IPluginManifest,bool>`, chiave = plugin) → bind a
+    `{Binding Settings}`.
+  - Settings persistence: nel SDK `NINA.Plugin 3.2.0.9001` **non esiste** `IPluginOptionsAccessor` → serializzazione
+    JSON manuale.
+
+### Componenti aggiunti
+- `Settings/PluginSettings.cs` — modello `BaseINPC` con tre property: `AgentBatPath` (default vuoto),
+  `HealthCheckIntervalSeconds` (default 15, clamp 5–120), `DashboardUrl` (default `http://localhost:8080`). Persistenza
+  JSON automatica su ogni set in `%LOCALAPPDATA%\NINA\Plugins\AdaptiveAgentForPHD2.NinaPlugin\settings.json` (fuori dalla
+  cartella versionata `3.0.0\`, così sopravvive ai reinstalli). Evento `IntervalChanged` per riarmare il timer del poller.
+- `Settings/PluginSettingsView.xaml(.cs)` — pagina opzioni sobria (tema NINA via stili impliciti), pulsante "Sfoglia..."
+  che apre `Microsoft.Win32.OpenFileDialog` filtrato `*.bat`.
+- `Health/AgentHealthChecker.cs` — poller condiviso: `HttpClient` timeout 3s, `System.Threading.Timer` ogni
+  `HealthCheckIntervalSeconds`, `GET <DashboardUrl>/about`. 2xx con JSON valido → Online + `version`; refused/timeout/5xx/
+  JSON malformato → Offline (mai eccezioni propagate). Espone `AgentHealth(bool IsOnline, string? Version)`, property
+  `Current` ed evento `StatusChanged` invocato **solo sulle transizioni** (record equality); `Logger.Info` **solo** su
+  online↔offline, mai a ogni tick.
+- `Launch/AgentLauncher.cs` — `LaunchAsync(batPath)` con validazioni (vuoto → NotConfigured, inesistente → FileNotFound),
+  `Process.Start` con `UseShellExecute=true` (serve per il .bat) e **`WindowStyle.Minimized`** (la console parte
+  minimizzata ma resta chiudibile manualmente dall'utente). `LaunchResult` con `Level` (Info/Warning/Error) per scegliere
+  il tipo di toast. Non attende che l'Agente sia up: la conferma arriva dal poller entro l'intervallo.
+- `AgentServices.cs` — composition root statico (vedi Architettura).
+- `Dashboard/AdaptiveAgentDashboardVM.cs` esteso — badge (`StatusBadgeText`/`StatusBadgeBackground` verde/grigio
+  frozen+thread-safe), pulsante (`LaunchButtonText`/`Enabled`/`Tooltip`), `AsyncRelayCommand` con toast per ogni esito;
+  update UI marshalato su `Application.Current.Dispatcher`. `DashboardUrl` ora letto dalle settings.
+- `Dashboard/AdaptiveAgentDashboardView.xaml` esteso — nuova riga in cima (badge a sinistra + pulsante a destra) **sopra**
+  l'header e il WebView v1.0 invariati.
+
+### Comportamento atteso
+- Badge offline (grigio) all'apertura del pannello con Agente non in esecuzione.
+- Pulsante abilitato solo quando l'Agente è **offline** *e* `AgentBatPath` è configurato; testo sostitutivo "Configura
+  percorso Avvia.bat nelle settings" quando il path è vuoto; **disabilitato quando l'Agente è online** (tooltip "Agente
+  già in esecuzione", no-op per non lanciarlo due volte).
+- Click su "Avvia Adaptive Agent" → la console del `.bat` si apre minimizzata; entro l'intervallo di polling il badge
+  transita a verde "Agente online vX.Y" e il pulsante si disabilita. Chiudendo la console (Ctrl+C) il badge torna grigio
+  entro un intervallo.
+- Il path deve puntare al `Avvia.bat` del pacchetto Python, **non** al DLL del plugin (un `.dll` non è shell-eseguibile:
+  Windows risponde "Nessuna applicazione associata", catturato e mostrato come toast d'errore).
+
+### File modificati nel repo Python (solo documentazione + distribuzione)
+- `Pacchetto_Distribuzione/LEGGIMI_PER_AVVIARE.txt` — blocco "NOVITA' v1.1 (Launch Agent + badge stato)" in coda alla
+  sezione "(*) COME INSTALLARE IL PLUGIN NINA".
+- `doc/Manuale_Utente_Agent.md` / `doc/Manuale_Utente_Agent .txt` / `doc/build_manual_pdf.py` — sotto-paragrafo
+  "Novità v1.1: pulsante Avvia e badge stato" nella sezione Bonus NINA; PDF rigenerato.
+- Nuova cartella `AdaptiveAgentForPHD2.NinaPlugin/` (DLL v1.1.0.0) e ZIP `Adaptive_Agent_PHD2_v2.2.zip` per la
+  distribuzione community.
+- Nessuna modifica al codice Python dell'Agente: invariato.
+
+### Validazione (sul campo, superata)
+NINA carica v1.1.0.0; badge grigio "Agente offline" all'apertura; pagina opzioni accessibile da Options → Plugins con
+"Sfoglia" che apre l'OpenFileDialog `.bat`; dopo aver impostato il path, "Avvia Adaptive Agent" lancia la console
+minimizzata e dopo l'intervallo il badge passa verde con la versione e il pulsante si disabilita. Build `Release/x64`
+0 errori / 0 warning.
+
+### Limiti
+1. Solo localhost: poller e WebView puntano all'host configurato (default `localhost:8080`), pensato per Agente sulla
+   stessa macchina di NINA.
+2. Nessuna auto-pause della sequenza NINA né reazione a `/status`: è una scelta deliberata (eventuale auto-pause
+   rivalutabile in futuro solo se emergerà dai feedback).
+3. ~550 righe C# nette nuove (sopra la stima iniziale ~200), dovute a verbosità INPC e commenti, non a scope creep:
+   ogni riga mappa su un requisito. Scelta confermata di non rifattorizzare codice funzionante e leggibile.
+
+### Stato finale
+Plugin v1.1.0.0 compilato 0/0, installato, validato sul campo. Documentazione (NOTE §28, README plugin, LEGGIMI,
+manuale 3 formati) aggiornata. Cartella plugin + ZIP `Adaptive_Agent_PHD2_v2.2.zip` pronti per la distribuzione opzionale
+sul gruppo Telegram come aggiornamento.
+
+## 29. Plugin NINA v1.2 — Safety Monitor virtuale + auto-reload WebView (2026-06-03)
+
+Sezione unica che copre la linea v1.2 completa: `1.2.0.0` (Safety Monitor), `1.2.1.0` (auto-reload WebView su
+transizione online), `1.2.2.0` (fix reload su cambio schermata). Tutto nel repo plugin separato
+`C:\Users\aless\Documents\N.I.N.A\AdaptiveAgentForPHD2.NinaPlugin\`; nel repo Python solo documentazione + distribuzione.
+
+### Motivazione
+Estendere il **modello safety nativo di NINA** con un driver virtuale che riflette lo stato della guida dell'Agente.
+Filosofia "separation of concerns": il plugin **osserva e segnala** (flag `IsSafe`), **NINA decide e agisce** in base
+alle policy configurate dall'utente (Options → Safety, oppure Advanced Sequencer `Trigger On Unsafe` / `Wait until safe`).
+Idiomatica nel modello equipment di NINA, **zero invasività su `ISequenceMediator`**: il plugin non mette mai in pausa
+la sequenza di testa propria, si limita ad aggiornare il flag che NINA già sa interpretare.
+
+### Architettura del Safety Monitor (v1.2.0.0)
+- **Pattern MEF reale (scoperto via pre-flight `ilspycmd` PRIMA di scrivere codice)**: NINA per l'equipment custom dei
+  plugin **non** importa `[Export(typeof(ISafetyMonitor))]`. Il `PluginLoader` fa `[ImportMany(typeof(IEquipmentProvider))]`
+  (classe `NINA.Plugin.PartsImport`); il `PluginEquipmentProviderManager` riflette l'argomento generico di
+  `IEquipmentProvider<T>` e instrada il provider al `IEquipmentProviders<T>` giusto via `AddProvider`; infine il
+  `SafetyMonitorChooserVM.GetEquipment()` (in `NINA.WPF.Base`) chiama `provider.GetEquipment()` e popola la tendina.
+  → Il contratto corretto è **`[Export(typeof(IEquipmentProvider))]` su `AdaptiveAgentSafetyMonitorProvider :
+  IEquipmentProvider<ISafetyMonitor>`** con `string Name` + `IList<ISafetyMonitor> GetEquipment()`, **non**
+  l'export diretto di `ISafetyMonitor`. Questa correzione è la scoperta-chiave del pre-flight (il prompt iniziale
+  assumeva l'export diretto, che NINA non avrebbe mai visto).
+- **Driver `AdaptiveAgentSafetyMonitor : BaseINPC, ISafetyMonitor`** (stesse convenzioni del `SafetyMonitorSimulator`
+  di NINA): `Category = "N.I.N.A."`, `DisplayName = "Adaptive Agent for PHD2 — Guide Safety"`, GUID stabile
+  `10A715AD-903C-499E-9CC7-CA8E66A49B7C` **distinto** dal GUID plugin `6F2E9C19-4F66-4F69-B7D3-E21D5AD7458B`.
+  (Il GUID suggerito nel prompt era malformato — 9 cifre esadecimali nel primo gruppo — intercettato e rigenerato valido.)
+  `ISafetyMonitor : IDevice` richiede Connect/Disconnect/SetupDialog + Id/Name/DisplayName/Category/Connected/Description/
+  DriverInfo/DriverVersion/SupportedActions + Action/SendCommand*.
+- **Decision engine `SafetyDecisionEngine` — una sola condizione di unsafe**: `guiding_state == "STAR_LOST"` consolidato
+  per `StarLostConsolidationSeconds` (default 300 = 5 minuti → 20 tick a 15s). **Esclusi esplicitamente**:
+  `escalation_gate.ra && escalation_gate.dec` (è l'apertura del path B esposizione §19, NON un'emergenza),
+  `saturation.active` (azione di recovery dell'AI Star Finder, NON un fallimento), RMS oltre soglia (soglia dinamica:
+  quando viene superata l'Agente sta già reagendo). Stati neutrali (`INACTIVE`/`DEGRADED`/`CRITICAL`/`RECOVERING`/altro)
+  non triggerano nulla e resettano il contatore STAR_LOST.
+- **Asimmetria temporale intenzionale**: 5 minuti per dichiarare unsafe (alta evidenza: l'AI Star Finder dovrebbe
+  recuperare entro quel tempo se è recuperabile); ~45s (3 poll `NORMAL` consecutivi) per tornare safe (reattività al
+  recupero, per non perdere finestre di acquisizione).
+- **Connected / auto-disconnect**: il driver si auto-disconnette (`Connected = false`) quando l'Agente smette di
+  rispondere a `/about`. NINA legge `IsSafe`/`Connected` via **polling** (`SafetyMonitorVM` usa un `DeviceUpdateTimer`
+  a `DevicePollingInterval`, verificato nel pre-flight — **non** via `PropertyChanged`), quindi basta impostare
+  `Connected=false` per propagare la disconnessione; NINA tratta la perdita di comunicazione come "safety scollegato"
+  e applica la policy utente (più onesto che servire stale data).
+- **Settings**: una sola property nuova `StarLostConsolidationSeconds` (default 300, range 30–1800), persistita nello
+  stesso `settings.json` della v1.1 (utenti che aggiornano da v1.1: chiave assente → default 300 al primo run).
+- **Polling esteso**: `AgentHealthChecker` (v1.1) ora legge anche `GET /status` quando il safety è connesso
+  (`StatusPollingEnabled`), estraendo **solo** `controller.guiding_state` via `JsonDocument` (niente DTO pesante);
+  evento `StatusUpdated(AgentStatusSnapshot)` a ogni tick (il decision engine conta tick consecutivi). Quando il driver
+  è disconnesso torna a leggere solo `/about` (efficienza: niente payload più pesante se non serve).
+
+### Auto-reload WebView (patch v1.2.1.0)
+Risolve un retaggio di design v1.0: il pannello di fallback "Agente non raggiungibile" restava visibile finché l'utente
+non premeva manualmente "Riprova", anche se il poller v1.1 sapeva già che l'Agente era tornato online (i due meccanismi
+— poller del badge e WebView — non si parlavano). Fix: il code-behind del View si sottoscrive a `StatusChanged` e, sulla
+transizione **offline → online**, chiama `NavigateToDashboard()` marshalato sul UI thread (`Dispatcher.Invoke`).
+Sottoscrizione su `Loaded` (con `-=`/`+=` difensivo), disiscrizione su `Unloaded` (no leak). Pulsante "Riprova" manuale
+**invariato** come fallback per casi limite. ~22 righe nel code-behind. Nota: `StatusChanged` è un `Action<AgentHealth>`
+(non un `EventHandler`), quindi handler a **singolo parametro** `OnAgentHealthChanged(AgentHealth health)`.
+
+### Fix cambio schermata (patch v1.2.2.0)
+La v1.2.1 copriva "Agente torna online durante la sessione", ma non "View ricaricato da NINA dopo cambio schermata".
+Quando NINA scarica/ricarica un pannello dockable (cambio tab o layout), il `Loaded` del View provoca un nuovo `Navigate`
+del WebView2; se il primo `NavigationCompleted` arriva con `IsSuccess=false` (timing sfortunato con risorse sub-page) il
+fallback si attiva. Ma il poller dice già online (stato condiviso nel composition root) → **nessuna transizione** →
+l'handler v1.2.1 non scatta → fallback resta. Fix: nel `Loaded`, dopo la sottoscrizione, check immediato dello stato
+corrente del poller (`AgentServices.Instance.HealthChecker.Current.IsOnline`); se online, schedula `NavigateToDashboard()`
+ritardato di 500ms (`await Task.Delay(500)` + `Dispatcher.BeginInvoke` con `DispatcherPriority.Background`, per dar tempo
+al primo Navigate di completare prima di correggerlo). Aggiunto guard difensivo `if (!IsLoaded) return;` nell'handler
+(evita operazioni su un View fuori dalla visual tree). ~12 righe nette. Il `Dispatcher.BeginInvoke` restituisce una
+`DispatcherOperation` awaitable → in metodo `async` genera CS4014: risolto con discard esplicito `_ = Dispatcher.BeginInvoke(...)`
+per mantenere il build a 0 warning.
+
+### File modificati nel repo plugin (NON nel repo Python)
+- `src/.../Safety/AdaptiveAgentSafetyMonitorProvider.cs` (nuovo — entry MEF `[Export(typeof(IEquipmentProvider))]`)
+- `src/.../Safety/AdaptiveAgentSafetyMonitor.cs` (nuovo — driver `ISafetyMonitor`)
+- `src/.../Safety/SafetyDecisionEngine.cs` (nuovo — logica STAR_LOST consolidato / resume NORMAL×3)
+- `src/.../Health/AgentHealthChecker.cs` (esteso: `StatusPollingEnabled`, `StatusUpdated`, probe `/status` mirato via `JsonDocument`, one-shot probes per `Connect`)
+- `src/.../Settings/PluginSettings.cs` + `PluginSettingsView.xaml` (1 property nuova `StarLostConsolidationSeconds`)
+- `src/.../AgentServices.cs` (`Lazy<SafetyDecisionEngine>`, `Lazy<AdaptiveAgentSafetyMonitor>` — composition root singleton)
+- `src/.../Dashboard/AdaptiveAgentDashboardView.xaml.cs` (auto-reload v1.2.1 + fix cambio schermata v1.2.2)
+- `Properties/AssemblyInfo.cs` + `.csproj`: versione → **1.2.2.0**, GUID plugin **INVARIATO**
+
+### File modificati nel repo Python (solo documentazione + distribuzione)
+- `Pacchetto_Distribuzione/LEGGIMI_PER_AVVIARE.txt` (+ template embedded in `build_dist.py`): blocco "NOVITA' v1.2
+  (Safety Monitor virtuale opzionale)" in coda alla sezione "(*) COME INSTALLARE IL PLUGIN NINA".
+- `doc/Manuale_Utente_Agent.md` / `.txt` / `build_manual_pdf.py`: sotto-paragrafo "Novità v1.2: Safety Monitor virtuale"
+  nella sezione "Bonus: usare la dashboard dentro NINA"; PDF rigenerato.
+- Nessuna modifica al codice Python dell'Agente: invariato.
+
+### Validazione (sul campo, superata)
+- Simulator NINA + Agente simulator con `StarLostConsolidationSeconds=30` per test rapido: safe→unsafe dopo ~30s di
+  STAR_LOST consolidato, ritorno safe dopo ~45s di NORMAL ✓
+- Auto-reload sulla transizione offline→online del poller ✓
+- Pannello stabile su cambio schermata NINA dopo fix v1.2.2 ✓
+- Pulsante "Riprova" manuale continua a funzionare ✓
+- Pulsante "Avvia Adaptive Agent" + badge stato v1.1 invariati; WebView v1.0 invariato ✓
+- Build `Release/x64` 0 errori / 0 warning su tutte e tre le patch.
+
+### Limiti
+1. **Una sola condizione unsafe** (STAR_LOST consolidato). Condizioni multi-criterio più sofisticate potrebbero emergere
+   dai feedback Telegram → eventuale v1.3.
+2. Il fix v1.2.2 ricarica il WebView 500ms dopo il `Loaded`; in casi rari di apertura/chiusura rapidissimi del pannello
+   può esserci un breve flash visivo. Accettabile per v1.2.
+3. Le **reazioni concrete** a un unsafe (pausa sequenza, parking, warm-up camera, ecc.) NON sono nel plugin: si
+   configurano in NINA tramite Options → Safety (policy globale) o Advanced Sequencer (`Trigger On Unsafe`,
+   `Wait until safe`). È una scelta di design, non una mancanza.
+
+### Stato finale
+Plugin v1.2.2.0 stabile, installato in `%LOCALAPPDATA%\NINA\Plugins\3.0.0\AdaptiveAgentForPHD2.NinaPlugin\`, validato sul
+campo. Documentazione (NOTE §29, LEGGIMI, manuale 3 formati) aggiornata. Cartella plugin + ZIP `Adaptive_Agent_PHD2_v2.2.zip`
+rigenerati (DLL v1.2.2.0). Naming pacchetto invariato (`v2.2`): l'Agente Python è invariato, il versionamento del plugin è
+interno. Pronto per la distribuzione opzionale sul gruppo Telegram insieme all'Agente Python v2.2.
+
+### Patch v1.2.3.0 (compatibilità NINA 3.2 stable) — 2026-06-04
+
+**Problema.** Dopo la distribuzione pubblica, un astrofilo del gruppo Telegram con **NINA 3.2 stable** ha riportato
+l'errore *"Failed to load plugin Adaptive Agent for PHD2 — Dashboard version 1.2.2.0"*. Sui setup con NINA 3.3 nightly
+(quello di Alessandro) il plugin si caricava regolarmente.
+
+**Causa (identificata dal pre-flight).** La v1.2.2.0 era stata compilata contro `Microsoft.Web.WebView2 1.0.3650.58`,
+versione shipped **solo da NINA 3.3 nightly**. WebView2 usa versioning stretto (l'`AssemblyVersion` coincide con la versione
+completa): l'assembly del plugin richiedeva quindi a runtime `Microsoft.Web.WebView2.Core, Version=1.0.3650.58`, ma NINA 3.2
+stable nella propria directory fornisce solo la `1.0.3296.44` → il bind falliva → *"Failed to load plugin"*. Il pre-flight,
+eseguito leggendo direttamente le DLL della NINA 3.2.0.9001 installata, ha mostrato che **le altre due dipendenze erano già
+corrette**: `NINA.Plugin 3.2.0.9001` è proprio la versione di 3.2 stable (non, come ipotizzato inizialmente, una 3.3 nightly)
+e `CommunityToolkit.Mvvm 8.4.0` (AssemblyVersion 8.4.0.0) coincide con quella shipped da 3.2 stable. Quindi **l'unico
+colpevole era WebView2**.
+
+**Fix.** Downgrade della sola dipendenza WebView2 nel `.csproj`: `1.0.3650.58` → **`1.0.3296.44`** (versione shipped da NINA
+3.2 stable). `NINA.Plugin` e `CommunityToolkit.Mvvm` lasciati invariati. `ExcludeAssets=runtime` mantenuto su tutte e tre
+(NINA fornisce le DLL a runtime, non le duplichiamo — verificato che la cartella plugin installata contiene solo
+`AdaptiveAgentForPHD2.NinaPlugin.dll`). **Nessuna modifica al codice C# del plugin**: pura ricompilazione mirata. Bump versione
+`1.2.2.0` → `1.2.3.0` in `.csproj` e `AssemblyInfo.cs`. GUID plugin e GUID Safety Monitor invariati; `MinimumApplicationVersion`
+resta `3.0.0.0`. Build `Release/x64` 0 errori / 0 warning; l'assembly risultante referenzia ora `WebView2 1.0.3296.44`.
+
+**Risultato.** Una sola build copre entrambi i target: gira su NINA 3.2 stable e, grazie alla forward compatibility, anche su
+NINA 3.3 nightly. **Validazione cross-version eseguita due volte da Alessandro**: disinstallata 3.3 nightly → installata 3.2
+stable → plugin v1.2.3.0 caricato e funzionante (versione visibile in Options → Plugins, pannello dockable + badge + pulsante
+Avvia + Safety Monitor tutti OK) → reinstallata 3.3 nightly → riconfermato senza regressioni. Procedura ripetuta due volte.
+Cartella distribuzione plugin aggiornata e ZIP `Adaptive_Agent_PHD2_v2.2.zip` rigenerato (1382 entry, DLL plugin v1.2.3.0,
+50176 byte). Naming pacchetto invariato (`v2.2`): l'Agente Python è invariato, è solo il plugin a essere bumpato.
