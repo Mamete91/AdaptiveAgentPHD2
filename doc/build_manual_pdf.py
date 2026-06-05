@@ -497,6 +497,33 @@ S(Paragraph(
     "dentro l'interfaccia NINA. Vantaggio pratico: non devi più tenere aperta una finestra del browser "
     "accanto a NINA, la dashboard è una scheda dockable come tutte le altre."
     % (B("NINA"), B("Adaptive Agent for PHD2 — Dashboard")), body))
+S(Paragraph(
+    "%s Da v1.1 il pannello mostra in alto un badge che indica a colpo d'occhio se l'Agente è "
+    "raggiungibile — «Agente online vX.Y» (verde) o «Agente offline» (grigio), aggiornato automaticamente "
+    "ogni 15 secondi — e un pulsante %s che lancia Avvia.bat con un click, senza aprire Esplora Risorse. "
+    "Per usarlo, imposta una sola volta il percorso del .bat in Options → Plugins → Adaptive Agent for "
+    "PHD2 — Dashboard (pulsante «Sfoglia...»). Quando l'Agente è già online il pulsante si disabilita: "
+    "resta una pura comodità, la dashboard funziona comunque."
+    % (B("Novità v1.1: pulsante Avvia e badge stato."), B("«Avvia Adaptive Agent»")), body))
+S(Paragraph(
+    "%s Il plugin v1.2 espone anche un Safety Monitor virtuale che NINA può usare come driver di sicurezza "
+    "accanto al pannello dockable. Il driver appare nella tendina Equipment → Safety Monitor di NINA sotto la "
+    "categoria %s col nome «Adaptive Agent for PHD2 — Guide Safety». Selezionandolo e cliccando Connect, NINA "
+    "inizia a riflettere lo stato della guida dell'Agente come flag safe/unsafe: dichiara %s quando STAR_LOST "
+    "persiste oltre il timeout configurato (default 5 minuti), e torna %s quando la guida resta stabile per "
+    "~45 secondi consecutivi. Se l'Agente smette di rispondere mentre il driver è connesso, il driver si "
+    "auto-disconnette: NINA tratta la perdita di comunicazione come «safety scollegato» e applica la policy "
+    "che hai impostato; quando l'Agente torna disponibile, riconnetti manualmente il driver dalla tendina. "
+    "La feature è opt-in: chi vuole solo il pannello dashboard o il pulsante Avvia + badge non è toccato."
+    % (B("Novità v1.2: Safety Monitor virtuale (opzionale)."), B("N.I.N.A."), B("unsafe"), B("safe")), body))
+S(callout("IMPORTANTE", GOLD,
+    "Il driver Safety %s cosa fare al verificarsi dell'unsafe — %s. Le reazioni concrete (pausa sequenza, "
+    "parking, warm-up camera, ecc.) si configurano dentro NINA, in Options → Safety (policy globale) oppure "
+    "nell'Advanced Sequencer (istruzione «Wait until safe» e Global Trigger «Trigger On Unsafe»). Per uso "
+    "domestico con supervisione attiva la configurazione consigliata è «Pause sequence on unsafe» + «Resume "
+    "on safe», senza azioni custom aggressive. Per uso remoto non sorvegliato conviene aggiungere un "
+    "«Trigger On Unsafe» con una sequenza custom di «safe shutdown»."
+    % (B("non decide"), B("segnala soltanto"))))
 S(callout("IMPORTANTE", GOLD,
     "Il plugin è %s: l'Agente funziona perfettamente senza. La dashboard web su http://localhost:8080 resta "
     "sempre il canale primario, ed è obbligatoria per chi vuole accedere da %s sulla stessa rete. Il plugin "
