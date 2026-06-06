@@ -1655,3 +1655,74 @@ stable → plugin v1.2.3.0 caricato e funzionante (versione visibile in Options 
 Avvia + Safety Monitor tutti OK) → reinstallata 3.3 nightly → riconfermato senza regressioni. Procedura ripetuta due volte.
 Cartella distribuzione plugin aggiornata e ZIP `Adaptive_Agent_PHD2_v2.2.zip` rigenerato (1382 entry, DLL plugin v1.2.3.0,
 50176 byte). Naming pacchetto invariato (`v2.2`): l'Agente Python è invariato, è solo il plugin a essere bumpato.
+
+---
+
+## 30. Satisfaction gate sulla mediana baseline — Agente v2.3 (2026-06-06)
+
+### Motivazione
+Osservazione sul campo di Alessandro: nel ramo "guida ottima" (CASO 3 di `_evaluate_axis`) il controller spingeva
+Aggressività UP e MinMove DOWN in modo **monotòno** a ogni cooldown finché `rms < rms_low`, con unica condizione
+d'arresto lo sbattere contro i bound estremi (`aggr_max=90`, `minmove_min=0.15`, §24). Risultato: anche quando l'RMS
+era già sceso al livello della mediana baseline misurata (cioè la guida era di fatto al target), il controller
+continuava a "indurire" le leve verso la reattività massima. Leve troppo reattive in un cielo già buono producono
+**guida nervosa** che insegue il rumore atmosferico anziché stabilizzarsi → l'RMS torna lentamente a salire senza che
+il controller se ne accorga (finché resta sotto `rms_low` continua a spingere nella stessa direzione).
+
+### Soluzione adottata
+Satisfaction gate **stateless** sulla mediana baseline. Alternativa scartata: hill-climb regret-aware con memoria del
+best (`prompts_storici/PROMPT_SETTLE_LEVE_MEDIANA_BASELINE.md`) — troppo complesso per il caso reale, richiedeva stato
+persistente e reset su ogni cambio regime/esposizione/baseline. Il gate stateless cattura lo stesso intent ("non
+spingere oltre se sei già al target") con una pura condizione di tick.
+
+### Architettura
+- Gate valutato all'inizio del CASO 3, **prima** delle azioni legacy su Aggr/MinMove. Se
+  `enabled and _rms_baseline_value is not None and not _rms_baseline_rejected` e `rms <= mediana × target_factor`
+  → `return actions` immediato (nessuna azione su quel tick). Altrimenti il CASO 3 procede invariato (codice v2.2).
+- **Stateless**: nessun campo nuovo in `AxisState`, nessun reset su eventi. Lo "stato del gate" è solo la condizione
+  `rms <= target` rivalutata a ogni tick. Se l'RMS risale, il gate rilascia automaticamente le leve.
+- **Asimmetria intenzionale**: il gate vive solo nel CASO 3 (ramo `elif rms < rms_low`). CASO 1 (degradato,
+  `rms > rms_high`) e CASO 2 (oscillazione) sono in `elif` separati e non vengono mai raggiunti quando il gate
+  scatta. Quando il seeing peggiora, le leve continuano ad ammorbidirsi fino all'eventuale escalation gate §19.
+- Unità omogenee: `_rms_baseline_value` è la mediana di `rms_total` in arcsec (§22/§25); il gate la confronta con
+  l'`rms` per-asse (anch'esso arcsec) passato a `_evaluate_axis`.
+
+### Comportamento
+- `enabled=false` → `baseline_target_available=False` → CASO 3 legacy, identico a v2.2.
+- baseline non finalizzata (`_rms_baseline_value is None`, warm-up) → gate non scatta, CASO 3 legacy.
+- baseline rifiutata (`_rms_baseline_rejected=True`, §23) → mediana non rappresentativa, gate non scatta, CASO 3 legacy.
+- Logging a livello DEBUG (`[opt] {asse}: gate attivo ...`) per non sporcare `decisions_*.jsonl` quando il gate è
+  attivo per molti tick consecutivi in cielo buono.
+- `get_status` espone il blocco globale `lever_optimization` (`enabled`, `target_factor`, `target_median_arcsec`).
+  Il sotto-blocco per-asse `active_now` NON è stato implementato: manca una property `last_rms` per-asse nel
+  controller (la dashboard confronta a vista RMS corrente vs `target_median_arcsec`).
+
+### Parametri (CONFERMATI da Alessandro)
+`enabled=true` di default (deroga consapevole alla convenzione "feature OFF": v2.3 è un miglioramento visibile che i
+beta tester devono vedere subito sui valori RMS). `target_factor=1.0` (ferma se RMS <= mediana). Bounds leve INVARIATI
+(35-90, 0.15-0.85). Niente memoria del best, niente reset, niente hill-climb.
+
+### File modificati
+- `phd2_agent/__about__.py`: bump `__version__` 2.2 → 2.3, `__version_tuple__` (2,3,0,0). Propaga automaticamente a
+  banner d'avvio, endpoint `/about`, metadata `.exe` (version_info_template), metadata PDF manuale.
+- `phd2_agent/config.py`: nuova `LeverOptimizationConfig` (enabled=True, target_factor=1.0), campo in `AgentConfig`,
+  parsing TOML retrocompatibile.
+- `phd2_agent/controller.py`: gate all'inizio del CASO 3 di `_evaluate_axis` (~30 righe) + blocco `lever_optimization`
+  in `get_status`.
+- `config.toml`: header v2.3 + nuova sezione `[lever_optimization]`.
+- `build_dist.py`: blocco "NOVITA' v2.3" nel template LEGGIMI; commento stale v2.2 generalizzato.
+- `doc/Manuale_Utente_Agent.md` / `.txt`: copertina v2.3 + sotto-paragrafo accessibile in "Cosa fa in automatico".
+- `tests/test_lever_optimization_gate.py`: nuovo file, 8 test (gate attivo/inattivo, enabled=false, baseline
+  None/rifiutata, CASO 1 invariato, retrocompat TOML). Suite totale: 67 test verdi.
+
+### Limiti / Note
+- Il gate dipende dalla baseline finalizzata: in warm-up e su baseline rifiutata (§23) il comportamento è quello
+  legacy v2.2 (corretto: senza un target rappresentativo non avrebbe senso fermarsi).
+- Gate stateless = zero complessità di reset su cambio regime/esposizione/baseline.
+- Plugin NINA INVARIATO (DLL resta v1.2.3.0): è solo l'Agente Python a passare a v2.3.
+
+### Validazione raccomandata
+1. Sessione reale con baseline finalizzata: quando l'RMS scende sotto la mediana, osservare sulla dashboard che le
+   leve smettono di muoversi (nessuna azione Aggr UP / MinMove DOWN in `decisions_*.jsonl`).
+2. Se il cielo peggiora (RMS sopra mediana), le leve riprendono il movimento.
+3. Tuning: gate sempre attivo → abbassare `target_factor` (0.9); troppe oscillazioni in cielo buono → alzare (1.1).

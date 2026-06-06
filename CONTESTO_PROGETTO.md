@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-06-02 (plugin NINA opzionale per dashboard embedded §27)
+## Stato attuale — aggiornato al 2026-06-06 (satisfaction gate mediana baseline §30 — Agente v2.3)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -264,7 +264,25 @@ dell'Agente: il lifecycle dei due processi è completamente separato. GUID univo
 `C:\Users\aless\Documents\N.I.N.A\AdaptiveAgentForPHD2.NinaPlugin\`, build pulita 0 errori 0 warning. Dettaglio in
 NOTE_CLAUDE.md §27.
 
+### Satisfaction gate sulla mediana baseline (§30) — IMPLEMENTATA (2026-06-06) — Agente v2.3
+Nel ramo "guida ottima" (CASO 3 di `_evaluate_axis`) la spinta monotòna di Aggressività
+verso aggr_max e MinMove verso minmove_min è ora filtrata da un satisfaction gate
+stateless: quando l'RMS dell'asse è già <= mediana baseline × target_factor (default
+1.0), il ramo di ottimizzazione viene sospeso per quel tick. Le leve restano sul
+valore corrente finché la guida resta in regime ottimo a quel livello di RMS o
+sotto. Se l'RMS risale sopra la soglia, il gate si disattiva automaticamente e il
+CASO 3 procede come da v2.2. L'asimmetria è intenzionale: il gate NON modifica
+CASO 1 (degradato), CASO 2 (oscillazione), escalation gate §19, esposizione dinamica
+§19. Quando il seeing peggiora, le leve continuano ad ammorbidirsi fino
+all'eventuale attivazione del path B esposizione. Nuova sezione `[lever_optimization]`
+in `config.toml` (enabled=true, target_factor=1.0). Bump versione Agente v2.2 → v2.3.
+
 ## Cosa NON è stato ancora fatto
+
+- Validazione LIVE del satisfaction gate §30 su Alessandro (2-3 sessioni reali con
+  baseline finalizzata, almeno una con RMS sotto mediana per verificare gate attivo).
+- Raccolta feedback beta tester gruppo Telegram: pattern di gate attivo nelle loro
+  sessioni, eventuale necessità di tarare target_factor sui loro setup.
 
 - Validazione LIVE dell'auto-configurazione: sessioni reali su almeno 2 profili PHD2 diversi (es. RC8 e Askar
   ridotto), verificando che pixel scale e soglie cambino da sole. Tarare poi rms_high_factor in base ai log.

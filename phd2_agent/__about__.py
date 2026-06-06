@@ -17,8 +17,8 @@ from __future__ import annotations
 __project_name__: str = "Adaptive Agent for PHD2"
 __short_name__:   str = "Adaptive Agent"
 __author__:       str = "Alessandro Curci"
-__version__:      str = "2.2"
-__version_tuple__: tuple[int, int, int, int] = (2, 2, 0, 0)  # major, minor, patch, build
+__version__:      str = "2.3"
+__version_tuple__: tuple[int, int, int, int] = (2, 3, 0, 0)  # major, minor, patch, build
 
 # --- Licenza / copyright ----------------------------------------------------
 

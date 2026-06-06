@@ -1,5 +1,5 @@
 # ============================================================
-# Adaptive Agent for PHD2 v2.2
+# Adaptive Agent for PHD2 v2.3
 # by Alessandro Curci
 # Copyright (c) 2026 Alessandro Curci
 # Community Telegram: https://t.me/+eewRNpvElSs5OWY8
@@ -118,3 +118,19 @@ baseline_reject_min_arcsec    = 1.50
 refresh_enabled               = true
 refresh_interval_seconds      = 1800.0     # 30 minuti
 refresh_only_if_tighter       = true
+
+[lever_optimization]
+# §30 (Agente v2.3) — Satisfaction gate sul ramo "guida ottima" del controller.
+# Quando l'RMS dell'asse e' gia' al livello della mediana baseline misurata
+# sul tuo cielo (o sotto), le leve Aggressivita' e MinMove NON vengono spinte
+# verso la reattivita' estrema. Se l'RMS risale sopra la mediana, il gate si
+# disattiva automaticamente e le leve riprendono ad essere regolate come prima.
+#
+# Il gate agisce SOLO nel ramo "guida ottima" (CASO 3). Quando il seeing
+# peggiora (RMS sopra rms_high), le leve continuano ad ammorbidirsi come da
+# v2.2, fino all'eventuale attivazione dell'esposizione dinamica (path B, §19).
+#
+enabled        = true
+# 1.0 = "ferma se RMS <= mediana". 0.9 = piu' conservativo (ferma anche prima).
+# 1.1 = piu' permissivo (lascia esplorare un po' anche sopra mediana).
+target_factor  = 1.0

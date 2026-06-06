@@ -303,6 +303,13 @@ S(blist([
     "peggiorerebbe l'RMS)." % (B("Se fiuta Vento o Oscillazioni critiche"), I("Aggressività"), I("MinMove")),
     "%s: ripristina per gradi l'aggressività, per tornare alla guida precisa tipica delle notti "
     "perfette." % B("Se il cielo torna calmo e limpidissimo"),
+    "%s: l'Agente sa qual e' il livello di errore tipico del tuo cielo migliore (la mediana che misura "
+    "da solo durante la calibrazione). Appena la guida raggiunge quel livello, smette di «spingere» le "
+    "leve verso la reattivita' massima e le lascia ferme sul punto buono: in un cielo gia' ottimo, leve "
+    "troppo nervose inseguono il rumore atmosferico e l'RMS ricomincerebbe a salire. Se le condizioni "
+    "peggiorano, l'Agente riprende automaticamente a regolare le leve come prima. Disattivabile da "
+    "config.toml ([lever_optimization] enabled = false)."
+    % B("Quando la guida e' gia' al suo meglio (novita' v2.3)"),
 ]))
 
 S(feature_head(2, "Esposizione Dinamica della camera di guida", ACCENT2))

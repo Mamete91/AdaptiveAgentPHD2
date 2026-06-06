@@ -880,6 +880,27 @@ class AdaptiveController:
               and consec_low >= thresh.consecutive_frames
               and axis_state.aggr_param):
 
+            # §30 — Satisfaction gate (stateless): se l'RMS d'asse e' gia' al livello
+            # della mediana baseline (o sotto), non spingere le leve verso la
+            # reattivita' estrema. Rivalutato a ogni tick: si auto-disattiva se l'RMS
+            # risale. Fallback al CASO 3 legacy se disabilitato, baseline non pronta
+            # o baseline rifiutata (§23).
+            lo_cfg = self.cfg.lever_optimization
+            baseline_target_available = (
+                lo_cfg.enabled
+                and self._rms_baseline_value is not None
+                and not self._rms_baseline_rejected
+            )
+            if baseline_target_available:
+                target = self._rms_baseline_value * lo_cfg.target_factor
+                if rms <= target:
+                    logger.debug(
+                        "[opt] %s: gate attivo (RMS %.3f\" <= target %.3f\" = "
+                        "mediana × %.2f); leve non vengono spinte",
+                        axis_state.axis.upper(), rms, target, lo_cfg.target_factor,
+                    )
+                    return actions  # nessuna azione di ottimizzazione su questo tick
+
             # Aggressiveness UP (cooldown raddoppiato, conservativo)
             elapsed = now - axis_state.last_action_time
             if elapsed >= cooldown * 2:
@@ -1476,6 +1497,16 @@ class AdaptiveController:
                 "last_refresh_baseline_arcsec": (
                     round(self._last_refresh_baseline, 3)
                     if self._last_refresh_baseline is not None else None
+                ),
+            },
+            # §30 — Satisfaction gate (la dashboard confronta a vista RMS vs target)
+            "lever_optimization": {
+                "enabled": self.cfg.lever_optimization.enabled,
+                "target_factor": self.cfg.lever_optimization.target_factor,
+                "target_median_arcsec": (
+                    round(self._rms_baseline_value * self.cfg.lever_optimization.target_factor, 3)
+                    if self._rms_baseline_value is not None and not self._rms_baseline_rejected
+                    else None
                 ),
             },
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],

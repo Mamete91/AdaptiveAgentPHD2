@@ -144,6 +144,28 @@ class AutoCalibrationConfig:
 
 
 @dataclass
+class LeverOptimizationConfig:
+    """Satisfaction gate sul ramo guida-ottima (§30, Agente v2.3).
+
+    Quando il gate è attivo e l'RMS dell'asse è gia' <= mediana baseline ×
+    target_factor, il ramo di ottimizzazione del CASO 3 di _evaluate_axis
+    NON spinge le leve verso la reattività (Aggr UP / MinMove DOWN). Le leve
+    restano al loro valore corrente finche' il regime resta "guida ottima".
+    Se l'RMS risale sopra la soglia, il gate rilascia automaticamente le leve
+    e il CASO 3 torna a operare come da v2.2.
+
+    Il gate NON modifica CASO 1 (degradato) ne' CASO 2 (oscillazione): l'asimmetria
+    e' intenzionale. Quando il seeing peggiora, le leve continuano ad ammorbidirsi
+    fino all'eventuale apertura dell'escalation gate (§19).
+    """
+    enabled: bool = True
+    # Fattore moltiplicativo sulla mediana baseline. 1.0 = "ferma se RMS <= mediana".
+    # 0.9 = piu' conservativo (ferma anche prima). 1.1 = piu' permissivo (lascia
+    # esplorare un po' anche sopra mediana).
+    target_factor: float = 1.0
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -157,6 +179,7 @@ class AgentConfig:
     phd2_log: PHD2LogConfig = field(default_factory=PHD2LogConfig)
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
     auto_calibration: AutoCalibrationConfig = field(default_factory=AutoCalibrationConfig)
+    lever_optimization: LeverOptimizationConfig = field(default_factory=LeverOptimizationConfig)
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -287,6 +310,14 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             refresh_enabled=bool(a.get("refresh_enabled", True)),
             refresh_interval_seconds=float(a.get("refresh_interval_seconds", 1800.0)),
             refresh_only_if_tighter=bool(a.get("refresh_only_if_tighter", True)),
+        )
+
+    # §30 — Satisfaction gate (sezione opzionale; assente -> default dataclass)
+    if "lever_optimization" in raw:
+        lo = raw["lever_optimization"]
+        cfg.lever_optimization = LeverOptimizationConfig(
+            enabled=bool(lo.get("enabled", True)),
+            target_factor=float(lo.get("target_factor", 1.0)),
         )
 
     return cfg

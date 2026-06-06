@@ -28,7 +28,7 @@ def main():
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Genera version_info.txt da phd2_agent/__about__.py (§26: metadata
-    # Windows dell'.exe — Adaptive Agent for PHD2 v2.2 by Alessandro Curci).
+    # Windows dell'.exe — versione letta da __about__.py by Alessandro Curci).
     print("\n>>> Genero version_info.txt da __about__.py...")
     write_version_info("version_info.txt")
 
@@ -117,6 +117,15 @@ SEQUENZA TIPICA SE USI ANCHE IL PLUGIN NINA:
 
 Per cambiare telescopio basta selezionare un altro profilo in PHD2:
 pixel scale e soglie si adattano da sole, senza toccare alcun file.
+
+NOVITA' v2.3 (Satisfaction gate sulla mediana baseline):
+Quando la guida e' gia' al livello del cielo migliore misurato dall'Agente
+(mediana della baseline auto-calibrata), l'Agente smette automaticamente di
+"indurire" le leve Aggressivita' e MinMove verso la reattivita' estrema.
+Risultato: meno guida nervosa in cielo buono, RMS piu' stabile. Se le
+condizioni peggiorano, l'Agente riprende automaticamente ad agire come prima.
+Disattivabile in config.toml con [lever_optimization] enabled = false (torna
+al comportamento v2.2).
 
 FEEDBACK / SEGNALAZIONI:
   Community Telegram: {__contact_telegram__}

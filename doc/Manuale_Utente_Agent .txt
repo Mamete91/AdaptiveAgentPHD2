@@ -1,6 +1,6 @@
 ADAPTIVE AGENT FOR PHD2 - Manuale Utente
 
-Versione 2.2
+Versione 2.3
 Autore: Alessandro Curci
 Copyright (c) 2026 Alessandro Curci
 
@@ -66,6 +66,7 @@ L'Agente analizza ciclicamente (ogni *X* secondi) il trend dell'errore RMS e una
 
 * **Se fiuta Vento o Oscillazioni critiche**: abbassa automaticamente l'*Aggressività* (Aggressiveness) e, se l'errore continua a saltare, alza il *MinMove* di tolleranza. In pratica permette alla montatura di "scivolare" sul vento invece di reagire a ogni colpo (che peggiorerebbe l'oscillazione RMS).
 * **Se il cielo torna calmo e limpidissimo**: ripristina per gradi l'aggressività, per tornare alla guida precisa tipica delle notti perfette.
+* **Quando la guida è già al suo meglio** *(novità v2.3)*: l'Agente sa qual è il livello di errore tipico del tuo cielo migliore (la *mediana* che misura da solo durante la calibrazione). Appena la guida raggiunge quel livello, smette di "spingere" ulteriormente le leve verso la reattività massima e le lascia ferme sul punto buono. Il motivo è pratico: in un cielo già ottimo, leve troppo nervose inseguono il rumore atmosferico e l'RMS, paradossalmente, ricomincerebbe a salire. Se le condizioni peggiorano, l'Agente riprende automaticamente a regolare le leve come prima — non devi fare nulla. Puoi disattivare questo comportamento dal `config.toml` (`[lever_optimization]`, `enabled = false`) per tornare al modo della v2.2.
 
 ### 2. ⏱️ Esposizione Dinamica della camera di guida
 
