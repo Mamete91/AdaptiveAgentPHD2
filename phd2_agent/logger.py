@@ -38,6 +38,20 @@ _CSV_FIELDS = [
     "frame_count",
     "consecutive_high",
     "consecutive_low",
+    # §31 — Seeing Diagnostic Engine. jitter_ref/hfd_ref + soglie attive permettono
+    # di ricostruire offline jitter_high/hfd_high con QUALSIASI fattore candidato
+    # (sweep di soglie senza ri-loggare).
+    "exposure_ms",
+    "jitter_rms",
+    "jitter_n",
+    "jitter_ref",
+    "hfd_ref",
+    "lag1_ra",
+    "lag1_dec",
+    "rms_high_active",
+    "rms_low_active",
+    "diag_state",
+    "diag_confidence",
     "actions_count",
     "actions_summary",
 ]
@@ -54,10 +68,14 @@ class SessionLogger:
         self.csv_dir.mkdir(parents=True, exist_ok=True)
 
         self._session_start = datetime.now()
-        session_id = self._session_start.strftime("%Y%m%d_%H%M%S")
+        self.session_id = self._session_start.strftime("%Y%m%d_%H%M%S")
 
-        self._csv_path = self.csv_dir / f"session_{session_id}.csv"
-        self._jsonl_path = self.csv_dir / f"decisions_{session_id}.jsonl"
+        self._csv_path = self.csv_dir / f"session_{self.session_id}.csv"
+        self._jsonl_path = self.csv_dir / f"decisions_{self.session_id}.jsonl"
+        # §31 — un record per AZIONE/INTERVENTO del motore (stesso session_id del CSV:
+        # join offline su ts_utc + finestra). File aperto pigro al primo record.
+        self._experimental_path = self.csv_dir / f"experimental_{self.session_id}.jsonl"
+        self._experimental_file = None
 
         self._csv_file = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._csv_file, fieldnames=_CSV_FIELDS)
@@ -65,12 +83,35 @@ class SessionLogger:
 
         self._jsonl_file = open(self._jsonl_path, "a", encoding="utf-8")
 
+        # Riferimento duck-typed al controller per soglie attive, reference EMA del
+        # motore e contesto del summary. Collegato da main.py (no import circolare).
+        self.controller = None
+
         # Statistiche di sessione
         self._total_frames = 0
         self._total_actions = 0
         self._peak_rms_total = 0.0
 
         logger.info("Logger sessione aperto: %s", self._csv_path)
+
+    def bind_controller(self, controller) -> None:
+        """Collega il controller (per soglie attive, reference EMA, summary context)."""
+        self.controller = controller
+
+    def experimental_path(self) -> Path:
+        """Percorso del file experimental_<session_id>.jsonl (§31)."""
+        return self._experimental_path
+
+    def log_experimental(self, record: dict) -> None:
+        """Scrive un record azione->esito (§31) nel jsonl experimental. File aperto
+        pigro: niente file vuoto se il motore non agisce mai."""
+        try:
+            if self._experimental_file is None:
+                self._experimental_file = open(self._experimental_path, "a", encoding="utf-8")
+            self._experimental_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._experimental_file.flush()
+        except Exception as e:
+            logger.error("Errore scrittura experimental jsonl: %s", e)
 
     def log_snapshot(
         self,
@@ -89,6 +130,15 @@ class SessionLogger:
             for a in actions
         ) if actions else ""
 
+        # §31 — soglie attive (post auto-cal) e reference EMA del motore dal controller
+        # collegato. Sempre presenti nel CSV (0.0 a motore spento) per lo sweep offline.
+        ctrl = self.controller
+        eng = getattr(ctrl, "diagnostic_engine", None) if ctrl is not None else None
+        rms_high_active = round(ctrl.cfg.thresholds.rms_high, 4) if ctrl is not None else 0.0
+        rms_low_active = round(ctrl.cfg.thresholds.rms_low, 4) if ctrl is not None else 0.0
+        jitter_ref = round(eng.jitter_ref, 4) if eng is not None else 0.0
+        hfd_ref = round(eng.hfd_ref, 3) if eng is not None else 0.0
+
         row = {
             "timestamp_iso": datetime.fromtimestamp(snapshot.timestamp).isoformat(timespec="seconds"),
             "ts": round(snapshot.timestamp, 2),
@@ -106,6 +156,18 @@ class SessionLogger:
             "frame_count": snapshot.frame_count,
             "consecutive_high": snapshot.consecutive_high,
             "consecutive_low": snapshot.consecutive_low,
+            # §31 — Seeing Diagnostic Engine
+            "exposure_ms": int(getattr(snapshot, "exposure_ms", 0)),
+            "jitter_rms": round(snapshot.jitter_rms, 4),
+            "jitter_n": snapshot.jitter_n,
+            "jitter_ref": jitter_ref,
+            "hfd_ref": hfd_ref,
+            "lag1_ra": round(snapshot.lag1_ra, 3),
+            "lag1_dec": round(snapshot.lag1_dec, 3),
+            "rms_high_active": rms_high_active,
+            "rms_low_active": rms_low_active,
+            "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
+            "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
             "actions_count": len(actions),
             "actions_summary": actions_summary,
         }
@@ -133,18 +195,31 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
+            "schema_version": 1,
             "session_start": self._session_start.isoformat(),
+            "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),
             "total_frames": self._total_frames,
             "total_actions": self._total_actions,
             "peak_rms_total_arcsec": round(self._peak_rms_total, 4),
             "csv_file": str(self._csv_path),
             "jsonl_file": str(self._jsonl_path),
+            "experimental_file": str(self._experimental_path),
         }
+
+        # §31 — header di sessione (contesto costante: versione, setup, fattori/soglie
+        # del motore, baseline, contatori). Valutato qui dal controller collegato.
+        if self.controller is not None:
+            try:
+                summary["context"] = self.controller.diagnostic_summary_context()
+            except Exception as e:
+                logger.warning("Impossibile costruire summary context: %s", e)
 
         try:
             self._csv_file.close()
             self._jsonl_file.close()
+            if self._experimental_file is not None:
+                self._experimental_file.close()
         except Exception:
             pass
 

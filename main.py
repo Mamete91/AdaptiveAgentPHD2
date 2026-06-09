@@ -112,6 +112,12 @@ def main():
     controller = AdaptiveController(client=client, config=cfg, analyzer=analyzer)
     session_logger = SessionLogger(csv_dir=cfg.logging.csv_dir)
 
+    # §31 — wiring Seeing Diagnostic Engine: il controller scrive experimental_*.jsonl
+    # tramite il logger (stesso session_id del CSV); il logger legge soglie/reference
+    # e contesto summary dal controller. Duck-typed: nessun import circolare.
+    controller.session_logger = session_logger
+    session_logger.bind_controller(controller)
+
     # --- Dashboard ---
 
     if not args.no_dashboard:
@@ -320,6 +326,8 @@ def _event_loop(
         elif event_name == "StartGuiding":
             log.info("PHD2 ha avviato la guida")
             analyzer.reset()
+            if controller.diagnostic_engine is not None:
+                controller.diagnostic_engine.reset()   # §31: ref EMA al re-start guida
             if not controller.is_initialized():
                 controller.initialize()
             try:
@@ -351,6 +359,8 @@ def _event_loop(
                     log.info("PHD2 AppState Guiding: Fine Dither. Reset statistiche.")
                     is_settling = False
                     analyzer.reset()
+                    if controller.diagnostic_engine is not None:
+                        controller.diagnostic_engine.reset()   # §31: ref EMA dopo dither
                     try:
                         _broadcast({"type": "settling", "ts": time.time(), "is_settling": False})
                     except Exception:
@@ -378,6 +388,8 @@ def _event_loop(
                 log.info("PHD2 SettleDone: Dithering completato. Reset statistiche.")
                 is_settling = False
                 analyzer.reset()
+                if controller.diagnostic_engine is not None:
+                    controller.diagnostic_engine.reset()   # §31: ref EMA dopo dither
                 try:
                     _broadcast({"type": "settling", "ts": time.time(), "is_settling": False})
                 except Exception:

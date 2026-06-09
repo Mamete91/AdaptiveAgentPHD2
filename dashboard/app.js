@@ -263,6 +263,11 @@ function applyFullStatus(data) {
     updateAutoCalibration(ctrl.auto_calibration);
   }
 
+  // §31 — Seeing Diagnostic Engine
+  if (ctrl.diagnostic_engine) {
+    updateDiagnosticEngine(ctrl.diagnostic_engine);
+  }
+
   // Actions history
   if (ctrl.last_actions?.length) {
     el('action-log').innerHTML = ''; // prevent duplication
@@ -506,6 +511,111 @@ function updateAutoCalibration(ac) {
   }
 }
 
+// §31 — Seeing Diagnostic Engine
+const DIAG_STATE_COLOR = {
+  NOMINAL:           '#00d68f',
+  SEEING:            '#ffd66b',
+  OVERCORRECTION:    '#ff9a3c',
+  DRIFT:             '#8b5cf6',
+  UNCERTAIN:         '#8a9cc0',
+  INSUFFICIENT_DATA: '#4d5f7a',
+};
+const DIAG_KIND_LABEL = {
+  engine: 'azione motore', micro: 'micro-correzione',
+  block: 'intervento BLOCK', attenuate: 'intervento ATTENUATE',
+};
+
+function fmtDelta(v) {
+  if (v === undefined || v === null) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(3);
+}
+
+function updateDiagnosticEngine(de) {
+  const enabled = de.enabled === true;
+
+  // Badge modalità (read-only)
+  const modeBadge = el('diag-mode-badge');
+  modeBadge.textContent = enabled ? (de.mode || 'guardian').toUpperCase() : 'OFF';
+  modeBadge.className = 'diag-mode-badge ' + (enabled ? ('mode-' + (de.mode || 'guardian')) : 'mode-off');
+
+  // HERO — diagnosi
+  const state = de.state || 'INSUFFICIENT_DATA';
+  const labelEl = el('diag-label');
+  labelEl.textContent = de.label || 'DATI INSUFFICIENTI';
+  labelEl.style.color = DIAG_STATE_COLOR[state] || DIAG_STATE_COLOR.INSUFFICIENT_DATA;
+
+  const confEl = el('diag-confidence');
+  if (enabled && de.confidence != null) {
+    confEl.textContent = de.confidence + '%' + (de.confidence_calibrated ? '' : ' · provvisoria');
+    confEl.style.display = '';
+  } else {
+    confEl.style.display = 'none';
+  }
+
+  el('diag-suggestion').textContent = de.suggestion
+    || (enabled ? '' : 'Motore spento — comportamento identico alla v2.3.');
+
+  // Evidenze (✓ a sostegno / ◦ neutro) — il "perché" senza numeri
+  const evEl = el('diag-evidence');
+  evEl.innerHTML = '';
+  (de.evidence || []).forEach(line => {
+    const li = document.createElement('li');
+    li.textContent = line;
+    li.className = line.trim().startsWith('✓') ? 'ev-yes' : 'ev-neutral';
+    evEl.appendChild(li);
+  });
+
+  // Azione & esito ultima azione
+  const actEl = el('diag-action');
+  const lo = de.last_outcome;
+  if (!enabled) {
+    actEl.textContent = '—';
+  } else if (lo) {
+    actEl.textContent = (DIAG_KIND_LABEL[lo.action_kind] || lo.action_kind || '') +
+      (lo.state ? ' · ' + lo.state : '');
+  } else {
+    actEl.textContent = 'nessuna azione';
+  }
+
+  const outEl = el('diag-outcome');
+  if (lo && lo.delta) {
+    const lc = (lo.lever_changes && lo.lever_changes.length)
+      ? lo.lever_changes.map(c => `${(c.axis || '').toUpperCase()} ${c.param} ${c.old}→${c.new}`).join(', ')
+      : (lo.action_kind === 'block' ? 'mossa v2.3 bloccata' : '—');
+    const d = lo.delta;
+    outEl.innerHTML =
+      `<span class="diag-out-leve">${lc}</span>` +
+      `<span class="diag-out-delta">ΔRMS ${fmtDelta(d.rms_total)} · Δjitter ${fmtDelta(d.jitter)} · Δspike ${fmtDelta(d.spike_score)}</span>`;
+    outEl.style.display = '';
+  } else {
+    outEl.style.display = 'none';
+  }
+
+  // Dettaglio tecnico (numeri grezzi dietro le evidenze)
+  const m = de.metrics || {};
+  el('diag-m-rms').textContent = m.rms != null ? m.rms.toFixed(3) + '″' : '—';
+  el('diag-m-hfd').textContent = m.hfd != null
+    ? `${m.hfd.toFixed(2)} (${(m.hfd_ref || 0).toFixed(2)})` : '—';
+  el('diag-m-jitter').textContent = m.jitter != null
+    ? `${m.jitter.toFixed(3)} (${(m.jitter_ref || 0).toFixed(3)})` : '—';
+  el('diag-m-lag1').textContent = m.lag1_ra != null
+    ? `${m.lag1_ra.toFixed(2)} / ${(m.lag1_dec ?? 0).toFixed(2)}` : '—';
+  el('diag-m-trend').textContent = m.trend_max != null ? m.trend_max.toFixed(3) : '—';
+  const gc = de.guardian_counts || {};
+  el('diag-m-counts').textContent =
+    `${gc.CONFIRM || 0} / ${gc.ATTENUATE || 0} / ${gc.BLOCK || 0} / ${gc.micro || 0}`;
+
+  // Switcher: OFF sempre attivo (kill switch); GUARDIAN/JITTER gated
+  const allow = de.allow_dashboard_mode_switch === true;
+  ['off', 'guardian', 'jitter'].forEach(mode => {
+    const btn = el('diag-btn-' + mode);
+    if (!btn) return;
+    const active = enabled ? (de.mode === mode) : (mode === 'off');
+    btn.classList.toggle('active', active);
+    btn.disabled = (mode !== 'off') && !allow;
+  });
+}
+
 // Log azioni
 function addActionLog(action) {
   const logBody = el('action-log');
@@ -600,6 +710,34 @@ el('ai-find-switch').addEventListener('change', async function () {
     console.error('Errore aggiornamento ai_find:', e);
     this.checked = !enabled;
   }
+});
+
+// §31 — switcher modalità motore. OFF = kill switch (nessuna conferma); attivare
+// GUARDIAN/JITTER richiede conferma (e allow_dashboard_mode_switch lato server).
+['off', 'guardian', 'jitter'].forEach(mode => {
+  const btn = el('diag-btn-' + mode);
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    if (mode === 'jitter' &&
+        !confirm('Attivare JITTER? Il motore diventa UNICA AUTORITÀ sulle leve (Aggressività/MinMove): i rami CASO 1/2/3 della v2.3 sono sospesi.')) return;
+    if (mode === 'guardian' &&
+        !confirm('Attivare GUARDIAN? La v2.3 continua a pilotare; il motore conferma/attenua/blocca le sue mosse e fa micro-correzioni nei buchi.')) return;
+    try {
+      const r = await fetch(`${API_BASE}/config/diagnostic_mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const res = await r.json();
+      if (res && res.error === 'not_allowed') {
+        alert('Attivazione non permessa: allow_dashboard_mode_switch=false nel config.toml.');
+      }
+    } catch (e) {
+      console.error('Errore set diagnostic_mode:', e);
+    }
+    fetchStatus();
+  });
 });
 
 

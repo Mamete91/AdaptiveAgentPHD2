@@ -186,6 +186,9 @@ class DryRunPayload(BaseModel):
 class AIFindPayload(BaseModel):
     enabled: bool
 
+class DiagModePayload(BaseModel):
+    mode: str   # "off" | "jitter" | "guardian"
+
 @app.post("/config/dry_run")
 async def set_dry_run(payload: DryRunPayload):
     """Cambia modalità DRY_RUN a runtime."""
@@ -199,6 +202,14 @@ async def set_ai_find(payload: AIFindPayload):
     if _controller:
         _controller.ai_find_enabled = payload.enabled
     return JSONResponse({"ai_find": payload.enabled})
+
+@app.post("/config/diagnostic_mode")
+async def set_diagnostic_mode(payload: DiagModePayload):
+    """§31 — Switcher Seeing Diagnostic Engine: "off" (kill switch, sempre permesso),
+    "jitter"/"guardian" (gated da allow_dashboard_mode_switch + conferma lato UI)."""
+    if _controller:
+        return JSONResponse(_controller.set_diagnostic_mode(payload.mode))
+    return JSONResponse({"mode": payload.mode})
 
 
 # ------------------------------------------------------------------ #

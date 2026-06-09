@@ -810,6 +810,127 @@ input:checked + .toggle-slider::after { transform: translateX(20px); background:
 /* ===== Exposure Marker (4th Chart dataset dot) ===== */
 /* Handled entirely via Chart.js scriptable options in app.js */
 
+/* ===== Seeing Diagnostic Engine (§31) ===== */
+.diag-section { display: block; }
+
+.diag-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.diag-header { display: flex; align-items: center; justify-content: space-between; }
+.diag-header h2 { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
+
+.diag-mode-badge {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  background: rgba(74, 85, 104, 0.25);
+  border: 1px solid rgba(74, 85, 104, 0.4);
+  color: var(--text-secondary);
+}
+.diag-mode-badge.mode-guardian {
+  background: rgba(0, 214, 143, 0.12);
+  border-color: rgba(0, 214, 143, 0.3);
+  color: var(--green);
+}
+.diag-mode-badge.mode-jitter {
+  background: rgba(255, 154, 60, 0.12);
+  border-color: rgba(255, 154, 60, 0.35);
+  color: var(--orange);
+}
+
+/* HERO — la diagnosi ha priorità visiva sui numeri */
+.diag-hero { display: flex; flex-direction: column; gap: 8px; }
+.diag-hero-main { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.diag-label { font-size: 28px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.05; }
+.diag-confidence {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  background: var(--bg-elevated);
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.diag-suggestion { font-size: 13px; color: var(--text-secondary); }
+
+.diag-evidence {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 2px;
+}
+.diag-evidence li { font-size: 12.5px; }
+.diag-evidence li.ev-yes { color: var(--text-primary); }
+.diag-evidence li.ev-neutral { color: var(--text-muted); }
+
+/* Azione & esito */
+.diag-action-block {
+  background: var(--bg-elevated);
+  border-radius: var(--r-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.diag-action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.diag-outcome { display: flex; flex-direction: column; gap: 3px; font-family: var(--font-mono); font-size: 12px; }
+.diag-out-leve { color: var(--text-primary); }
+.diag-out-delta { color: var(--text-secondary); }
+
+/* Dettaglio tecnico (secondario, collassabile) */
+.diag-tech { border-top: 1px solid var(--border); padding-top: 10px; }
+.diag-tech summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  user-select: none;
+  list-style: none;
+}
+.diag-tech summary::-webkit-details-marker { display: none; }
+.diag-tech summary:hover { color: var(--text-secondary); }
+.diag-tech[open] summary { color: var(--text-secondary); margin-bottom: 4px; }
+.diag-tech .param-group { margin-top: 8px; }
+
+/* Controlli: switcher OFF / GUARDIAN / JITTER */
+.diag-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.diag-switcher {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--bg-elevated);
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.diag-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 6px 16px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: background 0.15s, color 0.15s;
+}
+.diag-btn:hover:not(:disabled):not(.active) { color: var(--text-primary); background: var(--bg-card-hover); }
+.diag-btn.active { background: var(--blue); color: #fff; }
+.diag-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ===== Responsive ===== */
 @media (max-width: 1100px) {
   .gauges-row { grid-template-columns: 1fr 1fr; }

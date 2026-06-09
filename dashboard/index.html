@@ -282,6 +282,59 @@
 
     </section>
 
+    <!-- Seeing Diagnostic Engine (§31) -->
+    <section class="diag-section">
+      <div class="diag-card" id="diag-card">
+        <div class="diag-header">
+          <h2>Seeing Diagnostic Engine</h2>
+          <span class="diag-mode-badge mode-off" id="diag-mode-badge">OFF</span>
+        </div>
+
+        <!-- HERO: diagnosi in linguaggio astrofotografico -->
+        <div class="diag-hero">
+          <div class="diag-hero-main">
+            <span class="diag-label" id="diag-label">DATI INSUFFICIENTI</span>
+            <span class="diag-confidence" id="diag-confidence"
+                  title="Confidence provvisoria — non calibrata" style="display:none">—</span>
+          </div>
+          <div class="diag-suggestion" id="diag-suggestion">Motore spento — comportamento identico alla v2.3.</div>
+          <ul class="diag-evidence" id="diag-evidence"></ul>
+        </div>
+
+        <!-- Azione & esito (validazione del motore) -->
+        <div class="diag-action-block">
+          <div class="diag-action-row">
+            <span class="param-label">Azione motore</span>
+            <span class="param-val" id="diag-action">—</span>
+          </div>
+          <div class="diag-outcome" id="diag-outcome" style="display:none"></div>
+        </div>
+
+        <!-- Dettaglio tecnico (collassabile) -->
+        <details class="diag-tech">
+          <summary>Dettaglio tecnico ▸</summary>
+          <div class="param-group">
+            <div class="param-row"><span class="param-label">RMS</span><span class="param-val mono" id="diag-m-rms">—</span></div>
+            <div class="param-row"><span class="param-label">HFD (ref)</span><span class="param-val mono" id="diag-m-hfd">—</span></div>
+            <div class="param-row"><span class="param-label">Jitter (ref)</span><span class="param-val mono" id="diag-m-jitter">—</span></div>
+            <div class="param-row"><span class="param-label">Lag-1 RA / DEC</span><span class="param-val mono" id="diag-m-lag1">—</span></div>
+            <div class="param-row"><span class="param-label">Trend max</span><span class="param-val mono" id="diag-m-trend">—</span></div>
+            <div class="param-row"><span class="param-label">Guardian C / A / B / micro</span><span class="param-val mono" id="diag-m-counts">—</span></div>
+          </div>
+        </details>
+
+        <!-- Controlli: switcher OFF / GUARDIAN / JITTER -->
+        <div class="diag-controls">
+          <span class="param-label">Modalità</span>
+          <div class="diag-switcher" id="diag-switcher">
+            <button class="diag-btn" data-mode="off" id="diag-btn-off">OFF</button>
+            <button class="diag-btn" data-mode="guardian" id="diag-btn-guardian" title="Assistito: la v2.3 pilota, il motore conferma/attenua/blocca e micro-corregge">GUARDIAN</button>
+            <button class="diag-btn" data-mode="jitter" id="diag-btn-jitter" title="Controllo causale completo: il motore è unica autorità sulle leve">JITTER</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Actions Log -->
     <section class="log-section">
       <div class="log-card">
