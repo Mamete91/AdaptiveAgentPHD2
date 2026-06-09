@@ -31,7 +31,7 @@ import os
 import statistics
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
@@ -39,8 +39,14 @@ from typing import Optional
 from .analyzer import AnalysisSnapshot, SeeingCondition, StatisticsAnalyzer
 from .client import PHD2Client, PHD2RPCError
 from .config import AgentConfig, AxisLimits, ExposureDynamicConfig
+from .diagnostic_engine import GuardianVerdict, SeeingDiagnosticEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """Timestamp UTC ISO-8601 con suffisso Z (formato dei record experimental_*.jsonl)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class GuidingState(Enum):
@@ -163,6 +169,20 @@ class AdaptiveController:
         # Riferimento all'analyzer per reset post-cambio esposizione
         self.analyzer: Optional[StatisticsAnalyzer] = analyzer
 
+        # --- Seeing Diagnostic Engine (§31, Agente v2.4) ---
+        # Istanziato in initialize() solo se cfg.diagnostic_engine.enabled (default
+        # spento => None => comportamento identico v2.3). session_logger e' duck-typed:
+        # collegato da main.py per scrivere experimental_*.jsonl (no import circolare).
+        self.diagnostic_engine: Optional[SeeingDiagnosticEngine] = None
+        self.session_logger = None
+        self._diag_last_state = None
+        self._current_diag = None                 # ultimo DiagnosisResult di classify()
+        self._warmup_frames_left = 0
+        self._outcome_pending: Optional[dict] = None
+        self._last_outcome: Optional[dict] = None
+        self._diag_pre_buffer: list[dict] = []    # media pre-azione (esclusi i warmup)
+        self._diag_last_action = {"ra": 0.0, "dec": 0.0}   # cooldown per-asse azioni motore
+
         # Emergency state
         self.base_exposure_ms: Optional[int] = None
         self.current_exposure_ms: Optional[int] = None
@@ -272,6 +292,10 @@ class AdaptiveController:
             # e' connessa. La baseline RMS NON viene toccata qui (solo su cambio scala).
             self._apply_pixel_scale_from_phd2("init")
 
+            # §31 — Seeing Diagnostic Engine: istanziato solo se abilitato in config.
+            # Spento (default) => self.diagnostic_engine resta None => v2.3 pura.
+            self._init_diagnostic_engine()
+
             # Step 2: salva baseline DOPO aver letto i parametri puliti
             self.save_baseline()
 
@@ -331,6 +355,42 @@ class AdaptiveController:
         """Ri-legge i parametri da PHD2 (es. dopo cambio profilo utente)."""
         self._initialized = False
         self.initialize()
+
+    # ------------------------------------------------------------------ #
+    #  Seeing Diagnostic Engine (§31) — fabbrica e modalita'              #
+    # ------------------------------------------------------------------ #
+
+    def _make_diagnostic_engine(self) -> SeeingDiagnosticEngine:
+        """Crea il motore con i provider verso lo stato runtime del controller:
+        thresholds efficaci (post auto-cal §22-25) e mediana baseline (§30)."""
+        return SeeingDiagnosticEngine(
+            self.cfg.diagnostic_engine,
+            thresholds_provider=lambda: (self.cfg.thresholds.rms_high,
+                                         self.cfg.thresholds.rms_low),
+            baseline_provider=lambda: (self._rms_baseline_value
+                                       if not self._rms_baseline_rejected else None),
+        )
+
+    def _init_diagnostic_engine(self) -> None:
+        """Istanzia (o dismette) il motore in base a cfg.diagnostic_engine.enabled.
+        Se gia' istanziato e ancora abilitato lo conserva (mantiene le reference EMA)."""
+        de = self.cfg.diagnostic_engine
+        if de.enabled:
+            if self.diagnostic_engine is None:
+                self.diagnostic_engine = self._make_diagnostic_engine()
+            logger.info("[diagnostic_engine] motore ATTIVO — mode=%s", de.mode)
+        else:
+            self.diagnostic_engine = None
+
+    def _engine_owns_levers(self) -> bool:
+        """jitter: il motore e' unica autorita' su Aggr/MinMove (CASO 1/2/3 sospesi)."""
+        de = self.cfg.diagnostic_engine
+        return self.diagnostic_engine is not None and de.enabled and de.mode == "jitter"
+
+    def _guardian_active(self) -> bool:
+        """guardian: la v2.3 pilota; il motore rivede le sue mosse e micro-corregge."""
+        de = self.cfg.diagnostic_engine
+        return self.diagnostic_engine is not None and de.enabled and de.mode == "guardian"
 
     # ------------------------------------------------------------------ #
     #  Auto-calibrazione: pixel scale da PHD2 + soglie RMS adattive       #
@@ -714,6 +774,16 @@ class AdaptiveController:
 
         self._update_guiding_state(snapshot)
 
+        # §31 — Seeing Diagnostic Engine: diagnosi causale a ogni tick (alimenta la
+        # dashboard e gli eventuali interventi). A motore spento e' un no-op completo.
+        if self.diagnostic_engine is not None:
+            snapshot.exposure_ms = int(self.current_exposure_ms or self.base_exposure_ms or 0)
+            self._current_diag = self.diagnostic_engine.classify(snapshot)
+            snapshot.diag_state = self._current_diag.state.name
+            snapshot.diag_confidence = self._current_diag.confidence
+            if self._warmup_frames_left > 0:
+                self._warmup_frames_left -= 1
+
         # Tracking condizione NOMINAL per trigger DOWN esposizione seeing
         if snapshot.condition == SeeingCondition.NOMINAL:
             if self._nominal_since is None:
@@ -745,6 +815,12 @@ class AdaptiveController:
         self._maybe_start_refresh()
         self._update_rms_baseline(snapshot)
 
+        # §31 — progressione delle finestre outcome aperte e accumulo della media
+        # pre-azione. Eseguito PRIMA di qualsiasi azione di questo tick, cosi' una
+        # finestra appena aperta inizia ad accumulare il post dal tick successivo.
+        if self.diagnostic_engine is not None:
+            self._track_outcome(snapshot)
+
         # Eval emergenza SNR
         if self.cfg.emergency.auto_recovery:
             actions.extend(self._evaluate_exposure(snapshot))
@@ -765,6 +841,18 @@ class AdaptiveController:
             snapshot.condition, snapshot,
         )
         actions.extend(dec_actions)
+
+        # §31 — azioni del motore. In jitter e' unica autorita' (i CASO 1/2/3 sopra
+        # hanno restituito []); in guardian micro-corregge SOLO dove la v2.3 e' ferma
+        # in questo tick (asse senza azioni). I review BLOCK/ATTENUATE sono gia' stati
+        # gestiti dentro _evaluate_axis via _apply_with_guardian.
+        if self._engine_owns_levers():
+            actions.extend(self._evaluate_engine_actions(snapshot))
+        elif self._guardian_active():
+            if not ra_actions:
+                actions.extend(self._guardian_micro_correction(self._ra, self.cfg.ra, snapshot))
+            if not dec_actions:
+                actions.extend(self._guardian_micro_correction(self._dec, self.cfg.dec, snapshot))
 
         self.action_history.extend(actions)
 
@@ -806,6 +894,12 @@ class AdaptiveController:
         cooldown = self.cfg.control.cooldown_seconds
         minmove_cooldown = cooldown * 1.5  # MinMove piu' conservativo
 
+        # §31 — In modalita' jitter il motore e' unica autorita' sulle leve: i rami
+        # CASO 1/2/3 della v2.3 sono SOSPESI (non cancellati: restano attivi a motore
+        # spento e in guardian). Le azioni del motore arrivano da _evaluate_engine_actions.
+        if self._engine_owns_levers():
+            return []
+
         # ---- CASO 1: Seeing degradato -> abbassa aggressivita' e alza MinMove
         if (rms > thresh.rms_high
                 and consec_high >= thresh.consecutive_frames
@@ -827,10 +921,9 @@ class AdaptiveController:
                         f"{thresh.rms_high}\" per {consec_high} frame - "
                         f"abbasso Aggressivita ({condition.name})"
                     )
-                    action = self._apply(axis_state, limits,
-                                         axis_state.aggr_param, old_v, new_v,
-                                         reason)
-                    axis_state.current_aggr = new_v
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.aggr_param, old_v, new_v,
+                                                       reason, caso="CASO1", snapshot=snapshot)
                     actions.append(action)
 
             # MinMove UP (parallelo all'abbassamento aggressivita')
@@ -844,11 +937,11 @@ class AdaptiveController:
                         f"Seeing degradato - aumento MinMove "
                         f"per assorbire rumore di seeing/vento"
                     )
-                    action = self._apply(axis_state, limits,
-                                         axis_state.minmove_param,
-                                         old_mm, new_mm, reason,
-                                         is_minmove=True)
-                    axis_state.current_minmove = new_mm
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.minmove_param,
+                                                       old_mm, new_mm, reason,
+                                                       is_minmove=True, caso="CASO1",
+                                                       snapshot=snapshot)
                     actions.append(action)
 
         # ---- CASO 2: Oscillazione -> abbassa aggressivita' (RA + DEC) ----
@@ -869,10 +962,9 @@ class AdaptiveController:
                         f"(trend={trend_val:+.3f} arcsec/frame) "
                         f"- riduco Aggressivita {axis_state.axis.upper()}"
                     )
-                    action = self._apply(axis_state, limits,
-                                         axis_state.aggr_param, old_v, new_v,
-                                         reason)
-                    axis_state.current_aggr = new_v
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.aggr_param, old_v, new_v,
+                                                       reason, caso="CASO2", snapshot=snapshot)
                     actions.append(action)
 
         # ---- CASO 3: Guida ottima -> aumento graduale aggressivita' + MinMove DOWN
@@ -912,10 +1004,10 @@ class AdaptiveController:
                         f"{thresh.rms_low}\" per {consec_low} frame - "
                         "guida stabile, aumento graduale Aggressivita"
                     )
-                    action = self._apply(axis_state, limits,
-                                         axis_state.aggr_param,
-                                         old_v, new_v, reason)
-                    axis_state.current_aggr = new_v
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.aggr_param,
+                                                       old_v, new_v, reason,
+                                                       caso="CASO3", snapshot=snapshot)
                     actions.append(action)
 
             # MinMove DOWN (cooldown 3x, recupero precisione molto graduale)
@@ -929,14 +1021,430 @@ class AdaptiveController:
                         f"Guida stabile - abbasso MinMove "
                         f"per maggior precisione"
                     )
-                    action = self._apply(axis_state, limits,
-                                         axis_state.minmove_param,
-                                         old_mm, new_mm, reason,
-                                         is_minmove=True)
-                    axis_state.current_minmove = new_mm
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.minmove_param,
+                                                       old_mm, new_mm, reason,
+                                                       is_minmove=True, caso="CASO3",
+                                                       snapshot=snapshot)
                     actions.append(action)
 
         return actions
+
+    # ------------------------------------------------------------------ #
+    #  Seeing Diagnostic Engine (§31) — review, micro, jitter, outcome     #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _set_current(axis_state: AxisState, is_minmove: bool, value: float) -> None:
+        """Riallinea current_aggr/current_minmove al valore effettivamente applicato."""
+        if is_minmove:
+            axis_state.current_minmove = value
+        else:
+            axis_state.current_aggr = value
+
+    def _apply_with_guardian(
+        self,
+        axis_state: AxisState,
+        limits: AxisLimits,
+        param_name: str,
+        old_value: float,
+        new_value: float,
+        reason: str,
+        is_minmove: bool = False,
+        caso: str = "",
+        snapshot: Optional[AnalysisSnapshot] = None,
+    ) -> ControlAction:
+        """Punto unico di applicazione delle mosse leva v2.3 (CASO 1/2/3).
+
+        A motore spento o in jitter (non-guardian) e' un semplice _apply + riallineo
+        di current_*. In guardian consulta engine.review(): CONFIRM applica invariato,
+        ATTENUATE applica una frazione (guardian_attenuate_factor), BLOCK non applica e
+        ritorna un evento axis="guardian". current_* aggiornato solo se applicato."""
+        if not self._guardian_active():
+            action = self._apply(axis_state, limits, param_name, old_value, new_value,
+                                 reason, is_minmove=is_minmove)
+            self._set_current(axis_state, is_minmove, new_value)
+            return action
+
+        direction = new_value - old_value
+        verdict, factor, vreason = self.diagnostic_engine.review(caso, is_minmove, direction)
+
+        if verdict == GuardianVerdict.CONFIRM:
+            action = self._apply(axis_state, limits, param_name, old_value, new_value,
+                                 reason, is_minmove=is_minmove)
+            self._set_current(axis_state, is_minmove, new_value)
+            return action
+
+        if verdict == GuardianVerdict.ATTENUATE:
+            new2 = old_value + factor * (new_value - old_value)
+            if abs(new2 - old_value) < 1e-6:
+                # Mossa collassata su old -> equivale a un blocco.
+                logger.info("[GUARDIAN] ATTENUATE collassato su old %s/%s — %s",
+                            axis_state.axis, param_name, vreason)
+                return self._guardian_block_event(axis_state, param_name, old_value,
+                                                  new_value, vreason,
+                                                  "guardian_attenuate", "attenuate", snapshot)
+            full_reason = f"{reason} [GUARDIAN ATTENUATE x{factor:.2f}]"
+            action = self._apply(axis_state, limits, param_name, old_value, new2,
+                                 full_reason, is_minmove=is_minmove)
+            self._set_current(axis_state, is_minmove, new2)
+            logger.info("[GUARDIAN] ATTENUATE %s/%s %.3f->%.3f (v2.3 voleva %.3f) — %s",
+                        axis_state.axis, param_name, old_value, new2, new_value, vreason)
+            self._open_outcome(
+                snapshot, "guardian_attenuate", "attenuate",
+                lever_changes=[{"axis": axis_state.axis, "param": param_name,
+                                "old": round(old_value, 4), "new": round(new2, 4)}],
+                v23_proposed={"axis": axis_state.axis, "param": param_name,
+                              "old": round(old_value, 4), "new": round(new_value, 4)},
+            )
+            return action
+
+        # BLOCK
+        logger.info("[GUARDIAN] BLOCK %s/%s (v2.3 voleva %.3f->%.3f) — %s",
+                    axis_state.axis, param_name, old_value, new_value, vreason)
+        return self._guardian_block_event(axis_state, param_name, old_value, new_value,
+                                          vreason, "guardian_block", "block", snapshot)
+
+    def _guardian_block_event(
+        self, axis_state: AxisState, param_name: str, old_value: float,
+        new_value: float, vreason: str, event: str, action_kind: str,
+        snapshot: Optional[AnalysisSnapshot],
+    ) -> ControlAction:
+        """Costruisce l'evento axis="guardian" per una mossa v2.3 bloccata/azzerata e
+        apre la finestra outcome (la v2.5 valutera' se bloccare era giusto)."""
+        action = ControlAction(
+            timestamp=time.time(), axis="guardian",
+            param=f"{action_kind}_{param_name}",
+            old_value=old_value, new_value=new_value,
+            reason=f"[GUARDIAN {action_kind.upper()}] {vreason}", dry_run=True,
+        )
+        self._open_outcome(
+            snapshot, event, action_kind,
+            lever_changes=[],
+            v23_proposed={"axis": axis_state.axis, "param": param_name,
+                          "old": round(old_value, 4), "new": round(new_value, 4)},
+        )
+        return action
+
+    def _apply_proposal(
+        self, axis_state: AxisState, limits: AxisLimits, proposal, factor: float,
+        reason: str,
+    ) -> tuple[list[dict], list[ControlAction]]:
+        """Traduce una LeverProposal (direzione) in mosse concrete con clamp ai
+        [limits], applicate via _apply (×1.0 in jitter, ×guardian_action_factor nelle
+        micro). Il cooldown per-asse e' gestito dal chiamante (_diag_last_action).
+        Ritorna (lever_changes, actions)."""
+        actions: list[ControlAction] = []
+        lever_changes: list[dict] = []
+
+        if proposal.aggr != 0 and axis_state.aggr_param:
+            base = limits.aggr_step_down if proposal.aggr < 0 else limits.aggr_step_up
+            step = base * factor
+            if factor < 1.0:
+                step = max(1.0, round(step))   # micro: almeno 1 punto di aggr
+            old_v = axis_state.current_aggr
+            new_v = (max(limits.aggr_min, old_v - step) if proposal.aggr < 0
+                     else min(limits.aggr_max, old_v + step))
+            if new_v != old_v:
+                actions.append(self._apply(axis_state, limits, axis_state.aggr_param,
+                                           old_v, new_v, reason))
+                axis_state.current_aggr = new_v
+                lever_changes.append({"axis": axis_state.axis, "param": axis_state.aggr_param,
+                                      "old": round(old_v, 4), "new": round(new_v, 4)})
+
+        if proposal.minmove != 0 and axis_state.minmove_param:
+            step = limits.minmove_step * factor
+            old_mm = axis_state.current_minmove
+            new_mm = (min(limits.minmove_max, old_mm + step) if proposal.minmove > 0
+                      else max(limits.minmove_min, old_mm - step))
+            if new_mm != old_mm:
+                actions.append(self._apply(axis_state, limits, axis_state.minmove_param,
+                                           old_mm, new_mm, reason, is_minmove=True))
+                axis_state.current_minmove = new_mm
+                lever_changes.append({"axis": axis_state.axis, "param": axis_state.minmove_param,
+                                      "old": round(old_mm, 4), "new": round(new_mm, 4)})
+
+        return lever_changes, actions
+
+    def _engine_action_gate_open(self) -> bool:
+        """Cold-start gate condiviso da jitter e micro: refs pronte, fuori warmup,
+        nessuna finestra outcome gia' aperta."""
+        return (self.diagnostic_engine is not None
+                and self.diagnostic_engine.refs_ready
+                and self._warmup_frames_left <= 0
+                and self._outcome_pending is None)
+
+    def _evaluate_engine_actions(self, snapshot: AnalysisSnapshot) -> list[ControlAction]:
+        """jitter: traduce la proposta corrente in mosse a [limits] pieni + cooldown.
+        DRIFT/UNCERTAIN/None -> nessuna azione."""
+        actions: list[ControlAction] = []
+        diag = self._current_diag
+        de = self.cfg.diagnostic_engine
+        if diag is None or diag.proposal is None or diag.proposal.is_noop():
+            return actions
+        if not self._engine_action_gate_open():
+            return actions
+        if diag.confidence < de.act_min_confidence:
+            return actions
+
+        now = time.monotonic()
+        cooldown = self.cfg.control.cooldown_seconds
+        reason = f"[JITTER {diag.state.name}] conf={diag.confidence}"
+        all_changes: list[dict] = []
+        for axis_state, limits in ((self._ra, self.cfg.ra), (self._dec, self.cfg.dec)):
+            if now - self._diag_last_action[axis_state.axis] < cooldown:
+                continue
+            changes, axis_actions = self._apply_proposal(axis_state, limits,
+                                                         diag.proposal, 1.0, reason)
+            if axis_actions:
+                self._diag_last_action[axis_state.axis] = now
+                all_changes.extend(changes)
+                actions.extend(axis_actions)
+        if all_changes:
+            self._open_outcome(snapshot, "action", "engine", lever_changes=all_changes)
+        return actions
+
+    def _guardian_micro_correction(self, axis_state: AxisState, limits: AxisLimits,
+                                   snapshot: AnalysisSnapshot) -> list[ControlAction]:
+        """guardian: micro-correzione propria (ampiezza × guardian_action_factor) SOLO
+        dove la v2.3 e' ferma in questo tick e la diagnosi e' confidente SEEING/
+        OVERCORRECTION. DRIFT/NOMINAL/UNCERTAIN -> nessuna proposta dal motore."""
+        actions: list[ControlAction] = []
+        de = self.cfg.diagnostic_engine
+        if not self._engine_action_gate_open():
+            return actions
+        proposal = self.diagnostic_engine.micro_proposal()
+        if proposal is None:
+            return actions
+        now = time.monotonic()
+        if now - self._diag_last_action[axis_state.axis] < self.cfg.control.cooldown_seconds:
+            return actions
+        reason = f"[GUARDIAN micro] {self._current_diag.state.name}"
+        changes, axis_actions = self._apply_proposal(axis_state, limits, proposal,
+                                                     de.guardian_action_factor, reason)
+        if axis_actions:
+            self._diag_last_action[axis_state.axis] = now
+            self.diagnostic_engine.note_micro_applied()
+            self._open_outcome(snapshot, "action", "micro", lever_changes=changes)
+            actions.extend(axis_actions)
+        return actions
+
+    # ----- Outcome logging azione->esito (pre/post) ----------------------- #
+
+    @staticmethod
+    def _outcome_metrics(snap: AnalysisSnapshot) -> dict:
+        return {"rms_total": snap.rms_total, "jitter": snap.jitter_rms,
+                "spike_score": snap.spike_score}
+
+    @staticmethod
+    def _mean_metrics(buf: list[dict]) -> dict:
+        keys = ("rms_total", "jitter", "spike_score")
+        if not buf:
+            return {k: 0.0 for k in keys}
+        n = len(buf)
+        return {k: sum(d[k] for d in buf) / n for k in keys}
+
+    def _open_outcome(self, snapshot: Optional[AnalysisSnapshot], event: str,
+                      action_kind: str, lever_changes: list[dict],
+                      v23_proposed: Optional[dict] = None) -> None:
+        """Apre una finestra outcome catturando tutto il contesto di decisione
+        (schema v2.5-ready). No-op se ne esiste gia' una aperta o manca lo snapshot."""
+        if self._outcome_pending is not None or snapshot is None:
+            return
+        diag = self._current_diag
+        de = self.cfg.diagnostic_engine
+        ebools = ({"jitter_high": diag.jitter_high, "hfd_high": diag.hfd_high,
+                   "oscillation": diag.oscillation, "drift": diag.drift}
+                  if diag is not None else
+                  {"jitter_high": False, "hfd_high": False,
+                   "oscillation": False, "drift": False})
+        hfd_ref = diag.metrics.get("hfd_ref", 0.0) if diag is not None else 0.0
+        jitter_ref = diag.metrics.get("jitter_ref", 0.0) if diag is not None else 0.0
+        self._outcome_pending = {
+            "ts_utc": _utc_now_iso(),
+            "mode": de.mode,
+            "event": event,
+            "action_kind": action_kind,
+            "diagnosis": {
+                "state": diag.state.name if diag is not None else "INSUFFICIENT_DATA",
+                "confidence": diag.confidence if diag is not None else 0,
+                "evidence_bools": ebools,
+            },
+            "metrics_at_decision": {
+                "rms_total": round(snapshot.rms_total, 4),
+                "rms_ra": round(snapshot.rms_ra, 4),
+                "rms_dec": round(snapshot.rms_dec, 4),
+                "hfd": round(snapshot.hfd_avg, 3),
+                "hfd_ref": hfd_ref,
+                "jitter": round(snapshot.jitter_rms, 4),
+                "jitter_ref": jitter_ref,
+                "lag1_ra": round(snapshot.lag1_ra, 3),
+                "lag1_dec": round(snapshot.lag1_dec, 3),
+                "trend_ra": round(snapshot.trend_ra, 4),
+                "trend_dec": round(snapshot.trend_dec, 4),
+                "spike_score": round(snapshot.spike_score, 4),
+                "snr": round(snapshot.snr_avg, 2),
+                "exposure_ms": int(snapshot.exposure_ms),
+            },
+            "thresholds_active": {
+                "rms_high": round(self.cfg.thresholds.rms_high, 4),
+                "rms_low": round(self.cfg.thresholds.rms_low, 4),
+                "jitter_high_factor": de.jitter_high_factor,
+                "hfd_high_factor": de.hfd_high_factor,
+                "lag1_oscillation_thresh": de.lag1_oscillation_thresh,
+                "trend_drift_min": de.trend_drift_min,
+                "guardian_min_confidence": de.guardian_min_confidence,
+                "act_min_confidence": de.act_min_confidence,
+            },
+            "lever_changes": lever_changes,
+            "v23_proposed": v23_proposed,
+            "pre": self._mean_metrics(self._diag_pre_buffer),
+            "post": [],
+            "post_max": {"rms_total": 0.0, "jitter": 0.0},
+            "opened_monotonic": time.monotonic(),
+        }
+
+    def _track_outcome(self, snapshot: AnalysisSnapshot) -> None:
+        """Progressione finestra outcome / accumulo media pre. Chiamato a ogni tick
+        PRIMA delle azioni: una finestra aperta accumula i frame post; in assenza di
+        finestra (e fuori warmup) il frame alimenta il buffer pre."""
+        de = self.cfg.diagnostic_engine
+        m = self._outcome_metrics(snapshot)
+        pending = self._outcome_pending
+        if pending is not None:
+            pending["post"].append(m)
+            pending["post_max"]["rms_total"] = max(pending["post_max"]["rms_total"], m["rms_total"])
+            pending["post_max"]["jitter"] = max(pending["post_max"]["jitter"], m["jitter"])
+            if len(pending["post"]) >= de.outcome_window_frames:
+                self._finalize_outcome(pending)
+                self._outcome_pending = None
+            return
+        if self._warmup_frames_left <= 0:
+            self._diag_pre_buffer.append(m)
+            if len(self._diag_pre_buffer) > de.outcome_window_frames:
+                self._diag_pre_buffer.pop(0)
+
+    def _finalize_outcome(self, pending: dict) -> None:
+        """Chiude la finestra: calcola i delta pre->post, scrive il record nel jsonl
+        experimental (via session_logger) e salva l'estratto per la dashboard."""
+        post_mean = self._mean_metrics(pending["post"])
+        pre = pending["pre"]
+        keys = ("rms_total", "jitter", "spike_score")
+        delta = {k: round(post_mean[k] - pre[k], 4) for k in keys}
+        elapsed = time.monotonic() - pending["opened_monotonic"]
+        record = {
+            "schema_version": 1,
+            "ts_utc": pending["ts_utc"],
+            "mode": pending["mode"],
+            "event": pending["event"],
+            "action_kind": pending["action_kind"],
+            "diagnosis": pending["diagnosis"],
+            "metrics_at_decision": pending["metrics_at_decision"],
+            "thresholds_active": pending["thresholds_active"],
+            "lever_changes": pending["lever_changes"],
+            "v23_proposed": pending["v23_proposed"],
+            "outcome": {
+                "window_frames": self.cfg.diagnostic_engine.outcome_window_frames,
+                "elapsed_s": round(elapsed, 1),
+                "pre": {k: round(pre[k], 4) for k in keys},
+                "post": {k: round(post_mean[k], 4) for k in keys},
+                "post_max": {k: round(v, 4) for k, v in pending["post_max"].items()},
+                "delta": delta,
+            },
+        }
+        if self.session_logger is not None:
+            try:
+                self.session_logger.log_experimental(record)
+            except Exception as e:
+                logger.warning("Impossibile loggare experimental outcome: %s", e)
+        self._last_outcome = {
+            "event": pending["event"],
+            "action_kind": pending["action_kind"],
+            "state": pending["diagnosis"].get("state"),
+            "lever_changes": pending["lever_changes"],
+            "v23_proposed": pending["v23_proposed"],
+            "delta": delta,
+            "ts_utc": pending["ts_utc"],
+        }
+
+    # ----- Modalita': transizione pulita ---------------------------------- #
+
+    def set_diagnostic_mode(self, target: str) -> dict:
+        """Switcher dashboard. "off" = kill switch (sempre permesso) -> v2.3 pura.
+        "jitter"/"guardian" = attivazione/cambio, permessi solo se
+        allow_dashboard_mode_switch. Ogni cambio passa per la transizione pulita."""
+        target = (target or "").strip().lower()
+        de = self.cfg.diagnostic_engine
+
+        if target == "off":
+            de.enabled = False
+            logger.info("[diagnostic_engine] OFF (kill switch) -> v2.3 pura")
+            self._apply_mode_transition()
+            return {"mode": "off"}
+
+        if target not in ("jitter", "guardian"):
+            logger.warning("[diagnostic_engine] target modalita' '%s' ignoto", target)
+            return {"mode": de.mode if de.enabled else "off", "error": "unknown_mode"}
+
+        if not de.allow_dashboard_mode_switch:
+            logger.warning(
+                "[diagnostic_engine] attivazione '%s' rifiutata: "
+                "allow_dashboard_mode_switch=false", target,
+            )
+            return {"mode": de.mode if de.enabled else "off", "error": "not_allowed"}
+
+        de.enabled = True
+        de.mode = target
+        if self.diagnostic_engine is None:
+            self.diagnostic_engine = self._make_diagnostic_engine()
+        logger.info("[diagnostic_engine] modalita' -> %s", target)
+        self._apply_mode_transition()
+        return {"mode": target}
+
+    def _apply_mode_transition(self) -> None:
+        """Transizione pulita tra modalita': leve->baseline, reset analyzer/engine,
+        warmup, finestre outcome svuotate."""
+        self._restore_levers_to_baseline()
+        if self.analyzer is not None:
+            self.analyzer.reset()
+        if self.diagnostic_engine is not None:
+            self.diagnostic_engine.reset()
+        self._warmup_frames_left = self.cfg.diagnostic_engine.warmup_frames_after_switch
+        self._outcome_pending = None
+        self._diag_pre_buffer = []
+        self._diag_last_action = {"ra": 0.0, "dec": 0.0}
+        logger.info(
+            "[diagnostic_engine] transizione pulita: leve->baseline, reset "
+            "analyzer/engine, warmup=%d frame", self._warmup_frames_left,
+        )
+
+    def _restore_levers_to_baseline(self) -> None:
+        """Rilegge aggr/MinMove dalla baseline salvata e li riapplica via _apply,
+        riallineando current_*. Se la baseline e' assente/illeggibile: WARNING e prosegue."""
+        if not self.baseline_path.exists():
+            logger.warning("[diagnostic_engine] baseline assente: skip ripristino leve")
+            return
+        try:
+            baseline = json.loads(self.baseline_path.read_text())
+        except Exception as e:
+            logger.warning("[diagnostic_engine] baseline illeggibile (%s): skip", e)
+            return
+        for axis_state, limits, key in ((self._ra, self.cfg.ra, "ra"),
+                                        (self._dec, self.cfg.dec, "dec")):
+            data = baseline.get(key, {})
+            if data.get("aggr_param") and axis_state.aggr_param:
+                old, new = axis_state.current_aggr, float(data["current_aggr"])
+                if abs(new - old) > 1e-9:
+                    self._apply(axis_state, limits, axis_state.aggr_param, old, new,
+                                "[mode transition] ripristino Aggressivita baseline")
+                axis_state.current_aggr = new
+            if data.get("minmove_param") and axis_state.minmove_param:
+                old, new = axis_state.current_minmove, float(data["current_minmove"])
+                if abs(new - old) > 1e-9:
+                    self._apply(axis_state, limits, axis_state.minmove_param, old, new,
+                                "[mode transition] ripristino MinMove baseline",
+                                is_minmove=True)
+                axis_state.current_minmove = new
 
     # ------------------------------------------------------------------ #
     #  Emergency Routines                                                 #
@@ -980,6 +1488,8 @@ class AdaptiveController:
                     self.last_exposure_action_time = time.monotonic()
                     if self.analyzer is not None:
                         self.analyzer.reset()
+                    if self.diagnostic_engine is not None:
+                        self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
                 actions.append(action)
 
         elif (snapshot.condition != SeeingCondition.LOW_SNR
@@ -999,6 +1509,8 @@ class AdaptiveController:
                 self.last_exposure_action_time = time.monotonic()
                 if self.analyzer is not None:
                     self.analyzer.reset()
+                if self.diagnostic_engine is not None:
+                    self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
             actions.append(action)
 
         return actions
@@ -1068,6 +1580,8 @@ class AdaptiveController:
                         self.last_exposure_action_time = now
                         if self.analyzer is not None:
                             self.analyzer.reset()
+                        if self.diagnostic_engine is not None:
+                            self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
                     actions.append(action)
 
         # ---- Trigger DOWN: BOOSTED_FOR_SEEING → riduzione graduale ----
@@ -1103,6 +1617,8 @@ class AdaptiveController:
                             self.exposure_steps_above_base = 0
                         if self.analyzer is not None:
                             self.analyzer.reset()
+                        if self.diagnostic_engine is not None:
+                            self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
                     actions.append(action)
 
         return actions
@@ -1509,7 +2025,55 @@ class AdaptiveController:
                     else None
                 ),
             },
+            # §31 — Seeing Diagnostic Engine. A motore spento espone solo lo stato
+            # minimo {enabled:false,...} (la dashboard mostra lo switcher su OFF).
+            "diagnostic_engine": (
+                {**self.diagnostic_engine.get_state(),
+                 "allow_dashboard_mode_switch": self.cfg.diagnostic_engine.allow_dashboard_mode_switch,
+                 "last_outcome": self._last_outcome}
+                if self.diagnostic_engine is not None else
+                {"enabled": False,
+                 "mode": self.cfg.diagnostic_engine.mode,
+                 "allow_dashboard_mode_switch": self.cfg.diagnostic_engine.allow_dashboard_mode_switch}
+            ),
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],
+        }
+
+    def diagnostic_summary_context(self) -> dict:
+        """Contesto costante di sessione per il summary.json (§31, formato v2.5-ready).
+        Valutato a close() dal SessionLogger: snapshot dei fattori/soglie del motore +
+        baseline e contatori, per ricostruire offline le decisioni."""
+        from .__about__ import __version__
+        de = self.cfg.diagnostic_engine
+        eng_state = (self.diagnostic_engine.get_state()
+                     if self.diagnostic_engine is not None else None)
+        return {
+            "schema_version": 1,
+            "agent_version": __version__,
+            "setup_profile": self.cfg.setup.profile_name,
+            "pixel_scale_arcsec": round(self.cfg.setup.guide_pixel_scale_arcsec, 3),
+            "guide_algo_ra": {"aggr": self._ra.aggr_param, "minmove": self._ra.minmove_param},
+            "guide_algo_dec": {"aggr": self._dec.aggr_param, "minmove": self._dec.minmove_param},
+            "baseline_rms_median": (round(self._rms_baseline_value, 4)
+                                    if self._rms_baseline_value is not None else None),
+            "diagnostic_engine": {
+                "enabled": de.enabled,
+                "mode": de.mode,
+                "min_frames": de.min_frames,
+                "jitter_high_factor": de.jitter_high_factor,
+                "hfd_high_factor": de.hfd_high_factor,
+                "lag1_oscillation_thresh": de.lag1_oscillation_thresh,
+                "trend_drift_min": de.trend_drift_min,
+                "ema_alpha": de.ema_alpha,
+                "act_min_confidence": de.act_min_confidence,
+                "outcome_window_frames": de.outcome_window_frames,
+                "warmup_frames_after_switch": de.warmup_frames_after_switch,
+                "guardian_min_confidence": de.guardian_min_confidence,
+                "guardian_attenuate_factor": de.guardian_attenuate_factor,
+                "guardian_action_factor": de.guardian_action_factor,
+                "state_counts": (eng_state["counts"] if eng_state else {}),
+                "guardian_counts": (eng_state["guardian_counts"] if eng_state else {}),
+            },
         }
 
     def set_dry_run(self, value: bool) -> None:
