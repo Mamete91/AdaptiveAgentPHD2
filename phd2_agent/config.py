@@ -166,6 +166,37 @@ class LeverOptimizationConfig:
 
 
 @dataclass
+class DiagnosticEngineConfig:
+    """Seeing Diagnostic Engine (§31, Agente v2.4).
+
+    Diagnosi causale del regime (SEEING / OVERCORRECTION / DRIFT / NOMINAL) da
+    jitter + lag-1 + RMS + HFD + trend. `enabled=false` (default) => comportamento
+    identico alla v2.3 (motore non istanziato). Quando enabled, `mode` sceglie tra
+    `jitter` (motore unica autorita' su Aggr/MinMove, CASO 1/2/3 sospesi) e
+    `guardian` (la v2.3 pilota; il motore conferma/attenua/blocca e micro-corregge).
+    """
+    enabled: bool = False          # DEFAULT spento = comportamento identico v2.3
+    mode: str = "guardian"         # "jitter" | "guardian" (usato solo se enabled)
+    # --- soglie diagnosi (relative alle reference EMA) ---
+    min_frames: int = 30
+    jitter_high_factor: float = 1.6
+    hfd_high_factor: float = 1.25
+    lag1_oscillation_thresh: float = -0.35
+    trend_drift_min: float = 0.05
+    ema_alpha: float = 0.1
+    # --- azione (entrambe le modalita') ---
+    act_min_confidence: int = 60
+    outcome_window_frames: int = 15
+    warmup_frames_after_switch: int = 10
+    # --- guardian ---
+    guardian_min_confidence: int = 60      # sotto questa confidence il review CONFERMA sempre
+    guardian_attenuate_factor: float = 0.5 # ampiezza ridotta quando il review ATTENUA una mossa v2.3
+    guardian_action_factor: float = 0.4    # ampiezza delle micro-correzioni proprie di guardian (vs step pieni)
+    # --- UI ---
+    allow_dashboard_mode_switch: bool = False
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -180,6 +211,7 @@ class AgentConfig:
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
     auto_calibration: AutoCalibrationConfig = field(default_factory=AutoCalibrationConfig)
     lever_optimization: LeverOptimizationConfig = field(default_factory=LeverOptimizationConfig)
+    diagnostic_engine: DiagnosticEngineConfig = field(default_factory=DiagnosticEngineConfig)
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -318,6 +350,32 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         cfg.lever_optimization = LeverOptimizationConfig(
             enabled=bool(lo.get("enabled", True)),
             target_factor=float(lo.get("target_factor", 1.0)),
+        )
+
+    # §31 — Seeing Diagnostic Engine (sezione opzionale; assente -> default).
+    # Validazione mode: valore ignoto -> fallback "guardian" con WARNING.
+    if "diagnostic_engine" in raw:
+        de = raw["diagnostic_engine"]
+        mode = str(de.get("mode", "guardian"))
+        if mode not in ("jitter", "guardian"):
+            logger.warning("[diagnostic_engine] mode '%s' ignoto -> guardian", mode)
+            mode = "guardian"
+        cfg.diagnostic_engine = DiagnosticEngineConfig(
+            enabled=bool(de.get("enabled", False)),
+            mode=mode,
+            min_frames=int(de.get("min_frames", 30)),
+            jitter_high_factor=float(de.get("jitter_high_factor", 1.6)),
+            hfd_high_factor=float(de.get("hfd_high_factor", 1.25)),
+            lag1_oscillation_thresh=float(de.get("lag1_oscillation_thresh", -0.35)),
+            trend_drift_min=float(de.get("trend_drift_min", 0.05)),
+            ema_alpha=float(de.get("ema_alpha", 0.1)),
+            act_min_confidence=int(de.get("act_min_confidence", 60)),
+            outcome_window_frames=int(de.get("outcome_window_frames", 15)),
+            warmup_frames_after_switch=int(de.get("warmup_frames_after_switch", 10)),
+            guardian_min_confidence=int(de.get("guardian_min_confidence", 60)),
+            guardian_attenuate_factor=float(de.get("guardian_attenuate_factor", 0.5)),
+            guardian_action_factor=float(de.get("guardian_action_factor", 0.4)),
+            allow_dashboard_mode_switch=bool(de.get("allow_dashboard_mode_switch", False)),
         )
 
     return cfg

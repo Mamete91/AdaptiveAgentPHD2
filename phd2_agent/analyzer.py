@@ -89,6 +89,17 @@ class AnalysisSnapshot:
     implosion_detected: bool = False   # frame garbage (RMS >> reference EMA)
     implosion_suspended: bool = False  # analisi sospesa durante finestra post-implosion
 
+    # --- Seeing Diagnostic Engine (§31, Agente v2.4) ---
+    # Metriche aggiuntive derivate dai dati GuideStep gia' ingeriti (arcsec).
+    # Default retrocompatibili: a motore spento restano a zero e nessuno le legge.
+    jitter_rms: float = 0.0      # sqrt(mean(step_i^2)), step_i = hypot(Δra_raw, Δdec_raw), arcsec
+    jitter_n: int = 0
+    lag1_ra: float = 0.0         # autocorrelazione lag-1 di ra_raw, [-1,1]; <<0 = oscillazione loop
+    lag1_dec: float = 0.0
+    exposure_ms: int = 0         # impostato dal controller per azzerare le ref al cambio esposizione
+    diag_state: str = "INSUFFICIENT_DATA"  # stato diagnosi (impostato dal controller per CSV)
+    diag_confidence: int = 0
+
 
 class StatisticsAnalyzer:
     """
@@ -203,6 +214,18 @@ class StatisticsAnalyzer:
         # Trend (regressione lineare su RA e Dec)
         snap.trend_ra = _linear_trend(ra_vals)
         snap.trend_dec = _linear_trend(dec_vals)
+
+        # Jitter frame-to-frame e autocorrelazione lag-1 (§31, Seeing Diagnostic
+        # Engine). Calcolati sempre dai dati gia' presenti: a motore spento sono
+        # solo campi inerti dello snapshot. Il jitter e' un residuo di loop chiuso
+        # (ambiguo da solo): la diagnosi causale lo combina con HFD e lag-1.
+        if n >= 2:
+            steps = [math.hypot(ra_vals[i] - ra_vals[i - 1], dec_vals[i] - dec_vals[i - 1])
+                     for i in range(1, n)]
+            snap.jitter_n = len(steps)
+            snap.jitter_rms = math.sqrt(sum(s * s for s in steps) / len(steps)) if steps else 0.0
+        snap.lag1_ra = _lag1_autocorr(ra_vals)
+        snap.lag1_dec = _lag1_autocorr(dec_vals)
 
         # RMS implosion detection
         # EMA aggiornata solo su frame validi (no garbage, SNR sufficiente) per
@@ -334,3 +357,15 @@ def _linear_trend(vals: list[float]) -> float:
     num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, vals))
     den = sum((x - mean_x) ** 2 for x in xs)
     return num / den if den != 0 else 0.0
+
+
+def _lag1_autocorr(vals: list[float]) -> float:
+    """Autocorrelazione a lag-1 in [-1,1]. ~ -1: il segno si ribalta ogni frame
+    (oscillazione/over-correzione del loop). ~ +1: deriva correlata. ~0: casuale."""
+    n = len(vals)
+    if n < 3:
+        return 0.0
+    mean = _mean(vals)
+    num = sum((vals[i] - mean) * (vals[i - 1] - mean) for i in range(1, n))
+    den = sum((v - mean) ** 2 for v in vals)
+    return num / den if den > 1e-12 else 0.0
