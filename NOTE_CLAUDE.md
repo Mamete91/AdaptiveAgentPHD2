@@ -1726,3 +1726,83 @@ beta tester devono vedere subito sui valori RMS). `target_factor=1.0` (ferma se 
    leve smettono di muoversi (nessuna azione Aggr UP / MinMove DOWN in `decisions_*.jsonl`).
 2. Se il cielo peggiora (RMS sopra mediana), le leve riprendono il movimento.
 3. Tuning: gate sempre attivo → abbassare `target_factor` (0.9); troppe oscillazioni in cielo buono → alzare (1.1).
+
+---
+
+## 31. Seeing Diagnostic Engine (jitter + lag-1) — modalità JITTER e GUARDIAN — Agente v2.4 (2026-06-08)
+
+### Motivazione
+La v2.3 decide sul solo RMS: sa *quanto* è degradata la guida, non *perché*. Il motore aggiunge due metriche
+ricavate dai dati GuideStep già ingeriti (nessuna RPC nuova, nessun FITS): **jitter** RMS frame-to-frame
+(velocità del movimento residuo) e **autocorrelazione lag-1** di RA/DEC (struttura: <<0 = il segno si ribalta
+ogni frame → oscillazione di loop; >0 = deriva correlata). Combinate con RMS, **HFD** (allargamento stella) e
+trend danno una diagnosi *causale* del regime: SEEING (turbolenza: HFD alto + jitter alto), OVERCORRECTION
+(loop che oscilla: lag-1 fortemente negativo, HFD nella norma), DRIFT (deriva direzionale: trend alto,
+jitter/HFD normali), NOMINAL. Il jitter da solo è ambiguo (residuo di loop chiuso): si decide SEMPRE sulla
+diagnosi combinata. Scartate le ipotesi "shadow" (osservazione senza azione — coincide col motore spento) e
+"ab_alternate" (troppa complessità per la validazione sul campo): due usi netti, `jitter` (ricerca) e
+`guardian` (distribuibile).
+
+### Architettura (file modificati)
+- `phd2_agent/analyzer.py`: `_compute()` calcola `jitter_rms`/`jitter_n` e `lag1_ra`/`lag1_dec`; nuova funzione
+  pura `_lag1_autocorr`; 7 campi default in `AnalysisSnapshot` (retrocompatibili). `_classify` (incl.
+  OSCILLATING/trend) NON modificato: lag-1 è il segnale del motore, separato.
+- `phd2_agent/diagnostic_engine.py` (NUOVO): `SeeingDiagnosticEngine` con reference EMA `_jitter_ref`/`_hfd_ref`,
+  `classify()`→`DiagnosisResult` (stato, confidence provvisoria non calibrata, `LeverProposal` di direzione,
+  `label` IT, `evidence` ✓/◦, booleani grezzi), `review()`→`GuardianVerdict` (CONFIRM/ATTENUATE/BLOCK),
+  `micro_proposal()`, `get_state()`. NON accede mai a `self.client`.
+- `phd2_agent/controller.py`: `_make_diagnostic_engine`/`_init_diagnostic_engine`; `_engine_owns_levers`
+  (jitter) / `_guardian_active`; classify in `evaluate()`; sospensione CASO 1/2/3 in `_evaluate_axis` (solo
+  jitter); `_apply_with_guardian` ai punti `_apply` dei CASO (review + `current_*` solo se applicato);
+  `_evaluate_engine_actions` (jitter), `_guardian_micro_correction`; outcome pre/post
+  (`_open_outcome`/`_track_outcome`/`_finalize_outcome`); `set_diagnostic_mode`/`_apply_mode_transition`/
+  `_restore_levers_to_baseline`; `diagnostic_summary_context`; blocco in `get_status`.
+- `phd2_agent/config.py`: `DiagnosticEngineConfig` + parsing (validazione `mode`, fallback "guardian").
+- `phd2_agent/logger.py`: 11 colonne CSV §31 (incl. `jitter_ref`/`hfd_ref`/`rms_high_active`/`rms_low_active`
+  per lo sweep offline delle soglie), `experimental_<session_id>.jsonl` (`schema_version`,
+  `metrics_at_decision` grezzi+ref, `thresholds_active`, `v23_proposed`, `outcome` pre/post/post_max/delta),
+  summary con blocco `context` + `state_counts`/`guardian_counts`.
+- `server.py`: `POST /config/diagnostic_mode` ("off"/"jitter"/"guardian"). `main.py`: wiring
+  `controller.session_logger`↔`session_logger.bind_controller`; `engine.reset()` ai reset analyzer.
+- `dashboard/`: card "Seeing Diagnostic Engine" (HERO diagnosi colorata + evidenze → azione/esito → dettaglio
+  tecnico collassabile → switcher OFF/GUARDIAN/JITTER). `__about__.py`: 2.3 → 2.4.
+
+### Comportamento
+- **`enabled=false` (default di fabbrica)**: il motore NON è istanziato → comportamento identico alla v2.3
+  (verificato: `_apply_with_guardian` in non-guardian è `_apply` + riallineo `current_*`, bit-identico ai
+  rami CASO della v2.3; suite test verde).
+- **`jitter`**: il motore è unica autorità su Aggr/MinMove. I rami CASO 1/2/3 di `_evaluate_axis` ritornano
+  `[]`. Decide *quando*; il *quanto* resta `[limits]`/cooldown v2.3. DRIFT/UNCERTAIN → nessuna azione; NOMINAL
+  ottimizza solo sopra mediana baseline (§30). Logging azione→esito in `experimental_*.jsonl`.
+- **`guardian`**: la v2.3 pilota. Il motore (a) rivede le mosse leva v2.3: CASO1 in DRIFT → BLOCK, CASO3 aggr↑
+  in OVERCORRECTION → BLOCK, CASO1 MinMove↑ in OVERCORRECTION → ATTENUATE, altrimenti CONFIRM; fail-safe (in
+  dubbio CONFIRM). (b) Fa micro-correzioni proprie ad ampiezza ridotta (`guardian_action_factor`) SOLO dove la
+  v2.3 è ferma nel tick e la diagnosi è confidente SEEING/OVERCORRECTION. Mai mentre la v2.3 agisce; DRIFT
+  escluso.
+- L'esposizione resta SEMPRE gestita dalla v2.3 (§19): il motore non la tocca mai, né backlash/star-lost.
+
+### Limiti / Note
+- Il jitter è un residuo di loop chiuso: ambiguo da solo, sempre combinato con HFD (seeing vs over-correzione)
+  e lag-1 (oscillazione vs deriva). Soglie/confidence sono **provvisorie, non calibrate** (`confidence_calibrated=False`):
+  la dashboard lo segnala. La calibrazione è demandata alla v2.5 (dataset `experimental_*.jsonl` già nel formato).
+- Dipendenza dall'esposizione mitigata azzerando le reference EMA a ogni cambio esposizione (8 punti
+  `analyzer.reset()` ↔ `engine.reset()` paired) e su dither/StartGuiding.
+- `analyzer._classify` (OSCILLATING/trend) NON toccato: due classificatori distinti convivono (v2.5
+  riconcilierà).
+- Guardian è un assistente *attivo* gentile (micro-correzioni nei buchi), non solo una rete passiva di review.
+
+### Validazione
+- `jitter` (Alessandro): analizzare le finestre outcome (pre/post in `experimental_*.jsonl`) negli episodi
+  DRIFT/OVERCORRECTION — NON l'RMS medio aggregato.
+- `guardian` (flotta): nei log `axis="guardian"` verificare BLOCK/ATTENUATE sensati (motivi DRIFT/OVERCORRECTION),
+  le micro-correzioni nei buchi, il fail-safe nei dubbi. Tarare `jitter_high_factor`/`hfd_high_factor`
+  (SEEING spuri), `lag1_oscillation_thresh` (OVERCORRECTION non rilevata), `trend_drift_min` (DRIFT frequente),
+  `guardian_min_confidence`/`guardian_action_factor`.
+- v2.5: eventuale guardian default flotta (`enabled=true`); baseline jitter per-esposizione; auto-valutazione
+  soglie dal dataset; riconciliazione con OSCILLATING/§30.
+
+### Test
+`tests/test_diagnostic_engine.py` (37 test: jitter/lag-1, classify SEEING/OVERCORRECTION/DRIFT/NOMINAL gate/
+INSUFFICIENT, review BLOCK/ATTENUATE/fail-safe, micro, cold-start, bounds, CASO sospesi in jitter,
+set_diagnostic_mode, last_outcome/reset). `tests/test_get_status.py` aggiornato (blocco a motore spento).
+Suite totale: 105 test verdi.

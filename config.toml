@@ -134,3 +134,31 @@ enabled        = true
 # 1.0 = "ferma se RMS <= mediana". 0.9 = piu' conservativo (ferma anche prima).
 # 1.1 = piu' permissivo (lascia esplorare un po' anche sopra mediana).
 target_factor  = 1.0
+
+[diagnostic_engine]
+# §31 (Agente v2.4) — Seeing Diagnostic Engine. Diagnosi causale del regime
+# (SEEING / OVERCORRECTION / DRIFT / NOMINAL) da jitter + lag-1 + RMS + HFD + trend.
+enabled                   = false   # DEFAULT spento = comportamento identico alla v2.3
+# "jitter"   = controllo causale completo: il motore e' UNICA AUTORITA' su Aggr/MinMove (CASO 1/2/3 sospesi) — ricerca
+# "guardian" = assistito: la v2.3 pilota; il motore conferma/attenua/blocca le mosse v2.3 e fa
+#              micro-correzioni proprie ad ampiezza ridotta solo quando la v2.3 e' ferma — distribuibile
+mode                      = "guardian"
+# --- soglie diagnosi (relative alle reference EMA, robuste multi-setup) ---
+min_frames                = 30
+jitter_high_factor        = 1.6
+hfd_high_factor           = 1.25
+lag1_oscillation_thresh   = -0.35
+trend_drift_min           = 0.05
+ema_alpha                 = 0.1
+# --- azione ---
+act_min_confidence        = 60
+outcome_window_frames     = 15
+warmup_frames_after_switch = 10
+# --- guardian ---
+guardian_min_confidence   = 60      # sotto questa confidence il review CONFERMA sempre (fail-safe)
+guardian_attenuate_factor = 0.5     # ampiezza ridotta quando il review ATTENUA una mossa v2.3
+guardian_action_factor    = 0.4     # ampiezza delle micro-correzioni proprie di guardian (frazione degli step)
+# --- UI ---
+# false (flotta) = la dashboard puo' solo spegnere (OFF -> v2.3 puro); true (setup di Alessandro) =
+# la dashboard puo' anche attivare/commutare jitter/guardian (con conferma).
+allow_dashboard_mode_switch = false

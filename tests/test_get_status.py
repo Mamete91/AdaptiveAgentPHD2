@@ -111,6 +111,15 @@ class TestGetStatusNewFields(unittest.TestCase):
         self.assertFalse(gate['ra'])
         self.assertFalse(gate['dec'])
 
+    def test_diagnostic_engine_block_present_when_off(self):
+        # §31 — il blocco diagnostic_engine è presente anche a motore spento
+        # (default), nella forma minima {enabled:false, mode, allow_...}.
+        self.assertIn('diagnostic_engine', self.status)
+        de = self.status['diagnostic_engine']
+        self.assertFalse(de['enabled'])
+        self.assertEqual(de['mode'], 'guardian')
+        self.assertIn('allow_dashboard_mode_switch', de)
+
 
 if __name__ == '__main__':
     unittest.main()

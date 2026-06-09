@@ -20,6 +20,7 @@ Pacchetto_Distribuzione/
 
 # Local Claude Code settings
 .claude/settings.local.json
+.claude/launch.json
 
 # §26: version_info.txt generato da version_info_template.py durante build_dist.py
 version_info.txt

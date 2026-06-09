@@ -35,7 +35,7 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-06-06 (satisfaction gate mediana baseline §30 — Agente v2.3)
+## Stato attuale — aggiornato al 2026-06-08 (Seeing Diagnostic Engine §31 — Agente v2.4)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
@@ -277,7 +277,25 @@ CASO 1 (degradato), CASO 2 (oscillazione), escalation gate §19, esposizione din
 all'eventuale attivazione del path B esposizione. Nuova sezione `[lever_optimization]`
 in `config.toml` (enabled=true, target_factor=1.0). Bump versione Agente v2.2 → v2.3.
 
+### Seeing Diagnostic Engine (jitter + lag-1) — modalità JITTER e GUARDIAN (§31) — IMPLEMENTATA (2026-06-08) — Agente v2.4
+Nuovo modulo `phd2_agent/diagnostic_engine.py`. L'analyzer calcola jitter RMS frame-to-frame e
+autocorrelazione lag-1 (RA/DEC). Il motore combina RMS+HFD+jitter+lag1+trend per classificare il
+regime (SEEING / OVERCORRECTION / DRIFT / NOMINAL), con soglie relative a reference EMA (azzerate al
+cambio esposizione). Due modalità (la vecchia "shadow" è stata eliminata): `jitter` (motore unica
+autorità su Aggr/MinMove, CASO 1/2/3 sospesi — ricerca, logging azione→esito pre/post in
+`experimental_*.jsonl`) e `guardian` (la v2.3 pilota; il motore conferma/attenua/blocca le sue mosse
+e fa micro-correzioni proprie ad ampiezza ridotta — `guardian_action_factor` — solo quando la v2.3 è
+ferma sull'asse; fail-safe; distribuibile). `enabled=false` di default = comportamento identico alla
+v2.3. DRIFT non genera azioni; NOMINAL ottimizza solo sopra mediana baseline (§30). Il motore non
+tocca mai esposizione (§19)/backlash; non accede a `self.client`. Dashboard: switcher OFF/GUARDIAN/
+JITTER (OFF sempre, attivazione gated da `allow_dashboard_mode_switch` + conferma). Vedi NOTE_CLAUDE.md §31.
+
 ## Cosa NON è stato ancora fatto
+
+- Validazione §31: jitter su RC8+CEM70G/Askar+AM5 (esiti negli episodi DRIFT/OVERCORRECTION);
+  guardian su flotta (review sensati, micro-correzioni nei buchi, fail-safe). Tarare le soglie e
+  i fattori guardian. Decidere in v2.5 se guardian diventa default flotta (enabled=true).
+
 
 - Validazione LIVE del satisfaction gate §30 su Alessandro (2-3 sessioni reali con
   baseline finalizzata, almeno una con RMS sotto mediana per verificare gate attivo).

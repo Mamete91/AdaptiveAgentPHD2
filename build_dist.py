@@ -127,6 +127,17 @@ condizioni peggiorano, l'Agente riprende automaticamente ad agire come prima.
 Disattivabile in config.toml con [lever_optimization] enabled = false (torna
 al comportamento v2.2).
 
+NOVITA' v2.4 (Seeing Diagnostic Engine - sperimentale, SPENTO di default):
+L'Agente puo' ora distinguere la CAUSA del degrado della guida - turbolenza
+atmosferica (seeing), sovra-correzione del loop, oppure deriva sistematica -
+combinando jitter frame-to-frame, autocorrelazione e HFD, non solo l'RMS.
+DI FABBRICA E' SPENTO: il comportamento resta IDENTICO alla v2.3. Sulla
+dashboard trovi la card "Seeing Diagnostic Engine" con la diagnosi in tempo
+reale (etichetta colorata + fattori). Per provarlo, imposta in config.toml
+[diagnostic_engine] enabled = true (modalita' "guardian": la logica v2.3
+continua a guidare, il motore ne corregge solo le mosse sbagliate ed e'
+fail-safe). Le soglie sono ancora provvisorie: feedback benvenuto sul gruppo.
+
 FEEDBACK / SEGNALAZIONI:
   Community Telegram: {__contact_telegram__}
 
