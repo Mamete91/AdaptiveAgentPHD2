@@ -30,6 +30,7 @@ import logging
 import os
 import statistics
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum, auto
@@ -42,6 +43,12 @@ from .config import AgentConfig, AxisLimits, ExposureDynamicConfig
 from .diagnostic_engine import GuardianVerdict, SeeingDiagnosticEngine
 
 logger = logging.getLogger(__name__)
+
+# §32 — Recupero MinMove: tolleranza di "calo RMS" per l'anti-windup. NON e' un
+# parametro di taratura ma una guardia contro il rumore della misura: l'RMS su
+# finestra deve scendere di piu' di questo (arcsec) perche' il softening conti come
+# progresso. Sotto questa soglia il calo e' indistinguibile dal rumore.
+_RECOVERY_PROGRESS_EPS = 0.01
 
 
 def _utc_now_iso() -> str:
@@ -201,6 +208,14 @@ class AdaptiveController:
         self.saturated_lock_since: Optional[float] = None
         self.last_saturation_info: Optional[dict] = None
 
+        # §35 — riselezione stella post-aumento esposizione Path B (vedi
+        # _evaluate_pathb_restar). `_pathb_restar_due` = istante (monotonic) dopo cui
+        # fare il check (settle del nuovo tempo); `_pathb_restar_last_time` = ultima
+        # riselezione, per l'anti-flapping.
+        self._pathb_restar_pending: bool = False
+        self._pathb_restar_due: float = 0.0
+        self._pathb_restar_last_time: float = 0.0
+
         # Baseline Guardian
         self.baseline_path = Path("baseline.json")
         # ID setup per identificare baseline cross-setup. Se in config c'e' un
@@ -214,6 +229,11 @@ class AdaptiveController:
         # Stato inizializzato SOLO qui: initialize()/reinitialize() non lo azzerano,
         # cosi' una riconnessione a pixel scale invariata non ricomincia la misura.
         self._rms_baseline_samples: list[float] = []
+        # §33 — baseline sempre formata: finestra rolling di TUTTI i frame SNR-validi
+        # (per il fallback quando NOMINAL non si riempie) + contatore frame visti.
+        self._rms_baseline_all_samples: deque[float] = deque(
+            maxlen=max(1, config.auto_calibration.baseline_fallback_frames))
+        self._baseline_frames_seen: int = 0
         self._rms_baseline_value: Optional[float] = None
         self._rms_baseline_done: bool = False
         # §23: gate di rifiuto + clamp proporzionale
@@ -225,6 +245,15 @@ class AdaptiveController:
         self._baseline_refresh_in_progress: bool = False
         self._last_refresh_action: Optional[str] = None       # "applicato" / "rifiutato" / None
         self._last_refresh_baseline: Optional[float] = None   # baseline misurata nell'ultimo refresh
+
+        # §32 — Recupero MinMove nella banda morta (asimmetria leve §4). Stato globale
+        # (su rms_total): contatore consecutivo del trigger + anti-windup puro-RMS.
+        # Valutato una volta per tick (vedi _update_recovery_state/_finalize_recovery_windup).
+        self._recovery_consec: int = 0                       # tick consecutivi rms_total > soglia
+        self._recovery_anchor_rms: Optional[float] = None    # rms_total all'inizio del run di recupero
+        self._recovery_actions_since_anchor: int = 0         # recuperi applicati dall'ultimo anchor
+        self._recovery_blocked: bool = False                 # anti-windup: softening sospeso
+        self._recovery_applied_this_tick: bool = False       # flag per il bookkeeping per-tick
 
     def _read_setup_id_from_config(self) -> str:
         """Estrae profile_name dal config se presente, altrimenti default."""
@@ -434,6 +463,8 @@ class AdaptiveController:
         """Azzera la baseline RMS: verra' ricalcolata al prossimo periodo stabile.
         Le soglie attive restano agli ultimi valori validi (o TOML) nel frattempo."""
         self._rms_baseline_samples.clear()
+        self._rms_baseline_all_samples.clear()   # §33
+        self._baseline_frames_seen = 0           # §33
         self._rms_baseline_value = None
         self._rms_baseline_done = False
         self._rms_baseline_rejected = False
@@ -450,37 +481,88 @@ class AdaptiveController:
         )
 
     def _update_rms_baseline(self, snap: AnalysisSnapshot) -> None:
-        """Campiona rms_total solo in condizione stabile (NOMINAL, SNR adeguato,
-        no implosion). A finestra piena finalizza la baseline e deriva le soglie."""
+        """Campiona rms_total dai frame SNR-validi (no implosion). Percorso PRIMARIO:
+        i frame NOMINAL formano la baseline come sempre (notti buone invariate). §33 —
+        FALLBACK: se i baseline_window_frames campioni NOMINAL non si accumulano entro
+        baseline_fallback_frames frame SNR-validi, la baseline si forma comunque dalla
+        finestra 'tutti i frame' (stimatore best-fraction). Cosi' la baseline si forma
+        SEMPRE, anche nelle notti brutte dove non esistono 60 frame NOMINAL — requisito
+        di P1: senza riferimento, satisfaction-gate (§30) e RECOVERY (§32) sono inerti."""
         ac = self.cfg.auto_calibration
         if not ac.enabled or self._rms_baseline_done:
             return
-        if (snap.snr_avg is not None and snap.snr_avg >= ac.baseline_min_snr
-                and not snap.implosion_detected
-                and snap.condition == SeeingCondition.NOMINAL):
+        snr_ok = (snap.snr_avg is not None and snap.snr_avg >= ac.baseline_min_snr
+                  and not snap.implosion_detected)
+        if not snr_ok:
+            return
+        # Percorso primario (come sempre): solo frame NOMINAL.
+        if snap.condition == SeeingCondition.NOMINAL:
             self._rms_baseline_samples.append(snap.rms_total)
+        # §33 — finestra rolling di tutti i frame SNR-validi, per il fallback.
+        if ac.baseline_always_form:
+            self._rms_baseline_all_samples.append(snap.rms_total)
+            self._baseline_frames_seen += 1
+        # Finalize: prima il percorso NOMINAL (notti buone), poi il fallback §33.
         if len(self._rms_baseline_samples) >= ac.baseline_window_frames:
             self._finalize_rms_baseline()
+        elif (ac.baseline_always_form
+              and self._baseline_frames_seen >= ac.baseline_fallback_frames
+              and len(self._rms_baseline_all_samples) >= ac.baseline_window_frames):
+            self._finalize_rms_baseline(fallback=True)
 
-    def _finalize_rms_baseline(self) -> None:
-        """Deriva rms_high/rms_low dalla mediana della baseline e aggiorna la config
-        efficace in memoria E l'analyzer (TOML mai riscritto). §23: cap proporzionale +
-        gate rifiuto + floor rms_low. §25: durante refresh ciclico applica la regola
-        tightest-wins (nuova baseline accettata solo se piu' stretta della corrente)."""
+    def _finalize_rms_baseline(self, fallback: bool = False) -> None:
+        """Deriva rms_high/rms_low dalla baseline e aggiorna la config efficace in
+        memoria E l'analyzer (TOML mai riscritto). §23: cap proporzionale + gate
+        rifiuto + floor rms_low. §25: tightest-wins durante il refresh ciclico.
+        §33 (`fallback=True`): baseline dalla finestra 'tutti i frame' con stimatore
+        best-fraction; rifiuto su instabilita'/tetto (NON su valore assoluto basso, una
+        notte brutta reale ha baseline alta ma legittima); cap anti-inversione su
+        rms_low. Il CAP su rms_high resta invariato in ogni caso."""
         ac = self.cfg.auto_calibration
-        new_baseline = statistics.median(self._rms_baseline_samples)
         scale = self.cfg.setup.guide_pixel_scale_arcsec   # scala efficace (PHD2 o TOML fallback)
         prev_baseline = self._rms_baseline_value   # None al primo finalize, valore corrente in refresh
         in_refresh = self._baseline_refresh_in_progress
 
-        # ----- GATE DI RIFIUTO BASELINE (§23) -----
-        reject_threshold = max(ac.baseline_reject_min_arcsec,
-                               ac.baseline_reject_factor * scale)
-        if new_baseline > reject_threshold:
+        # ----- STIMATORE BASELINE -----
+        if fallback:
+            # §33 — mediana del MIGLIOR X% (best fraction) della finestra 'tutti i
+            # frame': "miglior prestazione raggiungibile nelle condizioni correnti".
+            srt = sorted(self._rms_baseline_all_samples)
+            k = max(1, int(len(srt) * ac.baseline_best_fraction))
+            best = srt[:k]
+            new_baseline = statistics.median(best)
+            n_used = len(best)
+            best_mean = statistics.mean(best)
+            best_cov = (statistics.pstdev(best) / best_mean) if best_mean > 1e-9 else 0.0
+        else:
+            new_baseline = statistics.median(self._rms_baseline_samples)
+            n_used = len(self._rms_baseline_samples)
+
+        # ----- GATE DI RIFIUTO BASELINE -----
+        if fallback:
+            # §33 — rifiuto solo su INSTABILITA' (CoV alto = transitorio/spazzatura) o
+            # tetto "guida fondamentalmente rotta"; mai su valore alto-ma-stabile.
+            rejected = (best_cov > ac.baseline_fallback_max_cov
+                        or new_baseline > ac.baseline_fallback_reject_arcsec)
+            reject_desc = (
+                f"instabile (CoV={best_cov:.2f} > {ac.baseline_fallback_max_cov})"
+                if best_cov > ac.baseline_fallback_max_cov
+                else f"oltre tetto guida-rotta ({ac.baseline_fallback_reject_arcsec:.2f}\")"
+            )
+        else:
+            reject_threshold = max(ac.baseline_reject_min_arcsec,
+                                   ac.baseline_reject_factor * scale)
+            rejected = new_baseline > reject_threshold
+            reject_desc = (f"soglia rifiuto = {reject_threshold:.3f}\" = "
+                           f"max({ac.baseline_reject_min_arcsec:.2f}\", "
+                           f"{ac.baseline_reject_factor:.1f} x {scale:.3f}\"/px)")
+
+        if rejected:
             self._rms_baseline_rejected = True
             self._rms_high_cap_active = False
             self._rms_high_cap_value = None
             self._rms_baseline_done = True
+            fb_tag = "fallback, " if fallback else ""
             if in_refresh:
                 # Durante refresh: soglie correnti mantenute, baseline corrente preservata,
                 # esito del refresh = rifiutato; il timer riparte da ora.
@@ -489,19 +571,18 @@ class AdaptiveController:
                 self._baseline_refresh_in_progress = False
                 self._baseline_finalize_time = time.monotonic()
                 logger.warning(
-                    "[autocal] refresh: baseline %.3f\" RIFIUTATA dal gate (> %.3f\"); "
+                    "[autocal] refresh: baseline %.3f\" RIFIUTATA (%s%s); "
                     "soglie correnti mantenute (corrente = %.3f\")",
-                    new_baseline, reject_threshold, prev_baseline if prev_baseline is not None else 0.0,
+                    new_baseline, fb_tag, reject_desc,
+                    prev_baseline if prev_baseline is not None else 0.0,
                 )
             else:
                 # Primo finalize rifiutato: aggiorniamo _rms_baseline_value per il display.
                 self._rms_baseline_value = new_baseline
                 logger.warning(
-                    "[autocal] baseline RMS = %.3f\" RIFIUTATA "
-                    "(soglia rifiuto = %.3f\" = max(%.2f\", %.1f x %.3f\"/px)): "
-                    "sessione non rappresentativa, mantengo rms_high=%.3f\" rms_low=%.3f\"",
-                    new_baseline, reject_threshold,
-                    ac.baseline_reject_min_arcsec, ac.baseline_reject_factor, scale,
+                    "[autocal] baseline RMS = %.3f\" RIFIUTATA (%s%s): "
+                    "mantengo rms_high=%.3f\" rms_low=%.3f\"",
+                    new_baseline, fb_tag, reject_desc,
                     self.cfg.thresholds.rms_high, self.cfg.thresholds.rms_low,
                 )
             return
@@ -526,7 +607,7 @@ class AdaptiveController:
         # ----- APPLICAZIONE (primo finalize OR refresh accettato) -----
         self._rms_baseline_value = new_baseline
 
-        # Clamp proporzionale (§23):
+        # Clamp proporzionale (§23) — il CAP su rms_high NON cambia.
         cap_proporzionale = ac.rms_high_max_factor * scale
         cap_efficace = max(ac.rms_high_min_arcsec,
                            min(ac.rms_high_max_arcsec, cap_proporzionale))
@@ -535,9 +616,17 @@ class AdaptiveController:
         self._rms_high_cap_active = (derived_high > cap_efficace)
         self._rms_high_cap_value = cap_efficace
 
-        # Floor rms_low (§23):
+        # Floor rms_low (§23) + §33 cap anti-inversione (rms_low sempre sotto rms_high,
+        # anche con baseline alta e rms_high cappato: altrimenti rms_low>rms_high rompe
+        # la logica delle bande).
         derived_low = ac.rms_low_factor * new_baseline
         new_low = max(ac.rms_low_min_arcsec, derived_low)
+        inversion_capped = False
+        if ac.baseline_always_form:
+            inv_cap = new_high * ac.rms_low_high_ratio_max
+            if new_low > inv_cap:
+                new_low = inv_cap
+                inversion_capped = True
 
         self.cfg.thresholds.rms_high = new_high
         self.cfg.thresholds.rms_low = new_low
@@ -548,25 +637,28 @@ class AdaptiveController:
         self._rms_baseline_rejected = False
         self._baseline_finalize_time = time.monotonic()   # §25: timer del prossimo refresh
 
+        fb_label = (" [FALLBACK best-%d%%]" % round(ac.baseline_best_fraction * 100)) if fallback else ""
+        low_tag = (" [ANTI-INV]" if inversion_capped
+                   else (" [FLOOR APPLICATO]" if derived_low < ac.rms_low_min_arcsec else ""))
         if in_refresh:
             self._last_refresh_action = "applicato"
             self._last_refresh_baseline = new_baseline
             self._baseline_refresh_in_progress = False
             logger.info(
-                "[autocal] refresh: nuova baseline %.3f\" < corrente %.3f\" -> APPLICATA. "
-                "rms_high=%.3f\"%s rms_low=%.3f\"",
-                new_baseline, prev_baseline,
-                new_high, " [CAP]" if self._rms_high_cap_active else "", new_low,
+                "[autocal] refresh: nuova baseline %.3f\"%s < corrente %.3f\" -> APPLICATA. "
+                "rms_high=%.3f\"%s rms_low=%.3f\"%s",
+                new_baseline, fb_label, prev_baseline if prev_baseline is not None else 0.0,
+                new_high, " [CAP]" if self._rms_high_cap_active else "", new_low, low_tag,
             )
         else:
             logger.info(
-                "[autocal] baseline RMS = %.3f\" su %d frame | "
+                "[autocal] baseline RMS = %.3f\"%s su %d frame | "
                 "cap = %.1f x %.3f\"/px = %.3f\" (efficace dopo bounds = %.3f\") | "
                 "rms_high = %.3f\"%s | rms_low = %.3f\"%s",
-                new_baseline, len(self._rms_baseline_samples),
+                new_baseline, fb_label, n_used,
                 ac.rms_high_max_factor, scale, cap_proporzionale, cap_efficace,
                 new_high, " [CAP APPLICATO]" if self._rms_high_cap_active else "",
-                new_low, " [FLOOR APPLICATO]" if derived_low < ac.rms_low_min_arcsec else "",
+                new_low, low_tag,
             )
 
     def _maybe_start_refresh(self) -> None:
@@ -585,6 +677,8 @@ class AdaptiveController:
         # Avvia il refresh: NON tocchiamo cfg.thresholds ne' analyzer (restano correnti).
         # Azzeriamo i campioni e _rms_baseline_done per riaprire la raccolta (§22 logic).
         self._rms_baseline_samples.clear()
+        self._rms_baseline_all_samples.clear()   # §33: ricomincia anche la finestra fallback
+        self._baseline_frames_seen = 0           # §33
         self._rms_baseline_done = False
         self._baseline_refresh_in_progress = True
         logger.info(
@@ -761,6 +855,29 @@ class AdaptiveController:
     #  Evaluazione principale                                             #
     # ------------------------------------------------------------------ #
 
+    def ingest_frame(self, snapshot: AnalysisSnapshot) -> None:
+        """§34 — hook PER guide-frame (ogni GuideStep), distinto da evaluate() che gira
+        sul tick interval_seconds. Quando per_frame_baseline e' attivo:
+          1. accumula la baseline sui guide-frame REALI (non sui tick da 10s) → il
+             fallback §33 scatta in ~6 min invece di ~30;
+          2. popola exposure_ms (valore reale) e diag_state/confidence (ULTIMO esito
+             valido) sulle righe fuori-tick, così non escono come placeholder
+             (exposure=0 / INSUFFICIENT) che gonfiano le statistiche.
+        NON esegue classify ne' muove leve: quello resta in evaluate() (per-tick).
+        A kill-switch off e' un no-op completo (baseline torna in evaluate, per-tick)."""
+        if not self.cfg.control.per_frame_baseline or not self._initialized:
+            return
+        # exposure reale su OGNI riga loggata
+        snapshot.exposure_ms = int(self.current_exposure_ms or self.base_exposure_ms or 0)
+        # accumulo baseline per guide-frame reale (sostituisce quello in evaluate)
+        self._maybe_start_refresh()
+        self._update_rms_baseline(snapshot)
+        # ultimo stato diagnostico valido per le righe fuori-tick (non placeholder).
+        # Sui tick, evaluate() sovrascrive subito con la diagnosi fresca.
+        if self._current_diag is not None:
+            snapshot.diag_state = self._current_diag.state.name
+            snapshot.diag_confidence = self._current_diag.confidence
+
     def evaluate(self, snapshot: AnalysisSnapshot) -> list[ControlAction]:
         """
         Valuta lo snapshot e ritorna la lista delle azioni eseguite (o simulate).
@@ -771,6 +888,11 @@ class AdaptiveController:
                 return []
 
         actions: list[ControlAction] = []
+
+        # §34 — questo frame e' un tick di valutazione vero (classify + leve), non una
+        # semplice riga di log fuori-tick: marcalo per il logging/replay (% INSUFFICIENT
+        # reale = solo su evaluated==True).
+        snapshot.evaluated = True
 
         self._update_guiding_state(snapshot)
 
@@ -812,8 +934,17 @@ class AdaptiveController:
         # Auto-calibrazione soglie RMS: campiona la baseline PRIMA della logica
         # adattiva (no-op se auto_calibration disabilitata o baseline gia' pronta).
         # §25: prima del campionamento valuta se avviare un refresh ciclico.
-        self._maybe_start_refresh()
-        self._update_rms_baseline(snapshot)
+        # §34: con per_frame_baseline l'accumulo avviene in ingest_frame (per
+        # guide-frame reale → fallback in ~6 min); qui resta solo nel comportamento
+        # storico per-tick (kill-switch off).
+        if not self.cfg.control.per_frame_baseline:
+            self._maybe_start_refresh()
+            self._update_rms_baseline(snapshot)
+
+        # §32 — stato del recupero MinMove (contatore consecutivo + reset del run).
+        # Globale, una volta per tick, dopo l'aggiornamento baseline (la soglia di
+        # recupero e' la mediana corrente).
+        self._update_recovery_state(snapshot)
 
         # §31 — progressione delle finestre outcome aperte e accumulo della media
         # pre-azione. Eseguito PRIMA di qualsiasi azione di questo tick, cosi' una
@@ -824,6 +955,7 @@ class AdaptiveController:
         # Eval emergenza SNR
         if self.cfg.emergency.auto_recovery:
             actions.extend(self._evaluate_exposure(snapshot))
+            actions.extend(self._evaluate_pathb_restar(snapshot))   # §35
             actions.extend(self._evaluate_saturation_timer())
 
         # Valuta RA
@@ -841,6 +973,10 @@ class AdaptiveController:
             snapshot.condition, snapshot,
         )
         actions.extend(dec_actions)
+
+        # §32 — anti-windup del recupero MinMove: una volta per tick, dopo entrambi
+        # gli assi (l'RMS di feedback e' rms_total, non per-asse).
+        self._finalize_recovery_windup(snapshot)
 
         # §31 — azioni del motore. In jitter e' unica autorita' (i CASO 1/2/3 sopra
         # hanno restituito []); in guardian micro-corregge SOLO dove la v2.3 e' ferma
@@ -1028,7 +1164,106 @@ class AdaptiveController:
                                                        snapshot=snapshot)
                     actions.append(action)
 
+        # ---- §32 RECUPERO: banda morta, RMS sopra mediana -> alza MinMove ----------
+        # Complemento speculare del satisfaction gate (§30). Qui (ultimo elif) siamo
+        # per costruzione nella BANDA MORTA: nessun CASO 1/2/3 e' scattato, cioe' rms
+        # non e' > rms_high (CASO 1), non oscilla (CASO 2) e non e' < rms_low (CASO 3).
+        # Se pero' l'RMS d'asse resta sopra la mediana baseline (rms > soglia) per
+        # consecutive_frames tick, la guida e' peggiorata rispetto alla baseline ma non
+        # abbastanza da far scattare CASO 1: alziamo MinMove di un gradino verso la
+        # morbidezza, OLTRE il valore iniziale, fino a minmove_max (floor 0.15 intatto).
+        # Isteresi anti-pompaggio: su solo se rms > mediana, giu' (CASO 3) solo se
+        # rms < rms_low -> tra i due la leva resta ferma. Trigger consecutivo e
+        # anti-windup sono gestiti a livello di tick (_update_recovery_state /
+        # _finalize_recovery_windup). caso="RECOVERY": in guardian la review() lo
+        # CONFERMA (caso ignoto -> CONFIRM), §31 non e' toccato.
+        elif (self.cfg.lever_optimization.minmove_recovery_enabled
+              and not self._recovery_blocked
+              and self._recovery_consec >= thresh.consecutive_frames
+              and axis_state.minmove_param):
+            recovery_threshold = self._recovery_threshold()
+            mm_elapsed = now - axis_state.last_minmove_action_time
+            if (recovery_threshold is not None and rms > recovery_threshold
+                    and mm_elapsed >= minmove_cooldown):
+                old_mm = axis_state.current_minmove
+                new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
+                if new_mm != old_mm:
+                    lo_factor = self.cfg.lever_optimization.minmove_recovery_factor
+                    reason = (
+                        f"Recupero leve: RMS {axis_state.axis.upper()}={rms:.2f}\" sopra "
+                        f"mediana×{lo_factor:.2f} nella banda morta - alzo MinMove "
+                        f"verso la morbidezza"
+                    )
+                    action = self._apply_with_guardian(axis_state, limits,
+                                                       axis_state.minmove_param,
+                                                       old_mm, new_mm, reason,
+                                                       is_minmove=True, caso="RECOVERY",
+                                                       snapshot=snapshot)
+                    actions.append(action)
+                    self._recovery_applied_this_tick = True
+
         return actions
+
+    # ------------------------------------------------------------------ #
+    #  §32 — Recupero MinMove nella banda morta (asimmetria leve §4)        #
+    # ------------------------------------------------------------------ #
+
+    def _recovery_threshold(self) -> Optional[float]:
+        """Soglia di recupero = mediana baseline × minmove_recovery_factor.
+        None se il recupero non e' disponibile (disabilitato, baseline non pronta o
+        rifiutata §23): stessi guard del satisfaction gate §30."""
+        lo = self.cfg.lever_optimization
+        if (not lo.minmove_recovery_enabled
+                or self._rms_baseline_value is None
+                or self._rms_baseline_rejected):
+            return None
+        return self._rms_baseline_value * lo.minmove_recovery_factor
+
+    def _update_recovery_state(self, snapshot: AnalysisSnapshot) -> None:
+        """§32 — aggiorna il contatore consecutivo del trigger di recupero. Globale
+        (su rms_total), una volta per tick prima dei due assi. Quando l'RMS rientra
+        nel corridoio (<= soglia) o il recupero non e' disponibile, chiude il run e
+        azzera lo stato anti-windup: cosi' recupero (su) e CASO 3 (giu') non oscillano
+        e il blocco anti-windup si rilascia quando le condizioni cambiano."""
+        self._recovery_applied_this_tick = False
+        threshold = self._recovery_threshold()
+        if threshold is not None and snapshot.rms_total > threshold:
+            self._recovery_consec += 1
+        else:
+            self._recovery_consec = 0
+            self._recovery_anchor_rms = None
+            self._recovery_actions_since_anchor = 0
+            self._recovery_blocked = False
+
+    def _finalize_recovery_windup(self, snapshot: AnalysisSnapshot) -> None:
+        """§32 — anti-windup puro-RMS, una volta per tick dopo entrambi gli assi.
+        Se in questo tick e' stato applicato un recupero, verifica che il softening
+        stia riducendo l'RMS: ancora il run al primo recupero e, dopo
+        recovery_no_progress_k recuperi senza un calo > _RECOVERY_PROGRESS_EPS rispetto
+        all'anchor, blocca (RMS atmosferico, non lever-fixable -> niente windup verso
+        minmove_max). Se l'RMS cala, ri-ancora e prosegue."""
+        if not self._recovery_applied_this_tick:
+            return
+        rms = snapshot.rms_total
+        k = max(1, self.cfg.lever_optimization.recovery_no_progress_k)
+        if self._recovery_anchor_rms is None:
+            self._recovery_anchor_rms = rms
+            self._recovery_actions_since_anchor = 1
+            return
+        self._recovery_actions_since_anchor += 1
+        if self._recovery_actions_since_anchor >= k:
+            if rms < self._recovery_anchor_rms - _RECOVERY_PROGRESS_EPS:
+                # Il softening sta aiutando: ri-ancora e continua a recuperare.
+                self._recovery_anchor_rms = rms
+                self._recovery_actions_since_anchor = 0
+            else:
+                # K recuperi senza calo dell'RMS: e' atmosferico, fermo il softening.
+                self._recovery_blocked = True
+                logger.info(
+                    "[recovery] anti-windup: %d recuperi senza calo RMS "
+                    "(%.3f\" vs anchor %.3f\") -> softening sospeso",
+                    k, rms, self._recovery_anchor_rms,
+                )
 
     # ------------------------------------------------------------------ #
     #  Seeing Diagnostic Engine (§31) — review, micro, jitter, outcome     #
@@ -1582,6 +1817,12 @@ class AdaptiveController:
                             self.analyzer.reset()
                         if self.diagnostic_engine is not None:
                             self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                        # §35 — programma il check saturazione/riselezione dopo un breve
+                        # settle (il nuovo tempo deve diventare attivo prima del check).
+                        if ed.restar_on_pathb_saturation:
+                            self._pathb_restar_pending = True
+                            self._pathb_restar_due = now + (
+                                ed.pathb_restar_settle_frames * (new_exp / 1000.0))
                     actions.append(action)
 
         # ---- Trigger DOWN: BOOSTED_FOR_SEEING → riduzione graduale ----
@@ -1619,6 +1860,9 @@ class AdaptiveController:
                             self.analyzer.reset()
                         if self.diagnostic_engine is not None:
                             self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                        # §35 — tornando a un'esposizione più bassa la stella non satura
+                        # più: annulla l'eventuale check di riselezione in sospeso.
+                        self._pathb_restar_pending = False
                     actions.append(action)
 
         return actions
@@ -1645,6 +1889,77 @@ class AdaptiveController:
         return (aggr_at_min and mm_at_max
                 and elapsed_aggr >= cooldown
                 and elapsed_mm >= cooldown * 1.5)
+
+    def _evaluate_pathb_restar(self, snapshot: AnalysisSnapshot) -> list[ControlAction]:
+        """§35 — riselezione stella dopo che Path B ha alzato l'esposizione. Se la
+        stella corrente SATURA al nuovo tempo, riseleziona proattivamente la migliore
+        stella NON satura (entro pochi secondi, non i 300s del timer reattivo).
+        Condizionale: agisce SOLO se la stella satura davvero (mai a ogni cambio
+        esposizione). Anti-flapping via cooldown; il timer 300s resta come rete per
+        gli altri casi. Riusa find_best_star + la logica is_saturated esistenti."""
+        ed = self.cfg.exposure_dynamic
+        actions: list[ControlAction] = []
+        if not ed.restar_on_pathb_saturation or not self._pathb_restar_pending:
+            return actions
+        now = time.monotonic()
+        if now < self._pathb_restar_due:
+            return actions   # settle del nuovo tempo ancora in corso
+        self._pathb_restar_pending = False
+        # Anti-flapping: non riselezionare troppo spesso (evita oscillazioni su/giù).
+        if now - self._pathb_restar_last_time < ed.pathb_restar_cooldown_s:
+            return actions
+        # PHD2 deve essere in guida valida per riselezionare.
+        if self.guiding_state in (GuidingState.STAR_LOST, GuidingState.INACTIVE):
+            return actions
+
+        action = ControlAction(
+            timestamp=time.time(), axis="camera", param="pathb_restar",
+            old_value=1.0, new_value=0.0,
+            reason="Path B: verifica saturazione stella al nuovo tempo esposizione",
+            dry_run=self.dry_run,
+        )
+        if self.dry_run:
+            logger.info("[TEST] %s", action)
+            actions.append(action)
+            return actions
+
+        try:
+            from phd2_agent.star_finder import find_best_star
+            filepath = self.client.save_image()
+            if not (filepath and os.path.exists(filepath)):
+                return actions
+            cx, cy, info = find_best_star(filepath)
+            if not info.get("is_saturated"):
+                # B.2.2 — la stella NON satura al nuovo tempo: nessuna riselezione.
+                return actions
+            # Riseleziona la migliore stella NON satura (trade-off saturazione vs SNR).
+            ncx, ncy, ninfo = find_best_star(filepath, prefer_unsaturated=True)
+            if ncx is not None and ncy is not None:
+                self.client.set_lock_position(ncx, ncy)
+                self._pathb_restar_last_time = now
+                self.saturated_lock_since = None      # nuova stella pulita
+                self.last_saturation_info = None
+                action.new_value = 1.0
+                action.reason = (
+                    f"Path B: stella satura al nuovo tempo "
+                    f"(peak={info.get('peak_adu', 0)} ADU) -> riselezionata stella non "
+                    f"satura a ({ncx:.1f},{ncy:.1f}) peak={ninfo.get('peak_adu', 0)} ADU"
+                )
+                logger.info("[LIVE] %s", action)
+            else:
+                # Nessuna alternativa non satura: lascia la rete del timer 300s.
+                self.saturated_lock_since = now
+                self.last_saturation_info = {**info, "cx": cx, "cy": cy,
+                                             "started_at": time.time()}
+                action.reason = (
+                    f"Path B: stella satura (peak={info.get('peak_adu', 0)} ADU) ma "
+                    f"nessuna stella non satura disponibile -> rete timer 300s"
+                )
+                logger.warning("[LIVE] %s", action)
+            actions.append(action)
+        except Exception as e:
+            logger.error("Errore riselezione stella Path B (§35): %s", e)
+        return actions
 
     def _evaluate_saturation_timer(self) -> list[ControlAction]:
         """
@@ -2048,7 +2363,7 @@ class AdaptiveController:
         eng_state = (self.diagnostic_engine.get_state()
                      if self.diagnostic_engine is not None else None)
         return {
-            "schema_version": 1,
+            "schema_version": 3,   # §34: colonna `evaluated`; §36: misura in arcsec (px×scale)
             "agent_version": __version__,
             "setup_profile": self.cfg.setup.profile_name,
             "pixel_scale_arcsec": round(self.cfg.setup.guide_pixel_scale_arcsec, 3),

@@ -105,9 +105,15 @@ def parse_simple_fits(filepath: str) -> np.ndarray:
         return data
 
 
-def find_best_star(filepath: str) -> tuple[float | None, float | None, dict]:
+def find_best_star(filepath: str,
+                   prefer_unsaturated: bool = False) -> tuple[float | None, float | None, dict]:
     """
     Trova la stella migliore in un FITS PHD2.
+
+    Args:
+        prefer_unsaturated: §35 — se True scarta i blob saturi (peak >= soglia) e
+            ritorna la migliore stella NON satura (None,None se non ce ne sono).
+            Usato dalla riselezione Path B per evitare la stella che satura al nuovo tempo.
 
     Returns:
         (cx, cy, info_dict) con:
@@ -150,6 +156,11 @@ def find_best_star(filepath: str) -> tuple[float | None, float | None, dict]:
         for i in range(1, num_features + 1):
             comp_mask = labeled_array == i
             if np.sum(comp_mask) < 3:
+                continue
+
+            # §35 — se richiesto, scarta i blob saturi: vogliamo la migliore stella
+            # NON satura (peak sotto soglia), anche se piu' debole di una satura.
+            if prefer_unsaturated and int(np.max(raw_data[comp_mask])) >= SATURATION_THRESHOLD_ADU:
                 continue
 
             intensity = np.sum(data[comp_mask])

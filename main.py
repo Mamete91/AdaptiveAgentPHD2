@@ -274,15 +274,23 @@ def _event_loop(
                 # Ignoriamo i GuideStep durante il dithering (falsi errori)
                 continue
 
-            snapshot = analyzer.ingest_guide_step(event)
+            # §36 — la misura grezza di PHD2 e' in PIXEL: converti in arcsec all'ingest
+            # con la pixel-scale VIVA (override PHD2 -> reduced/native). Kill-switch
+            # convert_distance_to_arcsec (shipped ON); a OFF passa 1.0 (px grezzi).
+            px_scale = (controller.cfg.setup.guide_pixel_scale_arcsec
+                        if controller.cfg.analyzer.convert_distance_to_arcsec else 1.0)
+            snapshot = analyzer.ingest_guide_step(event, pixel_scale=px_scale)
             actions = []
 
             now = time.monotonic()
-            if (not monitor_only
-                    and now - last_eval >= eval_interval
-                    and analyzer.is_ready):
-                actions = controller.evaluate(snapshot)
-                last_eval = now
+            if not monitor_only and analyzer.is_ready:
+                # §34 — accumulo baseline + popolamento logging per OGNI guide-frame
+                # (no-op se per_frame_baseline è off). La VALUTAZIONE (classify + leve)
+                # resta gated sul tick interval_seconds.
+                controller.ingest_frame(snapshot)
+                if now - last_eval >= eval_interval:
+                    actions = controller.evaluate(snapshot)
+                    last_eval = now
 
             session_logger.log_snapshot(snapshot, actions)
 

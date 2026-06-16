@@ -40,8 +40,8 @@ class SeeingCondition(Enum):
 class FrameData:
     """Dati di un singolo GuideStep."""
     timestamp: float
-    ra_raw: float          # arcsec (raw distance)
-    dec_raw: float         # arcsec
+    ra_raw: float          # arcsec (§36: px da PHD2 × pixel-scale; 1.0 = px grezzi)
+    dec_raw: float         # arcsec (§36: px da PHD2 × pixel-scale; 1.0 = px grezzi)
     ra_duration: float     # ms correzione inviata a RA
     dec_duration: float    # ms correzione inviata a Dec
     snr: float
@@ -99,6 +99,10 @@ class AnalysisSnapshot:
     exposure_ms: int = 0         # impostato dal controller per azzerare le ref al cambio esposizione
     diag_state: str = "INSUFFICIENT_DATA"  # stato diagnosi (impostato dal controller per CSV)
     diag_confidence: int = 0
+    # §34 — True se il frame e' stato VALUTATO (tick interval_seconds: classify+leve);
+    # False = riga loggata fuori-tick (solo accumulo baseline/logging). Permette di
+    # calcolare la % INSUFFICIENT REALE filtrando evaluated==True.
+    evaluated: bool = False
 
 
 class StatisticsAnalyzer:
@@ -127,14 +131,20 @@ class StatisticsAnalyzer:
     #  Ingestione dati                                                     #
     # ------------------------------------------------------------------ #
 
-    def ingest_guide_step(self, event: dict) -> AnalysisSnapshot:
-        """Processa un evento GuideStep e ritorna il nuovo snapshot."""
+    def ingest_guide_step(self, event: dict, pixel_scale: float = 1.0) -> AnalysisSnapshot:
+        """Processa un evento GuideStep e ritorna il nuovo snapshot.
+
+        §36 — RADistanceRaw/DECDistanceRaw da PHD2 sono in PIXEL. `pixel_scale`
+        (arcsec/px, viva, passata dal chiamante) converte la misura grezza in ARCSEC al
+        punto d'ingresso: tutto il derivato (rms, peak, jitter, trend) eredita arcsec e
+        combacia con le soglie (già in arcsec). Default 1.0 = identità (nessuna
+        conversione → comportamento storico)."""
         self._star_lost = False
 
         frame = FrameData(
             timestamp=event.get("Timestamp", time.time()),
-            ra_raw=float(event.get("RADistanceRaw", 0.0)),
-            dec_raw=float(event.get("DECDistanceRaw", 0.0)),
+            ra_raw=float(event.get("RADistanceRaw", 0.0)) * pixel_scale,
+            dec_raw=float(event.get("DECDistanceRaw", 0.0)) * pixel_scale,
             ra_duration=float(event.get("RADuration", 0.0)),
             dec_duration=float(event.get("DECDuration", 0.0)),
             snr=float(event.get("SNR", 0.0)),

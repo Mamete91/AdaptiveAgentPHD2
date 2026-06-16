@@ -138,6 +138,18 @@ reale (etichetta colorata + fattori). Per provarlo, imposta in config.toml
 continua a guidare, il motore ne corregge solo le mosse sbagliate ed e'
 fail-safe). Le soglie sono ancora provvisorie: feedback benvenuto sul gruppo.
 
+NOVITA' v2.5 (Recupero MinMove nella banda morta - ATTIVO di default):
+Prima, una volta sceso al minimo su cielo buono, il MinMove si "congelava"
+e non risaliva piu' quando il cielo peggiorava (vento), a meno di un degrado
+molto forte. Ora, quando l'RMS resta sopra la mediana del cielo migliore
+misurato (baseline) ma non abbastanza da scattare il caso "seeing degradato",
+l'Agente RIALZA gradualmente il MinMove verso una guida piu' morbida, e si
+ferma da solo quando l'RMS rientra o quando ammorbidire non aiuta piu'. Il
+valore minimo di MinMove resta invariato. E' la correzione di un comportamento
+storico, quindi e' ATTIVA di default in modalita' OFF e GUARDIAN (in JITTER
+no). Disattivabile in config.toml con [lever_optimization]
+minmove_recovery_enabled = false (torna al comportamento v2.4).
+
 FEEDBACK / SEGNALAZIONI:
   Community Telegram: {__contact_telegram__}
 

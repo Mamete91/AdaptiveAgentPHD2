@@ -52,6 +52,7 @@ _CSV_FIELDS = [
     "rms_low_active",
     "diag_state",
     "diag_confidence",
+    "evaluated",        # §34: True = frame valutato (tick), False = riga di solo log fuori-tick
     "actions_count",
     "actions_summary",
 ]
@@ -168,6 +169,7 @@ class SessionLogger:
             "rms_low_active": rms_low_active,
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
+            "evaluated": bool(getattr(snapshot, "evaluated", False)),   # §34
             "actions_count": len(actions),
             "actions_summary": actions_summary,
         }
@@ -195,7 +197,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 1,
+            "schema_version": 3,   # §34: colonna `evaluated`; §36: misura RMS/jitter in ARCSEC (px×scale)
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

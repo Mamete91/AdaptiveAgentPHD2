@@ -1806,3 +1806,243 @@ diagnosi combinata. Scartate le ipotesi "shadow" (osservazione senza azione — 
 INSUFFICIENT, review BLOCK/ATTENUATE/fail-safe, micro, cold-start, bounds, CASO sospesi in jitter,
 set_diagnostic_mode, last_outcome/reset). `tests/test_get_status.py` aggiornato (blocco a motore spento).
 Suite totale: 105 test verdi.
+
+## 32. Recupero MinMove nella banda morta (asimmetria leve §4) — Agente v2.5 (2026-06-12)
+
+### Motivazione
+Sintomo storico (v2.2/2.3/2.4, osservato da Alessandro sul campo): MinMove si **congela al floor 0,15 e non
+risale** anche quando dovrebbe ammorbidire (vento). Causa radice confermata sul codice: la catena CASO della
+v2.3 ha **trigger asimmetrici con un'ampia banda morta**. MinMove **scende** quando `rms < rms_low` (CASO 3,
+frequente su cielo buono) ma **risale solo** quando `rms > rms_high` (CASO 1, raro). Tra `rms_low` e `rms_high`
+— la **banda morta** — nessun ramo scatta e la leva resta dov'è (al floor). Quantificato sui log notte 2026-06-11
+(Askar 1,579″/px, GUARDIAN, `session_20260611_003714`): **745/1253 frame (59%) in banda morta**, asimmetria di
+opportunità ~35:1 (663 `consec_low≥5` vs 19 `consec_high≥5`). NON è un bug del §31: precede l'HFD. Riferimento:
+`DESIGN_RATIONALE_LEVER_RESPONSIVENESS.md`.
+
+### Cosa fa (fix minimo, puro-RMS, solo MinMove)
+Aggiunge alla catena CASO un **ramo di recupero** (ultimo `elif` di `_evaluate_axis`, attivo a motore **OFF** e
+in **GUARDIAN**; in **JITTER** la catena è sospesa → fuori scope). È il **complemento speculare del satisfaction
+gate §30**, sulla stessa àncora (mediana baseline): §30 = "se `rms ≤ mediana` non spingere verso la reattività";
+recupero = "se `rms > mediana` persistente nella banda morta, alza MinMove di un gradino verso la morbidezza".
+- **Trigger:** `rms_total > mediana × minmove_recovery_factor` per `consecutive_frames` tick (contatore globale
+  `_recovery_consec`, aggiornato una volta per tick in `_update_recovery_state`).
+- **Azione:** `new_mm = min(minmove_max, old_mm + minmove_step)` — un gradino, OLTRE il valore iniziale, fino a
+  `minmove_max`. Floor `minmove_min=0.15` **invariato** (limite inferiore, mai toccato).
+- **Isteresi anti-pompaggio:** su solo se `rms > mediana`, giù (CASO 3) solo se `rms < rms_low` → tra i due la
+  leva resta ferma; recupero (su) e CASO 3 (giù) non si alternano.
+- **Anti-windup (puro-RMS):** dopo `recovery_no_progress_k` recuperi senza un calo dell'RMS (> `_RECOVERY_PROGRESS_EPS`
+  = 0,01″ rispetto all'anchor del run) ci si **ferma**: quell'RMS è atmosferico, non lever-fixable → niente windup
+  verso `minmove_max`. Se l'RMS cala, si ri-ancora e si prosegue. Gestito in `_finalize_recovery_windup` (una volta
+  per tick, dopo i due assi; l'RMS di feedback è `rms_total`).
+- **Cooldown:** `minmove_cooldown` (1,5× base), come il MinMove-up del CASO 1.
+
+### Decisione di scope: solo MinMove (non Aggression coordinata)
+Scelta **(a) solo MinMove**, non (b) MinMove+Aggression coordinata. Motivi: (1) il kill-switch è **default-on** →
+arriva all'intera flotta (OFF+GUARDIAN) → blast-radius minimo obbligatorio; (2) il `DESIGN_RATIONALE_LEVER_RESPONSIVENESS.md`
+§5bis stesso definisce il fix minimo come "parte sicura, puro-RMS, solo MinMove", e il loop a due leve jitter-aware
+come **design completo fuori scope** (accoppiato al §32 HFD); (3) coordinare due leve verso soft introduce rischio
+di doppio-conteggio/over-softening. L'Aggression ha lo stesso schema di asimmetria (resta alta in banda morta:
+scende solo su CASO 1/2) + passo asimmetrico `aggr_step_down=5/aggr_step_up=2`: la sua correzione è rimandata al
+loop a due leve. `aggr_step_down/up` **non toccati**.
+
+### File modificati
+- `phd2_agent/config.py`: `LeverOptimizationConfig` + 3 chiavi (`minmove_recovery_enabled=true`,
+  `minmove_recovery_factor=1.0`, `recovery_no_progress_k=3`) + parsing retrocompatibile (sezione/chiavi assenti → default).
+- `phd2_agent/controller.py`: costante `_RECOVERY_PROGRESS_EPS`; stato recupero in `__init__`; helper
+  `_recovery_threshold`/`_update_recovery_state`/`_finalize_recovery_windup`; ramo RECOVERY in `_evaluate_axis`
+  (caso `"RECOVERY"` → in guardian `review()` lo CONFERMA, §31 NON toccato); due call per-tick in `evaluate()`.
+- `tests/test_minmove_recovery.py` (NUOVO, 13 test). `replay_minmove_recovery.py` (NUOVO, replay offline).
+- `phd2_agent/__about__.py`: 2.4 → **2.5**.
+
+### Comportamento / retrocompatibilità
+- **`minmove_recovery_enabled=false`** → ramo saltato, comportamento **identico bit-per-bit** alla v2.4.
+- Default-on giustificato (richiesta di Alessandro): correzione di un comportamento base osservato sul campo
+  (non feature sperimentale come l'HFD sampling-aware), confermata da codice+log, migliora simultaneamente OFF e
+  GUARDIAN e tutte le versioni future. Kill-switch sempre presente nel TOML per rollback immediato.
+- **Vincolo di rilascio:** il default-on entra in campo solo dopo replay (fatto) + validazione beta.
+
+### Validazione
+- **Replay obbligatorio** su `session_20260611_003714` (GUARDIAN, mediana 0,7806″, soglia=mediana×1.0):
+  **745 frame in banda morta (59%, coincide con l'analisi del rationale)**, 269 frame eleggibili,
+  **14 risalite MinMove col fix vs 0 oggi** (oggi MinMove risale solo nei 24 frame con `rms>rms_high`); 1 stop
+  anti-windup; MinMove 0,15 → 0,85. Comando: `python replay_minmove_recovery.py <session.csv>`.
+- **Suite:** 118 test verdi (105 preesistenti + 13 nuovi).
+- **Campo (Alessandro):** avviare in guardian, osservare in dashboard/log che MinMove **risale** quando l'RMS sale
+  nella banda morta e non resta incollato a 0,15.
+
+### Limiti / note
+- Solo MinMove: l'Aggression resta col suo schema asimmetrico (rimandata al loop a due leve jitter-aware, §32 HFD).
+- In JITTER il recupero non agisce (catena CASO sospesa): per beneficiarne usare **GUARDIAN** (modalità distribuibile).
+- L'anti-windup è puro-RMS (ferma quando il softening non riduce l'RMS); lo stop "a priori per regime" richiede il
+  segnale jitter (§32 HFD), ed è fuori scope.
+
+## 33. La baseline deve formarsi SEMPRE (prerequisito di P1) — Agente v2.5 (2026-06-13)
+
+### Accertamento
+Notti di seeing brutto con RC8 (montagna, CEM70): l'RMS è genuinamente alto e la **baseline auto-calibrata non si
+forma** → il controllore resta **senza riferimento** → satisfaction-gate (§30), RECOVERY (§32) e tutta la logica P1
+sono **inerti** proprio quando servirebbero. Meccanismo esatto (verificato sul codice + log): NON è il gate di
+rifiuto §23 (è secondario, non viene nemmeno raggiunto), ma il **filtro di campionamento**: la baseline accumulava
+campioni **solo da frame `condition==NOMINAL`** (servono 60), e a guida degradata 60 frame NOMINAL non esistono.
+Conferma notte serena `session_20260613_004934` (RC8 0,508″/px, 3258 frame, SNR ottimo): solo **16 frame NOMINAL** →
+finestra mai riempita → `baseline_rms_median = null`. Riferimento: `PRINCIPIO_CONVERGENZA_PRESTAZIONE.md` (P1).
+
+### Cosa fa (fix sul campionamento, non sul rifiuto)
+- **Percorso NOMINAL invariato** (notti buone: nessuna regressione, bit-identico).
+- **FALLBACK §33** (`controller._update_rms_baseline`): mantiene una finestra rolling di **tutti i frame SNR-validi**
+  (no implosion) e un contatore. Se i 60 campioni NOMINAL non si accumulano entro `baseline_fallback_frames` (180)
+  frame SNR-validi, finalizza dalla finestra "tutti i frame" con stimatore **mediana del miglior X%**
+  (`baseline_best_fraction`=0.33) — la "miglior prestazione raggiungibile nelle condizioni correnti" (P1), NON la
+  mediana di tutto (che sovrastimerebbe).
+- **CAP su rms_high INVARIATO** (`rms_high_max_arcsec=1,00″`): con baseline alta, `rms_high=min(1,3×baseline; 1,00)=1,00″`
+  → l'Agente interviene comunque sopra 1,00″.
+- **Anti-inversione bande** (`_finalize_rms_baseline`): `rms_low ≤ rms_high × rms_low_high_ratio_max` (0,85). Senza
+  questo, una baseline alta dà `rms_low=0,75×baseline > rms_high` cappato → bande invertite (logica rotta). Sana anche
+  un **bug latente preesistente** (baseline ~1,33–1,52″ su RC8 produceva già rms_low>rms_high).
+- **Rifiuto di fallback ridisegnato**: non più su valore assoluto basso (una notte brutta reale ha baseline alta ma
+  legittima), ma su **instabilità** (CoV della best-fraction > `baseline_fallback_max_cov`=0,50 = transitorio/spazzatura)
+  o tetto **"guida fondamentalmente rotta"** (`baseline_fallback_reject_arcsec`=4,0″). Il gate §23 e il refresh
+  tightest-wins (§25) restano per il percorso NOMINAL.
+
+### File modificati
+- `phd2_agent/config.py`: `AutoCalibrationConfig` + 6 chiavi (`baseline_always_form=true` kill-switch,
+  `baseline_fallback_frames=180`, `baseline_best_fraction=0.33`, `rms_low_high_ratio_max=0.85`,
+  `baseline_fallback_max_cov=0.50`, `baseline_fallback_reject_arcsec=4.0`) + parsing retrocompatibile. Valori PROVVISORI.
+- `phd2_agent/controller.py`: import `deque`; stato §33 in `__init__` (finestra all-frames + frames_seen); reset in
+  `_invalidate_rms_baseline` e `_maybe_start_refresh`; `_update_rms_baseline` (campionamento + trigger fallback);
+  `_finalize_rms_baseline(fallback=...)` (stimatore best-fraction, rifiuto instabilità/tetto, cap anti-inversione).
+- `tests/test_baseline_formation.py` (NUOVO, 12 test). `replay_baseline_formation.py` (NUOVO).
+
+### Comportamento / retrocompatibilità
+- **`baseline_always_form=false`** → identico bit-per-bit alla v2.4/§32 (solo NOMINAL, nessun fallback, nessun cap
+  anti-inversione, gate rifiuto §23 classico). Default **true** (correzione di un comportamento base, prerequisito P1).
+- **NIENTE rebuild** in questo step (richiesta di Alessandro): il fix si folderà nel prossimo build v2.5. **Lo ZIP
+  v2.5 già prodotto col §32 è quindi STALE** (non contiene §33): il prossimo build includerà §32+§33. Nessun bump
+  versione (resta 2.5, non ancora deployata).
+
+### Validazione
+- **Replay** su `session_20260613_004934` (serena, baseline oggi=None): **16 frame NOMINAL** (coincide con
+  l'accertamento), OGGI baseline=None → COL FIX **baseline 1,452″ via FALLBACK**, `rms_high=1,000″` (CAP invariato),
+  `rms_low=0,850″` (ANTI-INVERSIONE, < rms_high). Comando: `python replay_baseline_formation.py <session.csv>`.
+- **Suite:** 130 test verdi (118 + 12 nuovi).
+
+### Limite onesto (dall'accertamento)
+Il fix rende l'Agente **non-inerte** (gli dà un riferimento), ma **NON fa guidare bene l'RC8** su queste notti
+(~2″ RMS con ~27% oscillazione anche a cielo sereno): è in gran parte **taratura montatura/guida** (aggressività, PA,
+bilanciamento, PEC) a monte dell'Agente — verificare col Guiding Assistant di PHD2 in parallelo.
+
+## 34. Cadenza loop / baseline reale / pulizia logging INSUFFICIENT — Agente v2.5 (2026-06-15)
+
+### Accertamento (verdetto: CONFERMATO sul codice)
+Sintomi sui log RC8 v2.5 (`session_20260615_000212`, 2149 frame): 78% dei frame loggano `exposure_ms=0` pur con
+SNR/HFD ottimi e sono ~100% `diag_state=INSUFFICIENT_DATA`; la baseline si forma a ~frame 900 (~25-37 min) invece dei
+~180 attesi. **Causa confermata** (`main.py` `_event_loop`): per ogni GuideStep si fa `ingest_guide_step` →
+(gated) `evaluate` → **sempre** `log_snapshot`. Ma `evaluate()` gira solo quando `now - last_eval >= interval_seconds`
+(10s, ~1 frame su 5, main.py L280-287). Dentro `evaluate()`: `exposure_ms` (controller L780/866), `diag_state` (L782/868)
+e l'accumulo baseline `_update_rms_baseline` (L816/902) → quindi le righe FUORI-TICK escono coi **default dello
+snapshot** (`exposure_ms=0`, `diag_state="INSUFFICIENT_DATA"` da analyzer.py L99-100), e il contatore `_baseline_frames_seen`
+(§33) avanza per TICK, non per frame → `baseline_fallback_frames=180` ≈ 180 tick × 10s ≈ 30 min. Replay: l'81%
+INSUFFICIENT crolla a **15% sui soli frame valutati**.
+
+### Cosa fa (fix isolato a cadenza/accumulo/logging — NON tocca la logica diagnostica/leve)
+- Nuovo `controller.ingest_frame(snapshot)` chiamato in `main.py` per **OGNI** guide-frame (quando `analyzer.is_ready`),
+  distinto da `evaluate()` che resta gated sul tick. `ingest_frame` (kill-switch `[control] per_frame_baseline`):
+  (1) accumula la baseline sui guide-frame REALI (`_maybe_start_refresh` + `_update_rms_baseline`) → fallback §33 in
+  ~8 min invece di ~37; (2) popola `exposure_ms` (reale) e `diag_state`/`confidence` (ULTIMO esito valido) sulle righe
+  fuori-tick, niente più placeholder.
+- `evaluate()`: l'accumulo baseline è ora gated `if not per_frame_baseline` (in per-frame avviene in ingest_frame);
+  marca `snapshot.evaluated = True` (il tick vero).
+- Nuova colonna CSV **`evaluated`** (logger) + `schema_version` 1→2: la % INSUFFICIENT reale = INSUFFICIENT su
+  `evaluated==True`. `classify()` e la logica leve NON toccate (restano per-tick, con cooldown).
+
+### File modificati
+`config.py` (`ControlConfig.per_frame_baseline=true` + parsing) · `analyzer.py` (`AnalysisSnapshot.evaluated`) ·
+`controller.py` (`ingest_frame`; baseline gated in `evaluate`; `evaluated=True`; summary `schema_version`=2) ·
+`logger.py` (colonna `evaluated`, `schema_version`=2) · `main.py` (chiama `ingest_frame` per-frame) ·
+`config.toml` (`per_frame_baseline = true`). Test: `tests/test_per_frame_baseline.py` (6). Replay:
+`replay_cadence_artifact.py`.
+
+### Comportamento / validazione
+- Kill-switch `per_frame_baseline` **default true** (shipped ON). A **false**: comportamento storico per-tick
+  (baseline in `evaluate`, righe fuori-tick placeholder) — utile per A/B. `evaluated` è additivo in entrambi i casi.
+- Replay `session_20260615_000212`: 1675/2149 righe fuori-tick (78%); INSUFFICIENT 81% (tutte) → **15% (valutati)**;
+  baseline ~36,7 min (per-tick) → **~8,1 min (per-frame)** (frame ~2,7s, ~4,5 frame/tick). Suite: 145 test verdi.
+
+## 35. Riselezione stella all'aumento esposizione (Path B) — Agente v2.5 (2026-06-15)
+
+### Accertamento (verificato sul codice)
+Quando Path B (`_evaluate_exposure_seeing`) alza l'esposizione (leve sature + DEGRADED_SEEING), NON c'è riselezione
+stella: solo `set_exposure` + reset analyzer/motore. La saturazione è gestita SOLO dal timer reattivo da 300s
+(`_evaluate_saturation_timer`), armato unicamente dall'AI Star Finder su StarLost (controller L1921), **non agganciato
+a Path B**. Effetto: una stella ben esposta a 1s che **satura a 2s** (picco flat-top → centroide in bias) degrada la
+guida per ~5 minuti prima del re-scan — proprio mentre Path B voleva migliorarla.
+
+### Cosa fa (isolato al path esposizione + riselezione)
+- Dopo che Path B ha alzato l'esposizione (UP applicato, non dry_run) si arma un check ritardato: `_pathb_restar_pending`
+  + `_pathb_restar_due = now + pathb_restar_settle_frames × (nuovo_tempo/1000)` (settle perché il nuovo tempo sia attivo).
+  Il ritorno a esposizione più bassa (DOWN) annulla il pending.
+- Nuovo `_evaluate_pathb_restar` (chiamato in `evaluate` dopo `_evaluate_exposure`): a settle scaduto, su immagine
+  FRESCA (`save_image` + `find_best_star`), **se e solo se** la stella corrente è satura (`is_saturated`), riseleziona
+  la migliore stella **NON satura** via `find_best_star(prefer_unsaturated=True)` + `set_lock_position`. Se non esiste
+  alternativa non satura → arma la rete del timer 300s. **Condizionale** (mai a ogni cambio esposizione),
+  **anti-flapping** via `pathb_restar_cooldown_s`, solo in guida valida (no STAR_LOST/INACTIVE).
+- `star_finder.find_best_star(prefer_unsaturated=True)` (NUOVO param): scarta i blob con `peak >= SATURATION_THRESHOLD_ADU`
+  e ritorna la migliore NON satura (None se non ce ne sono). Riusa la logica `is_saturated` esistente.
+
+### File modificati
+`star_finder.py` (param `prefer_unsaturated`) · `controller.py` (stato `_pathb_restar_*`; pending set/clear nei rami
+Path B UP/DOWN; `_evaluate_pathb_restar`; chiamata in `evaluate`) · `config.py` (`ExposureDynamicConfig`:
+`restar_on_pathb_saturation=true`, `pathb_restar_settle_frames=2`, `pathb_restar_cooldown_s=120` + parsing) ·
+`config.toml` (chiavi shipped ON). Test: `tests/test_pathb_restar.py` (9, incl. FITS reale per `prefer_unsaturated`).
+
+### Comportamento
+- Kill-switch `restar_on_pathb_saturation` **default true** (shipped ON). A **false**: comportamento identico
+  all'attuale (solo timer 300s). NON tocca §31/§32/§33/leve/backlash. Il timer 300s resta come rete per gli altri casi.
+- L'anti-flapping (cooldown + riselezione solo su UP-saturazione, mai su DOWN) evita l'oscillazione su/giù della
+  lock position. Suite: 145 test verdi.
+
+## 36. FIX unità: RMS misurato in PIXEL ma trattato come ARCSEC — Agente v2.5 (2026-06-15)
+
+### Bug confermato sul codice (PHD2 + Agente)
+PHD2 espone `RADistanceRaw/DECDistanceRaw = mountOffset.X/Y` in **PIXEL** (`event_server.cpp:2883-2884`); tiene le
+RMS in px e converte in arcsec **solo per il display** (`statswindow.cpp:168` `arcsecs(px, sampling)=px*sampling`;
+`graph.cpp:293` arcsec opt-in). L'Agente legge quei pixel (`analyzer.py:140-141`) in campi commentati "arcsec" e
+**non** li converte (Analyzer senza pixel-scale) → `rms_ra/dec/total`, peak, jitter, trend risultano in **px**. Ma le
+soglie sono in **arcsec** e moltiplicano per `scale`: reject `max(1.50, 3.0×scale)` (controller L554), cap
+`clamp(2.0×scale, 0.70, 1.00)` (L611). → **misura(px) confrontata con soglie(arcsec)**: miscalibrazione di un fattore
+pixel-scale, in direzioni opposte per setup (RC8 0.51 sovrastima ×~2, Askar 1.58 / Mirko 1.76 sottostimano).
+
+### Pre-flight (confermato): nessuna conversione compensativa
+Le uniche moltiplicazioni per `scale` sono concetti DIVERSI, da NON toccare: mapping aggressività (L363 `/scale`,
+L783/794 `×scale`), costruzione soglie (L554/611), e la conversione HFD dedicata di Path B (L1778
+`hfd_avg×scale ≥ hfd_min_arcsec`). Nessun `×scale` sul percorso distanza/RMS. `ingest_star_lost` non legge distanze;
+`server.py` passa `rms_*` senza scala (niente doppia conversione a valle). Unico lettore dei raw: `ingest_guide_step`.
+
+### Cosa fa (isolato alla conversione della MISURA)
+- `analyzer.ingest_guide_step(event, pixel_scale=1.0)`: converte `ra_raw/dec_raw` **× pixel-scale viva** al punto
+  d'ingresso (UNA volta). Tutto il derivato (rms, peak, jitter, trend) eredita arcsec → combacia con le soglie già in
+  arcsec, **nessuna ritaratura**. Default 1.0 = identità (retrocompat test).
+- `main.py`: passa la scala VIVA (`controller.cfg.setup.guide_pixel_scale_arcsec`, override PHD2→reduced/native),
+  gated dal kill-switch `[analyzer] convert_distance_to_arcsec` (a OFF passa 1.0 = px grezzi).
+- HFD lasciato in px (ha la sua conversione in L1778). Soglie/cap/reject/floor e scaling aggressività NON toccati.
+- Commenti "arcsec" dell'Analyzer ora **veri**. `schema_version` 2→**3** (i log post-fix hanno la misura in arcsec:
+  i replay distinguono pre/post).
+
+### File modificati
+`config.py` (`AnalyzerConfig.convert_distance_to_arcsec=true` + AgentConfig + parsing `[analyzer]`) · `analyzer.py`
+(`ingest_guide_step(pixel_scale)`, conversione + commenti) · `main.py` (passa scala viva, gated) · `logger.py` +
+`controller.py` (`schema_version`=3) · `config.toml` (`[analyzer] convert_distance_to_arcsec = true`). Test:
+`tests/test_units_conversion.py` (9). Replay: `replay_units_arcsec.py`.
+
+### Impatto per-setup (dichiarato: sposta i numeri)
+`arcsec = px × scale`. **RC8 (0.51)**: l'RMS visualizzato scende da ~2 a **~1,0"** (guida in realtà buona); finiscono
+i **rifiuti baseline spuri**. **Askar (1.58) / Mirko (1.76)**: gli RMS **salgono** (px < arcsec) → diagnosi più
+severa ma corretta. Le soglie nel TOML restano numericamente identiche (sono già arcsec).
+
+### Validazione
+- Kill-switch `convert_distance_to_arcsec` **default/shipped true** (un fix di correttezza non gira col bug). A
+  **false** = misura px (comportamento buggato) per A/B.
+- Replay `session_20260615_000212` (RC8, scale 0.508): RMS mediano loggato **1.786 px → 0.907" reale**; gate rifiuto
+  1.524" → baseline **PRIMA rifiutata (1.79 px), DOPO accettata (0.91")**. Suite: **154 test verdi** (145 + 9).
+- **P1**: misura e soglie ora nella stessa unità → prerequisito di baseline/cap/RECOVERY/diagnosi. Da verificare in
+  campo che la dashboard RC8 mostri ~1" non ~2".

@@ -33,6 +33,18 @@ dry_run          = false
 interval_seconds = 10
 window_frames    = 30
 cooldown_seconds = 30
+# §34: accumula baseline e popola i campi di logging per OGNI guide-frame (non solo
+# sul tick da interval_seconds). Risolve la baseline lenta (~37 -> ~8 min) e
+# l'"85% INSUFFICIENT" artefatto (in realta' ~15% sui frame valutati).
+per_frame_baseline = true
+
+[analyzer]
+# §36 — FIX UNITÀ: le distanze di guida di PHD2 (RADistanceRaw/DECDistanceRaw) sono in
+# PIXEL, mentre soglie/cap/reject sono in arcsec. Con true l'ingest converte la misura
+# px→arcsec (× pixel-scale viva) così misura e soglie combaciano su tutti i setup
+# (RC8 non sovrastima piu', Askar/Mirko non sottostimano). SHIPPED ON: un fix di
+# correttezza non gira col bug. false = misura in px (buggato), solo per A/B.
+convert_distance_to_arcsec = true
 
 [thresholds]
 rms_high           = 1.20   # iniziale/fallback; sovrascritto dall'auto-calibrazione
@@ -85,6 +97,11 @@ spike_min             = 0.25   # unificato (mediana dei 3 setup: 0.30/0.25/0.20)
 hfd_min_arcsec        = 4.0    # unificato (mediana dei 3 setup: 4.5/4.0/4.0)
 peak_to_rms_ratio_min = 3.0
 nominal_for_seconds   = 60
+# §35: se Path B alza l'esposizione e la stella SATURA al nuovo tempo, riseleziona
+# proattivamente una stella non satura (entro pochi secondi, non i 300s del timer).
+restar_on_pathb_saturation = true   # ATTIVO (shipped ON)
+pathb_restar_settle_frames = 2      # frame (x durata esposizione) di settle prima del check
+pathb_restar_cooldown_s    = 120    # anti-flapping fra riselezioni
 
 [auto_calibration]
 enabled                       = true
@@ -118,6 +135,13 @@ baseline_reject_min_arcsec    = 1.50
 refresh_enabled               = true
 refresh_interval_seconds      = 1800.0     # 30 minuti
 refresh_only_if_tighter       = true
+# --- §33: la baseline si forma SEMPRE, anche a guida degradata (fix notti brutte RC8) ---
+baseline_always_form            = true   # ATTIVO: forma la baseline anche fuori NOMINAL (no piu' None)
+baseline_fallback_frames        = 180    # se 60 frame NOMINAL non arrivano entro questi -> fallback
+baseline_best_fraction          = 0.33   # baseline = mediana del miglior 33% (P1: meglio raggiungibile)
+rms_low_high_ratio_max          = 0.85   # anti-inversione bande: rms_low <= rms_high * questo
+baseline_fallback_max_cov       = 0.50   # rifiuta la finestra se instabile (CoV oltre questo)
+baseline_fallback_reject_arcsec = 4.0    # tetto "guida rotta": rifiuta baseline oltre
 
 [lever_optimization]
 # §30 (Agente v2.3) — Satisfaction gate sul ramo "guida ottima" del controller.
@@ -134,11 +158,15 @@ enabled        = true
 # 1.0 = "ferma se RMS <= mediana". 0.9 = piu' conservativo (ferma anche prima).
 # 1.1 = piu' permissivo (lascia esplorare un po' anche sopra mediana).
 target_factor  = 1.0
+# --- §32: recupero MinMove nella banda morta (anti "leva incollata al floor", OFF/GUARDIAN) ---
+minmove_recovery_enabled      = true   # ATTIVO: MinMove risale quando rms entra nella banda morta
+minmove_recovery_factor       = 1.0    # recupera finche' rms > mediana baseline * questo
+recovery_no_progress_k        = 3      # anti-windup: stop dopo K recuperi senza calo RMS
 
 [diagnostic_engine]
 # §31 (Agente v2.4) — Seeing Diagnostic Engine. Diagnosi causale del regime
 # (SEEING / OVERCORRECTION / DRIFT / NOMINAL) da jitter + lag-1 + RMS + HFD + trend.
-enabled                   = false   # DEFAULT spento = comportamento identico alla v2.3
+enabled                   = true    # ATTIVO di default in GUARDIAN (richiesta Alessandro). false = v2.3 puro
 # "jitter"   = controllo causale completo: il motore e' UNICA AUTORITA' su Aggr/MinMove (CASO 1/2/3 sospesi) — ricerca
 # "guardian" = assistito: la v2.3 pilota; il motore conferma/attenua/blocca le mosse v2.3 e fa
 #              micro-correzioni proprie ad ampiezza ridotta solo quando la v2.3 e' ferma — distribuibile
@@ -161,4 +189,4 @@ guardian_action_factor    = 0.4     # ampiezza delle micro-correzioni proprie di
 # --- UI ---
 # false (flotta) = la dashboard puo' solo spegnere (OFF -> v2.3 puro); true (setup di Alessandro) =
 # la dashboard puo' anche attivare/commutare jitter/guardian (con conferma).
-allow_dashboard_mode_switch = false
+allow_dashboard_mode_switch = true

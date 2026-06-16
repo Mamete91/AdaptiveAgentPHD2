@@ -7,6 +7,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# Virtual environment (dipendenza solo-locale, ~239 MB: mai committare)
+.venv/
+
 # Distribution archives
 *.zip
 

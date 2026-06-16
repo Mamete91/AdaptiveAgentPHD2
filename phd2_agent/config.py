@@ -61,6 +61,12 @@ class ControlConfig:
     interval_seconds: float = 10.0
     window_frames: int = 30
     cooldown_seconds: float = 30.0
+    # §34 — accumulo baseline e popolamento dei campi di logging per OGNI guide-frame
+    # (non solo sul tick interval_seconds). Corregge: (a) baseline lenta (contava i tick
+    # da 10s -> ~30 min invece di ~6), (b) righe CSV fuori-tick con placeholder
+    # (exposure_ms=0, diag_state=INSUFFICIENT) che gonfiavano l'"85% INSUFFICIENT".
+    # Default true (shipped ON). A false: comportamento storico per-tick.
+    per_frame_baseline: bool = True
 
 
 @dataclass
@@ -115,6 +121,15 @@ class ExposureDynamicConfig:
     hfd_min_arcsec: float = 4.0
     peak_to_rms_ratio_min: float = 3.0
     nominal_for_seconds: float = 60.0
+    # §35 — riselezione stella all'aumento esposizione (Path B). Se, dopo che Path B
+    # ha alzato l'esposizione, la stella corrente SATURA al nuovo tempo, riseleziona
+    # proattivamente una stella non satura (entro pochi secondi, non i 300s del timer).
+    # Default true (shipped ON). pathb_restar_settle_frames = quanti "frame" (× durata
+    # esposizione) attendere che il nuovo tempo sia attivo prima del check.
+    # pathb_restar_cooldown_s = anti-flapping fra riselezioni successive.
+    restar_on_pathb_saturation: bool = True
+    pathb_restar_settle_frames: int = 2
+    pathb_restar_cooldown_s: float = 120.0
 
 
 @dataclass
@@ -142,6 +157,34 @@ class AutoCalibrationConfig:
     refresh_interval_seconds: float = 1800.0     # 30 minuti
     refresh_only_if_tighter: bool = True
 
+    # --- §33 — La baseline deve formarsi SEMPRE (prerequisito di P1) ---
+    # Kill-switch dell'intero fix §33. A OFF: comportamento identico (baseline solo
+    # da frame NOMINAL, mediana di tutti i campioni, gate rifiuto su valore assoluto,
+    # nessun cap su rms_low). A ON (default): aggiunge il FALLBACK di formazione
+    # (cosi' la baseline si forma anche nelle notti brutte, dove non esistono
+    # baseline_window_frames frame NOMINAL), lo stimatore "miglior frazione", il cap
+    # anti-inversione su rms_low e il rifiuto di fallback su instabilita'.
+    # Valori PROVVISORI, da calibrare sui log multi-setup.
+    baseline_always_form: bool = True
+    # Fallback: se i baseline_window_frames campioni NOMINAL non si accumulano entro
+    # questo numero di frame SNR-validi, la baseline si forma dalla finestra "tutti i
+    # frame". Deve superare i frame tipici per riempire NOMINAL su una notte buona
+    # (cosi' le notti buone restano sul percorso NOMINAL, nessuna regressione).
+    baseline_fallback_frames: int = 180
+    # Stimatore di fallback: mediana del MIGLIOR X% della finestra (la "miglior
+    # prestazione raggiungibile nelle condizioni correnti", NON la mediana di tutto
+    # che sovrastimerebbe).
+    baseline_best_fraction: float = 0.33
+    # Anti-inversione bande: rms_low <= ratio × rms_high (con baseline alta e rms_high
+    # cappato a 1.00", impedisce rms_low > rms_high che romperebbe la logica).
+    rms_low_high_ratio_max: float = 0.85
+    # Rifiuto della baseline di FALLBACK (non su valore assoluto basso: una notte
+    # brutta reale ha baseline alta ma legittima). Si rifiuta solo se la best fraction
+    # e' instabile (CoV alto = transitorio/spazzatura) o oltre un tetto "guida
+    # fondamentalmente rotta".
+    baseline_fallback_max_cov: float = 0.50
+    baseline_fallback_reject_arcsec: float = 4.0
+
 
 @dataclass
 class LeverOptimizationConfig:
@@ -163,6 +206,22 @@ class LeverOptimizationConfig:
     # 0.9 = piu' conservativo (ferma anche prima). 1.1 = piu' permissivo (lascia
     # esplorare un po' anche sopra mediana).
     target_factor: float = 1.0
+
+    # --- §32 — Recupero MinMove nella banda morta (asimmetria leve §4) ---
+    # Complemento speculare del satisfaction gate, sulla stessa ancora (mediana
+    # baseline): §30 = "se rms <= mediana non spingere verso la reattivita'";
+    # recupero = "se rms > mediana persistente nella banda morta, alza MinMove
+    # verso la morbidezza". Corregge l'asimmetria storica (banda morta rms_low..
+    # rms_high: MinMove scende su rms<rms_low ma risale solo su rms>rms_high, raro).
+    # enabled=true di DEFAULT: e' la correzione di un comportamento base osservato
+    # sul campo (v2.2/2.3/2.4), non una feature sperimentale. A OFF il comportamento
+    # e' identico bit-per-bit alla v2.3. Floor minmove_min (0.15) NON toccato.
+    minmove_recovery_enabled: bool = True
+    # Corridoio di recupero: si alza MinMove finche' rms > mediana × questo fattore.
+    minmove_recovery_factor: float = 1.0
+    # Anti-windup: dopo K recuperi consecutivi senza calo dell'RMS ci si ferma
+    # (RMS atmosferico, non correggibile dalle leve) -> niente windup verso minmove_max.
+    recovery_no_progress_k: int = 3
 
 
 @dataclass
@@ -197,6 +256,17 @@ class DiagnosticEngineConfig:
 
 
 @dataclass
+class AnalyzerConfig:
+    """Analyzer (§36 — fix unità misura)."""
+    # §36 — Le distanze di guida grezze da PHD2 (RADistanceRaw/DECDistanceRaw) sono in
+    # PIXEL; le soglie/cap/reject sono in arcsec. Con questo flag l'ingest converte la
+    # misura px→arcsec moltiplicando per la pixel-scale viva, così misura e soglie
+    # combaciano su tutti i setup. Default true (SHIPPED ON): un fix di correttezza non
+    # deve girare col bug. A false = comportamento buggato (misura in px), solo per A/B.
+    convert_distance_to_arcsec: bool = True
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -212,6 +282,7 @@ class AgentConfig:
     auto_calibration: AutoCalibrationConfig = field(default_factory=AutoCalibrationConfig)
     lever_optimization: LeverOptimizationConfig = field(default_factory=LeverOptimizationConfig)
     diagnostic_engine: DiagnosticEngineConfig = field(default_factory=DiagnosticEngineConfig)
+    analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -257,6 +328,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             "window_frames", cfg.control.window_frames)
         cfg.control.cooldown_seconds = ctrl.get(
             "cooldown_seconds", cfg.control.cooldown_seconds)
+        cfg.control.per_frame_baseline = bool(ctrl.get(
+            "per_frame_baseline", cfg.control.per_frame_baseline))
 
     # Thresholds
     th_dict = raw.get("thresholds", {})
@@ -321,6 +394,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             hfd_min_arcsec=float(ed.get("hfd_min_arcsec", 4.0)),
             peak_to_rms_ratio_min=float(ed.get("peak_to_rms_ratio_min", 3.0)),
             nominal_for_seconds=float(ed.get("nominal_for_seconds", 60.0)),
+            restar_on_pathb_saturation=bool(ed.get("restar_on_pathb_saturation", True)),
+            pathb_restar_settle_frames=int(ed.get("pathb_restar_settle_frames", 2)),
+            pathb_restar_cooldown_s=float(ed.get("pathb_restar_cooldown_s", 120.0)),
         )
 
     # Auto-calibration (sezione opzionale — default se mancante per retrocompatibilita')
@@ -342,6 +418,12 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             refresh_enabled=bool(a.get("refresh_enabled", True)),
             refresh_interval_seconds=float(a.get("refresh_interval_seconds", 1800.0)),
             refresh_only_if_tighter=bool(a.get("refresh_only_if_tighter", True)),
+            baseline_always_form=bool(a.get("baseline_always_form", True)),
+            baseline_fallback_frames=int(a.get("baseline_fallback_frames", 180)),
+            baseline_best_fraction=float(a.get("baseline_best_fraction", 0.33)),
+            rms_low_high_ratio_max=float(a.get("rms_low_high_ratio_max", 0.85)),
+            baseline_fallback_max_cov=float(a.get("baseline_fallback_max_cov", 0.50)),
+            baseline_fallback_reject_arcsec=float(a.get("baseline_fallback_reject_arcsec", 4.0)),
         )
 
     # §30 — Satisfaction gate (sezione opzionale; assente -> default dataclass)
@@ -350,6 +432,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         cfg.lever_optimization = LeverOptimizationConfig(
             enabled=bool(lo.get("enabled", True)),
             target_factor=float(lo.get("target_factor", 1.0)),
+            minmove_recovery_enabled=bool(lo.get("minmove_recovery_enabled", True)),
+            minmove_recovery_factor=float(lo.get("minmove_recovery_factor", 1.0)),
+            recovery_no_progress_k=int(lo.get("recovery_no_progress_k", 3)),
         )
 
     # §31 — Seeing Diagnostic Engine (sezione opzionale; assente -> default).
@@ -376,6 +461,13 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             guardian_attenuate_factor=float(de.get("guardian_attenuate_factor", 0.5)),
             guardian_action_factor=float(de.get("guardian_action_factor", 0.4)),
             allow_dashboard_mode_switch=bool(de.get("allow_dashboard_mode_switch", False)),
+        )
+
+    # §36 — Analyzer (sezione opzionale; assente -> default = conversione ATTIVA)
+    if "analyzer" in raw:
+        an = raw["analyzer"]
+        cfg.analyzer = AnalyzerConfig(
+            convert_distance_to_arcsec=bool(an.get("convert_distance_to_arcsec", True)),
         )
 
     return cfg

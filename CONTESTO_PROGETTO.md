@@ -35,7 +35,68 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-06-08 (Seeing Diagnostic Engine §31 — Agente v2.4)
+## Stato attuale — aggiornato al 2026-06-15 (FIX unità RMS px→arcsec §36 — Agente v2.5)
+
+### §36 — FIX unità: RMS misurato in PIXEL ma trattato come ARCSEC — Agente v2.5 (fatto, 2026-06-15)
+Bug confermato su codice (PHD2 + Agente): le distanze di guida di PHD2 (`RADistanceRaw/DECDistanceRaw`) sono in PIXEL,
+l'Agente le leggeva come arcsec senza convertirle, ma le soglie/cap/reject sono in arcsec → misura(px) vs soglie(arcsec),
+miscalibrazione di un fattore pixel-scale (RC8 sovrastima ×~2, Askar/Mirko sottostimano). Fix isolato: `ingest_guide_step`
+converte `ra_raw/dec_raw` **× pixel-scale viva** all'ingest (una volta); rms/peak/jitter/trend ereditano arcsec e
+combaciano con le soglie (nessuna ritaratura). HFD invariato (ha già la sua conversione); aggressività/soglie/cap NON
+toccati. Kill-switch `[analyzer] convert_distance_to_arcsec=true` (shipped ON; OFF = px buggato per A/B). `schema_version`
+2→3. Replay RC8 000212: RMS mediano **1.79 px → 0.91" reale**, baseline da **rifiutata→accettata**. 154 test verdi
+(9 nuovi). Prerequisito di tutto (baseline/cap/RECOVERY/diagnosi): misura e soglie ora nella stessa unità. Dettagli:
+NOTE_CLAUDE §36.
+
+## Stato precedente — aggiornato al 2026-06-15 (Cadenza/baseline §34 + Riselezione Path B §35 — Agente v2.5)
+
+### §34 — Cadenza loop / baseline reale / pulizia logging INSUFFICIENT — Agente v2.5 (fatto, 2026-06-15)
+Accertamento CONFERMATO sul codice: `evaluate()` (classify + baseline) gira solo sul tick `interval_seconds` (10s,
+~1 frame su 5), ma il CSV logga ogni guide-frame → le righe fuori-tick escono coi default dello snapshot
+(`exposure_ms=0`, `diag_state=INSUFFICIENT`), e il contatore baseline avanza per tick → ~30 min invece di ~6.
+Fix: nuovo `controller.ingest_frame` chiamato per OGNI guide-frame (kill-switch `[control] per_frame_baseline=true`):
+accumula la baseline sui frame reali (fallback §33 in ~8 min) e popola exposure_ms + ultimo diag_state valido sulle
+righe fuori-tick; `evaluate()` marca `evaluated=True` (nuova colonna CSV, `schema_version` 1→2). `classify`/leve NON
+toccati (restano per-tick). Replay `session_20260615_000212`: INSUFFICIENT 81%→**15% sui frame valutati**, baseline
+~37→**~8 min**. Dettagli: NOTE_CLAUDE §34.
+
+### §35 — Riselezione stella all'aumento esposizione (Path B) — Agente v2.5 (fatto, 2026-06-15)
+Quando Path B alza l'esposizione e la stella SATURA al nuovo tempo (picco flat-top → centroide in bias), prima il
+recupero arrivava solo dopo il timer 300s. Ora, dopo un breve settle, su immagine fresca si verifica la saturazione e
+— **solo se satura** — si riseleziona la migliore stella NON satura (`find_best_star(prefer_unsaturated=True)` +
+`set_lock_position`), con anti-flapping (cooldown) e solo in guida valida. Kill-switch
+`[exposure_dynamic] restar_on_pathb_saturation=true` (shipped ON; a OFF = solo timer 300s). NON tocca §31/§32/§33/leve.
+145 test verdi (15 nuovi: `test_per_frame_baseline.py`, `test_pathb_restar.py`). Dettagli: NOTE_CLAUDE §35.
+
+### §33 — La baseline deve formarsi SEMPRE (prerequisito di P1) — Agente v2.5 (fatto, 2026-06-13)
+Sulle notti di seeing brutto (RC8/CEM70) la baseline auto-calibrata non si formava: campionava solo da frame
+`condition==NOMINAL` e a guida degradata non se ne accumulano 60 → baseline `None` → satisfaction-gate (§30),
+RECOVERY (§32) e tutta la logica P1 senza àncora (controllore inerte proprio quando serve). Fix sul campionamento
+(non sul rifiuto): percorso NOMINAL invariato (notti buone bit-identiche) + **fallback** che, se i 60 frame NOMINAL
+non arrivano entro `baseline_fallback_frames`, forma la baseline dalla finestra "tutti i frame" con stimatore
+**mediana del miglior X%** (la miglior prestazione raggiungibile = P1). Il **CAP su rms_high (1,00″) NON si tocca**;
+aggiunto **cap anti-inversione su rms_low** (rms_low < rms_high sempre); rifiuto fallback su **instabilità/tetto**
+invece che su valore assoluto basso. Kill-switch `[auto_calibration] baseline_always_form` (default true; a OFF =
+identico). Replay su log serena 004934: oggi baseline=None → col fix **1,452″** (rms_high resta 1,00″, rms_low 0,85″).
+130 test verdi (12 nuovi in `test_baseline_formation.py`). **Niente rebuild**: si folde nel prossimo build v2.5 →
+**lo ZIP v2.5 col solo §32 è ora stale** (il prossimo conterrà §32+§33). Limite onesto: dà un riferimento ma non
+fa guidare bene l'RC8 (taratura montatura a monte). Dettagli: NOTE_CLAUDE §33.
+
+### §32 — Recupero MinMove nella banda morta (asimmetria leve) — Agente v2.5 (fatto, 2026-06-12)
+Corretta l'asimmetria storica delle leve v2.2/2.3/2.4: MinMove scendeva su `rms<rms_low` (frequente) ma risaliva
+solo su `rms>rms_high` (raro), restando congelato al floor 0,15 nella **banda morta** (`rms_low<rms<rms_high`).
+Aggiunto un ramo di recupero alla catena CASO (motore OFF + GUARDIAN; sospeso in JITTER): se `rms > mediana
+baseline` persiste nella banda morta, MinMove **risale** di un gradino verso la morbidezza (oltre il valore
+iniziale, fino a `minmove_max`; floor 0,15 invariato), con isteresi sulla mediana (no pompaggio) e anti-windup
+puro-RMS (si ferma se il softening non riduce l'RMS). Complemento speculare del satisfaction gate §30.
+Solo MinMove (l'Aggression coordinata è il loop a due leve jitter-aware, fuori scope). Kill-switch
+`[lever_optimization] minmove_recovery_enabled` **default true** (a OFF = identico v2.4). Replay su log
+2026-06-11 GUARDIAN: **14 risalite col fix vs 0 oggi** nei 745 frame di banda morta. 118 test verdi
+(13 nuovi in `test_minmove_recovery.py`). Dettagli: NOTE_CLAUDE §32, `DESIGN_RATIONALE_LEVER_RESPONSIVENESS.md`.
+Rilascio in campo solo dopo validazione beta. Altri item v2.5 (HFD sampling-aware, congelamento INSUFFICIENT)
+restano **su carta**.
+
+## Stato precedente — aggiornato al 2026-06-08 (Seeing Diagnostic Engine §31 — Agente v2.4)
 
 ### Ambiente installato sul PC Windows (fatto)
 - Python 3.12.10 installato via winget
