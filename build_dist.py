@@ -150,6 +150,21 @@ storico, quindi e' ATTIVA di default in modalita' OFF e GUARDIAN (in JITTER
 no). Disattivabile in config.toml con [lever_optimization]
 minmove_recovery_enabled = false (torna al comportamento v2.4).
 
+NOVITA' v2.6 (Motore di diagnosi del seeing finalmente OPERATIVO):
+Il motore che distingue la causa del degrado (turbolenza/sovra-correzione/
+deriva) passa da "dormiente" a operativo, e parte gia' attivo in modalita'
+GUARDIAN. Quattro miglioramenti:
+ - l'HFD della camera di guida (cieco al seeing) non blocca piu' la diagnosi
+   SEEING, che ora si basa sui segnali dinamici reali (jitter + RMS);
+ - il "riferimento di calma" del jitter si forma sempre e presto (dalla
+   miglior prestazione recente), non solo nei rari attimi di cielo perfetto;
+ - quel riferimento SOPRAVVIVE al dithering (un dither sposta la stella, non
+   l'atmosfera): niente piu' azzeramenti continui;
+ - la baseline RMS si forma anche con stelle deboli (SNR basso), non solo a
+   stella brillante.
+Risultato: l'Agente ora "vede" davvero il seeing e misura nella giusta unita'
+(arcsec). Tutto attivo di fabbrica; nulla da configurare.
+
 FEEDBACK / SEGNALAZIONI:
   Community Telegram: {__contact_telegram__}
 

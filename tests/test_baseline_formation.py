@@ -172,14 +172,63 @@ class TestKillSwitchOff(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-#  7. SNR basso non campiona (gate SNR invariato)                              #
+#  7. §40 — la baseline si forma anche a SNR basso (fallback non congelabile)    #
 # --------------------------------------------------------------------------- #
 
 class TestSnrGate(unittest.TestCase):
 
-    def test_low_snr_not_sampled(self):
-        ctrl = _make_ctrl()
-        _feed(ctrl, 40, 1.5, SeeingCondition.DEGRADED_SEEING, snr=5.0)  # SNR < 10
+    def test_below_garbage_floor_not_sampled(self):
+        # Sotto il floor anti-garbage (baseline_fallback_min_snr=3) niente campioni.
+        ctrl = _make_ctrl(baseline_min_snr=6.0, baseline_fallback_min_snr=3.0)
+        _feed(ctrl, 40, 1.5, SeeingCondition.DEGRADED_SEEING, snr=2.0)  # SNR < 3 = garbage
+        self.assertIsNone(ctrl._rms_baseline_value)
+        self.assertEqual(ctrl._baseline_frames_seen, 0)
+
+    def test_low_snr_above_floor_forms_via_fallback(self):
+        # §40: notte genuinamente fioca (SNR 4: sopra floor 3, sotto baseline_min_snr 6)
+        # -> il fallback NON e' congelato, la baseline si forma dai frame meno peggio.
+        ctrl = _make_ctrl(baseline_min_snr=6.0)
+        _feed(ctrl, 30, 1.5, SeeingCondition.DEGRADED_SEEING, snr=4.0)
+        self.assertIsNotNone(ctrl._rms_baseline_value)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 1.5, places=4)
+
+    def test_legacy_gate_freezes_low_snr(self):
+        # Regressione: con baseline_fallback_ignores_snr_gate=false torna il gate stretto
+        # (SNR < baseline_min_snr non campiona nemmeno il fallback).
+        ctrl = _make_ctrl(baseline_min_snr=6.0,
+                          baseline_fallback_ignores_snr_gate=False)
+        _feed(ctrl, 40, 1.5, SeeingCondition.DEGRADED_SEEING, snr=4.0)
+        self.assertIsNone(ctrl._rms_baseline_value)
+        self.assertEqual(ctrl._baseline_frames_seen, 0)
+
+
+# --------------------------------------------------------------------------- #
+#  9. §40 — casi di campo: baseline_min_snr 10->6 sblocca le notti a SNR basso  #
+# --------------------------------------------------------------------------- #
+
+class TestLowSnrBaselineV40(unittest.TestCase):
+
+    def test_field_snr9_nominal_forms_via_primary(self):
+        # Caso 71F: stella a SNR ~9. Col vecchio gate (10) la baseline non si formava;
+        # con baseline_min_snr=6 il percorso NOMINAL la forma.
+        ctrl = _make_ctrl(baseline_min_snr=6.0)
+        _feed(ctrl, 10, 0.68, SeeingCondition.NOMINAL, snr=9.0)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.68, places=4)
+        self.assertFalse(ctrl._rms_baseline_rejected)
+
+    def test_good_night_unchanged(self):
+        # Notte buona (SNR 55) NOMINAL: percorso primario invariato.
+        ctrl = _make_ctrl(baseline_min_snr=6.0)
+        _feed(ctrl, 10, 0.5, SeeingCondition.NOMINAL, snr=55.0)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.5, places=4)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.65, places=4)
+
+    def test_implosion_still_excluded(self):
+        # L'esclusione implosion resta: frame implosi non campionati.
+        ctrl = _make_ctrl(baseline_min_snr=6.0)
+        for _ in range(40):
+            ctrl._update_rms_baseline(
+                _snap(1.5, SeeingCondition.DEGRADED_SEEING, snr=20.0, implosion=True))
         self.assertIsNone(ctrl._rms_baseline_value)
         self.assertEqual(ctrl._baseline_frames_seen, 0)
 

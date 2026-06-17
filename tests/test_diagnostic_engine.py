@@ -58,9 +58,13 @@ def _engine(median=None, rms_high=0.8, rms_low=0.35, **cfg_over) -> SeeingDiagno
 
 
 def _build_refs(eng, jitter=0.1, hfd=2.0, rms=0.2) -> None:
-    """Un frame NOMINAL forma le reference EMA (primo campione = valore)."""
-    eng.classify(_snap(rms_total=rms, hfd_avg=hfd, jitter_rms=jitter,
-                       condition=SeeingCondition.NOMINAL))
+    """Forma le reference del motore con frame calmi. §38: la formazione best-fraction
+    richiede >= refs_warmup_frames campioni; in legacy (refs_always_form=false) basta
+    il primo frame NOMINAL (EMA). Alimentiamo abbastanza frame per coprire entrambi."""
+    n = max(2, getattr(eng.cfg, "refs_warmup_frames", 1))
+    for _ in range(n):
+        eng.classify(_snap(rms_total=rms, hfd_avg=hfd, jitter_rms=jitter,
+                           condition=SeeingCondition.NOMINAL))
 
 
 # --------------------------------------------------------------------------- #
@@ -153,10 +157,14 @@ class TestClassifyDrift(unittest.TestCase):
 
 class TestClassifyNominalGate(unittest.TestCase):
 
-    def test_nominal_updates_refs(self):
+    def test_refs_form_after_warmup(self):
+        # §38: la reference si forma dopo il warmup (best-fraction), non al 1° frame.
         eng = _engine(median=0.25)
         self.assertFalse(eng.refs_ready)
-        eng.classify(_snap(rms_total=0.2, condition=SeeingCondition.NOMINAL))
+        eng.classify(_snap(rms_total=0.2, jitter_rms=0.1,
+                           condition=SeeingCondition.NOMINAL))
+        self.assertFalse(eng.refs_ready)   # 1 campione < refs_warmup_frames
+        _build_refs(eng)                    # alimenta il warmup
         self.assertTrue(eng.refs_ready)
 
     def test_rms_below_median_no_proposal(self):
@@ -340,6 +348,7 @@ def _make_controller(mode="guardian", allow=True, enabled=True, **de_over) -> Ad
 def _warm_refs(ctrl, n=2, jitter=0.1, hfd=2.0) -> None:
     """Forma le reference EMA del motore via classify diretto (senza far agire il
     controller), cosi' le leve restano a 70/0.40 prima del test vero e proprio."""
+    n = max(n, getattr(ctrl.diagnostic_engine.cfg, "refs_warmup_frames", 1))
     for _ in range(n):
         ctrl.diagnostic_engine.classify(
             _snap(rms_total=0.2, jitter_rms=jitter, hfd_avg=hfd,
@@ -544,6 +553,266 @@ class TestOutcomeAndReset(unittest.TestCase):
         self.assertIn("delta", ctrl._last_outcome)
         ctrl.diagnostic_engine.reset()
         self.assertFalse(ctrl.diagnostic_engine.refs_ready)
+
+
+# =========================================================================== #
+#  §37 — HFD declassato a informativo: fuori dal gate SEEING                    #
+# =========================================================================== #
+
+class TestHfdDeclassedSeeing(unittest.TestCase):
+    """SEEING ora si decide sulla firma dinamica (jitter+RMS) senza vincolo HFD."""
+
+    def test_seeing_fires_with_flat_hfd_default(self):
+        # Caso campo: jitter alto + RMS alto, HFD PIATTO (= reference, non alto).
+        # Col gate §31 sarebbe UNCERTAIN; con §37 (default) -> SEEING.
+        eng = _engine()  # hfd_gates_seeing default False
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=0.3, hfd_avg=2.0,
+                               lag1_ra=0.0, lag1_dec=0.0))
+        self.assertEqual(r.state, DiagnosisState.SEEING)
+        self.assertFalse(r.hfd_high)          # HFD non alto: prima bloccava SEEING
+        self.assertTrue(r.jitter_high)
+        self.assertEqual(r.proposal, LeverProposal(aggr=-1, minmove=+1))
+        self.assertGreaterEqual(r.confidence, 60)
+
+    def test_hfd_still_logged_when_informational(self):
+        # hfd_avg/hfd_ref restano nelle metriche (informativi, per CSV + dashboard).
+        eng = _engine()
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=0.3, hfd_avg=2.0))
+        self.assertIn("hfd", r.metrics)
+        self.assertIn("hfd_ref", r.metrics)
+        self.assertGreater(r.metrics["hfd_ref"], 0.0)
+
+    def test_seeing_specific_needs_rms_high(self):
+        # Jitter alto da solo (RMS sotto rms_high) NON e' SEEING.
+        eng = _engine()
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=0.5, jitter_rms=0.3, hfd_avg=2.0,
+                               lag1_ra=0.0, lag1_dec=0.0))
+        self.assertNotEqual(r.state, DiagnosisState.SEEING)
+
+    def test_oscillation_is_overcorrection_not_seeing(self):
+        # RMS alto + jitter alto MA oscillazione -> OVERCORRECTION (SEEING resta specifico).
+        eng = _engine()
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=0.3, hfd_avg=2.0,
+                               lag1_ra=-0.9, lag1_dec=-0.9))
+        self.assertEqual(r.state, DiagnosisState.OVERCORRECTION)
+
+    def test_legacy_gate_blocks_seeing_with_flat_hfd(self):
+        # Regressione: con hfd_gates_seeing=true il gate §31 torna a bloccare SEEING
+        # quando l'HFD e' piatto (comportamento identico al pre-fix).
+        eng = _engine(hfd_gates_seeing=True)
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=0.3, hfd_avg=2.0,
+                               lag1_ra=0.0, lag1_dec=0.0))
+        self.assertNotEqual(r.state, DiagnosisState.SEEING)
+
+    def test_legacy_gate_seeing_with_high_hfd(self):
+        # Regressione: con gate legacy + HFD alto -> SEEING (come §31).
+        eng = _engine(hfd_gates_seeing=True)
+        _build_refs(eng, jitter=0.1, hfd=2.0)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=0.3, hfd_avg=3.0,
+                               lag1_ra=0.0, lag1_dec=0.0))
+        self.assertEqual(r.state, DiagnosisState.SEEING)
+
+
+class TestGuardianSeeingReviewOnly(unittest.TestCase):
+    """In guardian il nuovo SEEING non deve pilotare: resta review (+ micro solo a
+    v2.3 ferma). Nessuna azione spuria in piu' rispetto al baseline."""
+
+    def test_new_seeing_guardian_no_extra_micro_when_v23_acts(self):
+        ctrl = _make_controller(mode="guardian")
+        _warm_refs(ctrl, jitter=0.1, hfd=2.0)
+        # nuovo SEEING (HFD piatto) con v2.3 CASO1 attivo (consec_high)
+        snap = _csnap(1.0, jit=0.3, hfd=2.0, lag=0.0,
+                      cond=SeeingCondition.DEGRADED_SEEING, consec_high=6)
+        ctrl.evaluate(snap)
+        self.assertEqual(ctrl._current_diag.state, DiagnosisState.SEEING)
+        self.assertFalse(ctrl._current_diag.hfd_high)
+        # v2.3 (CASO1) ha agito: aggr 70 -> 65; review CONFIRM, nessuna micro extra.
+        self.assertEqual(ctrl._ra.current_aggr, 65.0)
+        self.assertEqual(ctrl.diagnostic_engine._guardian_counts["micro"], 0)
+
+
+# =========================================================================== #
+#  §38 — jitter_ref/hfd_ref si formano SEMPRE (best-fraction su finestra mobile) #
+# =========================================================================== #
+
+class TestRefsAlwaysForm(unittest.TestCase):
+
+    def test_legacy_ref_stays_none_on_turbulent_stretch(self):
+        # Riproduzione scoperta: con la formazione §31 (EMA solo in NOMINAL+rms<=low),
+        # uno stretch turbolento (rms mai sotto rms_low) lascia jitter_ref None.
+        eng = _engine(refs_always_form=False)
+        for _ in range(120):
+            eng.classify(_snap(rms_total=1.0, jitter_rms=0.9, hfd_avg=2.0,
+                               lag1_ra=0.0, condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertIsNone(eng._jitter_ref)
+        self.assertFalse(eng.refs_ready)
+
+    def test_new_ref_forms_on_turbulent_stretch(self):
+        # §38: stesso stretch turbolento -> la reference si forma comunque (best-fraction).
+        eng = _engine()  # refs_always_form default True
+        for _ in range(40):
+            eng.classify(_snap(rms_total=1.0, jitter_rms=0.9, hfd_avg=2.0,
+                               lag1_ra=0.0, condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertIsNotNone(eng._jitter_ref)
+        self.assertTrue(eng.refs_ready)
+
+    def test_refs_ready_within_warmup(self):
+        # refs_ready diventa vero esattamente al raggiungimento del warmup, non a meta'
+        # sessione.
+        eng = _engine(refs_warmup_frames=10)
+        for _ in range(9):
+            eng.classify(_snap(rms_total=1.0, jitter_rms=0.9,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+            self.assertFalse(eng.refs_ready)
+        eng.classify(_snap(rms_total=1.0, jitter_rms=0.9,
+                           condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertTrue(eng.refs_ready)
+
+    def test_refs_ready_independent_of_hfd(self):
+        # §38 + §37: con HFD assente (hfd_ref resta None) ma jitter_ref formata,
+        # refs_ready e' comunque vero (la prontezza non dipende piu' da hfd_ref).
+        eng = _engine(refs_warmup_frames=5)
+        for _ in range(5):
+            eng.classify(_snap(rms_total=1.0, jitter_rms=0.9, hfd_avg=0.0,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertIsNotNone(eng._jitter_ref)
+        self.assertIsNone(eng._hfd_ref)
+        self.assertTrue(eng.refs_ready)
+
+    def test_payoff_seeing_now_fires(self):
+        # Payoff §37+§38: reference formata su guida mossa -> un frame turbolento
+        # (rms alto + jitter alto, non oscillante) ora diagnostica SEEING.
+        eng = _engine()
+        for _ in range(30):
+            eng.classify(_snap(rms_total=0.6, jitter_rms=0.5, hfd_avg=2.0,
+                               lag1_ra=0.0, condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertTrue(eng.refs_ready)
+        r = eng.classify(_snap(rms_total=1.0, jitter_rms=1.2, hfd_avg=2.0,
+                               lag1_ra=0.0, lag1_dec=0.0))
+        self.assertEqual(r.state, DiagnosisState.SEEING)
+        self.assertFalse(r.hfd_high)   # HFD piatto: irrilevante per la diagnosi
+
+    def test_legacy_mode_forms_ref_on_first_nominal(self):
+        # Isolamento/regressione: refs_always_form=false -> comportamento §31
+        # (1 frame NOMINAL+rms<=low forma le reference via EMA; refs_ready su entrambe).
+        eng = _engine(refs_always_form=False)
+        eng.classify(_snap(rms_total=0.2, jitter_rms=0.1, hfd_avg=2.0,
+                           condition=SeeingCondition.NOMINAL))
+        self.assertIsNotNone(eng._jitter_ref)
+        self.assertIsNotNone(eng._hfd_ref)
+        self.assertTrue(eng.refs_ready)
+
+    def test_nominal_semantics_unchanged_in_new_mode(self):
+        # §38 non tocca NOMINAL/satisfaction-gate: con baseline e rms<=mediana ->
+        # nessuna proposta (soddisfatti); sopra mediana -> proposta gentile.
+        eng = _engine(median=0.25)
+        r_sat = eng.classify(_snap(rms_total=0.20, condition=SeeingCondition.NOMINAL))
+        self.assertEqual(r_sat.state, DiagnosisState.NOMINAL)
+        self.assertIsNone(r_sat.proposal)
+        r_push = eng.classify(_snap(rms_total=0.30, condition=SeeingCondition.NOMINAL))
+        self.assertEqual(r_push.state, DiagnosisState.NOMINAL)
+        self.assertIsNotNone(r_push.proposal)
+
+
+# =========================================================================== #
+#  §39 — i riferimenti di calma SOPRAVVIVONO al dither + logging reset_cause     #
+# =========================================================================== #
+
+class TestResetDiscipline(unittest.TestCase):
+
+    def _ready_engine(self, **over):
+        eng = _engine(refs_warmup_frames=5, **over)
+        for _ in range(5):
+            eng.classify(_snap(rms_total=1.0, jitter_rms=0.9,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertTrue(eng.refs_ready)
+        return eng
+
+    def test_reset_preserves_on_dither_settle_mode(self):
+        for cause in ("dither", "settle", "mode_transition"):
+            eng = self._ready_engine()
+            jref = eng._jitter_ref
+            eng.reset(cause)
+            self.assertTrue(eng.refs_ready, f"{cause} deve PRESERVARE")
+            self.assertEqual(eng._jitter_ref, jref)
+            self.assertGreater(len(eng._jitter_window), 0)
+
+    def test_reset_wipes_on_regime_change(self):
+        for cause in ("exposure_change", "pixel_scale_change", "target_change",
+                      "guiding_restart", "manual"):
+            eng = self._ready_engine()
+            eng.reset(cause)
+            self.assertFalse(eng.refs_ready, f"{cause} deve AZZERARE")
+            self.assertIsNone(eng._jitter_ref)
+            self.assertEqual(len(eng._jitter_window), 0)
+
+    def test_refs_survive_repeated_dither(self):
+        eng = self._ready_engine()
+        jref = eng._jitter_ref
+        for _ in range(5):
+            eng.reset("dither")
+            self.assertTrue(eng.refs_ready)   # niente piu' churn
+        self.assertEqual(eng._jitter_ref, jref)
+
+    def test_legacy_mode_wipes_on_dither(self):
+        # Regressione: preserve_refs_on_dither=false -> dither azzera (comportamento §31).
+        eng = self._ready_engine(preserve_refs_on_dither=False)
+        eng.reset("dither")
+        self.assertFalse(eng.refs_ready)
+        self.assertIsNone(eng._jitter_ref)
+
+    def test_no_poisoning_after_dither(self):
+        # Il transiente post-dither (jitter anomalo) NON degrada jitter_ref: il
+        # best-fraction resta ancorato ai frame calmi gia' in finestra.
+        eng = _engine(refs_warmup_frames=10)
+        for _ in range(30):
+            eng.classify(_snap(rms_total=0.6, jitter_rms=0.5,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+        jref_before = eng._jitter_ref
+        eng.reset("dither")   # preserva refs + finestra
+        for _ in range(3):
+            eng.classify(_snap(rms_total=1.5, jitter_rms=3.0,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+        self.assertLessEqual(eng._jitter_ref, jref_before * 1.2)
+
+    def test_consume_reset_cause_read_and_clear(self):
+        eng = _engine()
+        self.assertEqual(eng.consume_reset_cause(), "")   # nessun reset
+        eng.reset("dither")
+        self.assertEqual(eng.consume_reset_cause(), "dither")
+        self.assertEqual(eng.consume_reset_cause(), "")   # gia' consumata
+
+    def test_reset_cause_logged_in_csv(self):
+        # Integrazione col logger: la colonna reset_cause compare sul primo frame
+        # dopo il reset e schema_version e' 4.
+        import tempfile
+        import csv as _csv
+        from types import SimpleNamespace
+        from phd2_agent.logger import SessionLogger, _CSV_FIELDS
+        self.assertIn("reset_cause", _CSV_FIELDS)
+        eng = _engine(refs_warmup_frames=2)
+        for _ in range(2):
+            eng.classify(_snap(rms_total=0.6, jitter_rms=0.5,
+                               condition=SeeingCondition.DEGRADED_SEEING))
+        eng.reset("dither")
+        with tempfile.TemporaryDirectory() as d:
+            lg = SessionLogger(csv_dir=d)
+            lg.bind_controller(SimpleNamespace(
+                diagnostic_engine=eng,
+                cfg=SimpleNamespace(thresholds=SimpleNamespace(rms_high=0.8, rms_low=0.35))))
+            snap = _snap(rms_total=0.6, jitter_rms=0.5)
+            lg.log_snapshot(snap, [])   # primo frame post-reset
+            lg.log_snapshot(snap, [])   # secondo frame
+            summary = lg.close()
+            self.assertEqual(summary["schema_version"], 4)
+            rows = list(_csv.DictReader(open(lg._csv_path, encoding="utf-8")))
+        self.assertEqual(rows[0]["reset_cause"], "dither")
+        self.assertEqual(rows[1]["reset_cause"], "")
 
 
 if __name__ == "__main__":

@@ -5,15 +5,27 @@ Motore diagnostico causale del regime di guida. Aggiunge due metriche dai dati
 GuideStep gia' ingeriti dall'analyzer — jitter frame-to-frame e autocorrelazione
 a lag-1 — e le combina con RMS, HFD e trend per distinguere la CAUSA del degrado:
 
-    SEEING          turbolenza atmosferica (stella allargata: HFD alto + jitter alto)
-    OVERCORRECTION  il loop oscilla (lag-1 fortemente negativo, HFD nella norma)
-    DRIFT           deriva sistematica (trend elevato, jitter/HFD nella norma)
+    SEEING          turbolenza atmosferica (firma dinamica: RMS alto + jitter alto)
+    OVERCORRECTION  il loop oscilla (lag-1 fortemente negativo)
+    DRIFT           deriva sistematica (trend elevato, jitter nella norma)
     NOMINAL         regime stabile
+
+§37 — l'HFD resta calcolato/loggato (CSV + card dashboard) ma e' DECLASSATO a
+informativo: sulla camera di guida e' cieco al seeing (hfd_avg/hfd_ref ~ 1.0 a
+ogni cielo), quindi non gatea piu' alcuna diagnosi. SEEING ora si decide sulla
+sola firma dinamica jitter+RMS (specifica grazie al `not oscillation`). Il
+kill-switch [diagnostic_engine] hfd_gates_seeing=true ripristina il gate §31.
 
 Si decide SEMPRE sulla diagnosi combinata, mai sul jitter isolato (il jitter e' un
 residuo di loop chiuso, ambiguo da solo). Le soglie "alto/basso" sono relative a
-reference EMA (jitter_ref/hfd_ref) aggiornate solo in NOMINAL e azzerate a ogni
-cambio esposizione via reset().
+reference (jitter_ref/hfd_ref) azzerate a ogni cambio esposizione via reset().
+
+§38 — le reference si formano col BEST-FRACTION su una finestra mobile (i frame piu'
+calmi), come la baseline RMS §33: cosi' jitter_ref si forma sempre e presto, anche
+nelle notti in cui rms quasi mai scende sotto rms_low (col vecchio ramo stretto
+NOMINAL+rms<=rms_low la reference restava None nell'~88% dei frame -> motore "armato
+e muto"). Post-§37 l'HFD e' informativo: refs_ready dipende SOLO da jitter_ref.
+Kill-switch refs_always_form=false ripristina la formazione EMA-in-NOMINAL §31.
 
 Il modulo NON accede a self.client e non invia mai comandi: esprime solo la
 DIREZIONE della mossa (LeverProposal). L'ampiezza e l'invio li decide il controller
@@ -27,6 +39,7 @@ Due usi (decisi dal controller in base a cfg.mode):
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Optional
@@ -103,6 +116,13 @@ class DiagnosisResult:
     metrics: dict = field(default_factory=dict)
 
 
+# §39 — cause di reset che NON cambiano il regime del jitter (dither sposta la
+# stella, non l'atmosfera; la transizione di modalita' non tocca esposizione/cielo):
+# i riferimenti di calma e le finestre §38 vanno PRESERVATI. Tutte le altre cause
+# (exposure_change/pixel_scale_change/target_change/guiding_restart/manual) AZZERANO.
+_PRESERVE_CAUSES: frozenset[str] = frozenset({"dither", "settle", "mode_transition"})
+
+
 def _ema(prev: Optional[float], new: float, alpha: float) -> float:
     """Aggiornamento EMA. Al primo campione adotta il valore corrente."""
     if prev is None:
@@ -130,6 +150,17 @@ class SeeingDiagnosticEngine:
         self._hfd_ref: Optional[float] = None
         self._last: Optional[DiagnosisResult] = None
 
+        # §38: finestra mobile dei campioni recenti (jitter/HFD) da cui derivare le
+        # reference col best-fraction (i frame piu' calmi), come la baseline §33. Si
+        # forma sempre, non solo nel raro ramo rms<=rms_low. maxlen = finestra config.
+        win = max(1, int(getattr(self.cfg, "refs_window_frames", 120)))
+        self._jitter_window: deque[float] = deque(maxlen=win)
+        self._hfd_window: deque[float] = deque(maxlen=win)
+
+        # §39 — causa dell'ultimo reset, in attesa di essere loggata sul prossimo
+        # frame (read-and-clear dal logger via consume_reset_cause()).
+        self._pending_reset_cause: str = ""
+
         self._counts: dict[str, int] = {s.name: 0 for s in DiagnosisState}
         self._guardian_counts: dict[str, int] = {
             "CONFIRM": 0, "ATTENUATE": 0, "BLOCK": 0, "micro": 0,
@@ -139,17 +170,40 @@ class SeeingDiagnosticEngine:
     #  Stato reference                                                     #
     # ------------------------------------------------------------------ #
 
-    def reset(self) -> None:
-        """Azzera le reference EMA (e l'ultimo esito). Chiamato ovunque si chiami
-        analyzer.reset() e in _apply_mode_transition: ogni cambio esposizione o
-        di modalita' riparte da reference pulite."""
-        self._jitter_ref = None
-        self._hfd_ref = None
+    def reset(self, cause: str = "manual") -> None:
+        """Reset del motore, con la CAUSA (§39). L'ultimo esito si azzera sempre
+        (dopo un transiente la diagnosi precedente e' stale). I RIFERIMENTI di calma
+        (_jitter_ref/_hfd_ref + finestre §38) si azzerano solo se la causa cambia il
+        REGIME del jitter: dither/settle/mode_transition lo PRESERVANO (un dither non
+        tocca l'atmosfera), cambio esposizione/pixel-scale/target/restart lo AZZERANO.
+        La causa viene comunque registrata per il logging (consume_reset_cause()).
+        Kill-switch preserve_refs_on_dither=false => azzera sempre (comportamento §31)."""
         self._last = None
+        self._pending_reset_cause = cause
+        preserve = (getattr(self.cfg, "preserve_refs_on_dither", True)
+                    and cause in _PRESERVE_CAUSES)
+        if not preserve:
+            self._jitter_ref = None
+            self._hfd_ref = None
+            self._jitter_window.clear()
+            self._hfd_window.clear()
+
+    def consume_reset_cause(self) -> str:
+        """§39 — ritorna la causa dell'ultimo reset e la azzera (read-and-clear).
+        Chiamata dal logger una volta per frame: la causa compare sul primo frame
+        loggato dopo il reset, vuota altrove."""
+        c = self._pending_reset_cause
+        self._pending_reset_cause = ""
+        return c
 
     @property
     def refs_ready(self) -> bool:
-        """True quando entrambe le reference EMA sono formate."""
+        """True quando la reference del jitter e' formata. §38: post-§37 l'HFD e'
+        informativo, quindi la PRONTEZZA del motore non dipende piu' da hfd_ref
+        (gating su un segnale non informativo era un residuo). Legacy
+        (refs_always_form=false): richiede entrambe le reference EMA (comportamento §31)."""
+        if getattr(self.cfg, "refs_always_form", True):
+            return self._jitter_ref is not None
         return self._jitter_ref is not None and self._hfd_ref is not None
 
     @property
@@ -161,6 +215,39 @@ class SeeingDiagnosticEngine:
     def hfd_ref(self) -> float:
         """Reference EMA dell'HFD (0.0 se non ancora formata). Per CSV/telemetria."""
         return self._hfd_ref if self._hfd_ref is not None else 0.0
+
+    @staticmethod
+    def _best_fraction_stat(window: deque[float], fraction: float) -> Optional[float]:
+        """Statistica robusta del best-fraction: mediana dei valori piu' BASSI
+        (= guida piu' calma) nella finestra. Specchio del §33 sulla baseline RMS.
+        Ritorna None se la finestra e' vuota."""
+        vals = sorted(v for v in window if v > 0.0)
+        if not vals:
+            return None
+        k = max(1, int(len(vals) * fraction))
+        best = vals[:k]
+        n = len(best)
+        mid = n // 2
+        return best[mid] if n % 2 else 0.5 * (best[mid - 1] + best[mid])
+
+    def _update_refs_window(self, snap: AnalysisSnapshot) -> None:
+        """§38: alimenta le finestre mobili a OGNI frame valido e ricalcola le
+        reference dal best-fraction una volta superato il warmup. Cosi' jitter_ref
+        (e hfd_ref, informativo) si formano sempre e presto, anche quando rms quasi
+        mai scende sotto rms_low (notti turbolente). Adattamento continuo."""
+        if snap.jitter_rms > 0.0:
+            self._jitter_window.append(snap.jitter_rms)
+        if snap.hfd_avg > 0.0:
+            self._hfd_window.append(snap.hfd_avg)
+        if len(self._jitter_window) < self.cfg.refs_warmup_frames:
+            return
+        frac = self.cfg.refs_best_fraction
+        jref = self._best_fraction_stat(self._jitter_window, frac)
+        if jref is not None:
+            self._jitter_ref = jref
+        href = self._best_fraction_stat(self._hfd_window, frac)
+        if href is not None:
+            self._hfd_ref = href
 
     def _is_confident(self) -> bool:
         """Diagnosi confidente = refs pronte, stato non incerto, confidence sopra
@@ -193,10 +280,20 @@ class SeeingDiagnosticEngine:
             return self._finalize(DiagnosisState.INSUFFICIENT_DATA, 0,
                                   None, snap, False, False, False, False)
 
+        # §38: formazione robusta delle reference (best-fraction su finestra mobile),
+        # SCOLLEGATA dal ramo stretto rms<=rms_low: si forma sempre, dai frame piu'
+        # calmi disponibili. Aggiornata a ogni frame valido, prima di derivare i
+        # segnali (jitter_high) e prima del ramo NOMINAL. Con refs_always_form=false
+        # resta la formazione stretta §31 (EMA solo in NOMINAL, sotto).
+        if self.cfg.refs_always_form:
+            self._update_refs_window(snap)
+
         # ---- NOMINAL: regime stabile -> aggiorna reference + satisfaction gate ----
         if snap.rms_total <= rms_low and snap.condition == SeeingCondition.NOMINAL:
-            self._jitter_ref = _ema(self._jitter_ref, snap.jitter_rms, self.cfg.ema_alpha)
-            self._hfd_ref = _ema(self._hfd_ref, snap.hfd_avg, self.cfg.ema_alpha)
+            if not self.cfg.refs_always_form:
+                # Formazione §31 (legacy): EMA solo nel ramo NOMINAL stretto.
+                self._jitter_ref = _ema(self._jitter_ref, snap.jitter_rms, self.cfg.ema_alpha)
+                self._hfd_ref = _ema(self._hfd_ref, snap.hfd_avg, self.cfg.ema_alpha)
 
             # §30 satisfaction gate: si e' "soddisfatti" solo con baseline pronta e
             # RMS gia' <= mediana -> nessuna spinta. Altrimenti (baseline non pronta,
@@ -211,32 +308,49 @@ class SeeingDiagnosticEngine:
         # ---- Derivazione segnali (relativi alle reference EMA) ----
         jitter_high = (self.refs_ready
                        and snap.jitter_rms > self.cfg.jitter_high_factor * self._jitter_ref)
-        hfd_high = (self.refs_ready
+        # §37: hfd_high resta CALCOLATO (per CSV/dashboard/evidence) ma di default NON
+        # gatea piu' alcuna diagnosi. Sulla camera di guida l'HFD e' cieco al seeing
+        # (hfd_avg/hfd_ref ~ 1.0 a ogni cielo/SNR) -> faceva da gate AND che azzerava
+        # SEEING. Con [diagnostic_engine] hfd_gates_seeing=true torna a gateare (legacy).
+        # §38: hfd_ref puo' essere None anche con refs_ready vero (HFD non disponibile):
+        # guardia esplicita prima di dereferenziarlo. hfd_high resta solo informativo (§37).
+        hfd_high = (self.refs_ready and self._hfd_ref is not None
                     and snap.hfd_avg > self.cfg.hfd_high_factor * self._hfd_ref)
         oscillation = (snap.lag1_ra <= self.cfg.lag1_oscillation_thresh
                        or snap.lag1_dec <= self.cfg.lag1_oscillation_thresh)
         trend_max = max(abs(snap.trend_ra), abs(snap.trend_dec))
         drift = (trend_max >= self.cfg.trend_drift_min) and not jitter_high
 
+        hfd_gates = self.cfg.hfd_gates_seeing
+
         # ---- Classificazione causale combinata ----
-        if snap.rms_total > rms_high and jitter_high and hfd_high:
-            # SEEING: stella allargata (HFD) + frame-to-frame agitato (jitter) + RMS alto
-            signals = 3
+        # SEEING: firma DINAMICA (RMS alto + jitter alto), distinta da OVERCORRECTION
+        # (oscillazione del loop: lag-1 << 0) e da DRIFT (trend; gia' mutuamente
+        # esclusivo col jitter via la sua definizione). §37: niente vincolo HFD; il
+        # `not oscillation` mantiene SEEING specifico (non confuso con la sovra-corr.).
+        # Legacy (hfd_gates): SEEING richiede anche hfd_high (comportamento §31).
+        if hfd_gates:
+            seeing = snap.rms_total > rms_high and jitter_high and hfd_high
+        else:
+            seeing = snap.rms_total > rms_high and jitter_high and not oscillation
+
+        if seeing:
+            signals = 3 if hfd_gates else 2
             conf = min(95, 40 + 18 * signals)
             proposal = LeverProposal(aggr=-1, minmove=+1)
             return self._finalize(DiagnosisState.SEEING, conf, proposal, snap,
                                   jitter_high, hfd_high, oscillation, drift)
 
-        if oscillation and not hfd_high:
-            # OVERCORRECTION: il loop si ribalta (lag-1 << 0) ma la stella e' nitida
+        # OVERCORRECTION: il loop si ribalta (lag-1 << 0). Legacy: solo con HFD nella norma.
+        if oscillation and (not hfd_high or not hfd_gates):
             signals = 2 + (1 if jitter_high else 0)
             conf = min(95, 40 + 18 * signals)
             proposal = LeverProposal(aggr=-1, minmove=0)
             return self._finalize(DiagnosisState.OVERCORRECTION, conf, proposal, snap,
                                   jitter_high, hfd_high, oscillation, drift)
 
-        if drift and not hfd_high:
-            # DRIFT: deriva direzionale (trend) senza allargamento -> nessuna leva soft
+        # DRIFT: deriva direzionale (trend) senza jitter. Legacy: solo con HFD nella norma.
+        if drift and (not hfd_high or not hfd_gates):
             signals = 3
             conf = min(95, 40 + 18 * signals)
             return self._finalize(DiagnosisState.DRIFT, conf, None, snap,
@@ -298,23 +412,34 @@ class SeeingDiagnosticEngine:
         """Lista di fattori in linguaggio umano (✓ a sostegno, ◦ neutro/secondario)
         derivata SOLO dai booleani gia' calcolati: zero metriche nuove. Il testo
         riflette lo stato REALE misurato (es. HFD nella norma vs sopra riferimento)."""
+        hfd_gates = self.cfg.hfd_gates_seeing
+        # §37: quando l'HFD non gatea piu', le sue righe diventano "informativo
+        # (non-gating)"; il segnale a sostegno della diagnosi e' la firma dinamica.
+        hfd_norm_line = "✓ HFD nella norma" if hfd_gates else "◦ HFD informativo (non-gating)"
         if state == DiagnosisState.SEEING:
+            if hfd_gates:
+                return [
+                    "✓ HFD sopra riferimento",
+                    "✓ Jitter sopra riferimento",
+                    "✓ Lag-1 non oscillante",
+                ]
             return [
-                "✓ HFD sopra riferimento",
+                "✓ RMS sopra soglia",
                 "✓ Jitter sopra riferimento",
                 "✓ Lag-1 non oscillante",
+                "◦ HFD informativo (non-gating)",
             ]
         if state == DiagnosisState.OVERCORRECTION:
             return [
                 "✓ Lag-1 fortemente negativo",
-                "✓ HFD nella norma",
+                hfd_norm_line,
                 f"{'✓' if jitter_high else '◦'} Jitter " + ("elevato" if jitter_high else "normale"),
             ]
         if state == DiagnosisState.DRIFT:
             return [
                 "✓ Trend elevato",
                 "✓ Jitter nella norma",
-                "✓ HFD nella norma",
+                hfd_norm_line,
             ]
         if state == DiagnosisState.NOMINAL:
             return ["✓ RMS sotto soglia bassa", "✓ regime stabile"]

@@ -111,7 +111,10 @@ use_phd2_pixel_scale          = true
 rms_high_factor               = 1.3        # era 1.5 (§24)
 rms_low_factor                = 0.75
 baseline_window_frames        = 60
-baseline_min_snr              = 10.0
+# §40 — 6.0 = pavimento "Minimum star SNR for AutoFind" di default di PHD2 (lo ha ogni
+# utente) -> la baseline si forma per tutti. Resta <= snr_low (8): 6 = soglia rilevamento
+# stella, 8 = soglia controllo esposizione. Prima 10.0 bloccava le notti a SNR basso.
+baseline_min_snr              = 6.0
 # --- Clamp proporzionale del cap su rms_high (§23, taratura aggiornata §24) ---
 # cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)
 # Tetto a 1,00" allineato al benchmark di "guida pulita" universalmente riconosciuto:
@@ -142,6 +145,11 @@ baseline_best_fraction          = 0.33   # baseline = mediana del miglior 33% (P
 rms_low_high_ratio_max          = 0.85   # anti-inversione bande: rms_low <= rms_high * questo
 baseline_fallback_max_cov       = 0.50   # rifiuta la finestra se instabile (CoV oltre questo)
 baseline_fallback_reject_arcsec = 4.0    # tetto "guida rotta": rifiuta baseline oltre
+# §40 — il fallback §33 non e' congelabile dalla soglia SNR alta: su notti fioche la
+# baseline si forma comunque dai frame meno peggio, escludendo solo implosion e i frame
+# sotto il floor anti-garbage. true (shipped) = fallback usa il floor; false = gate §33 stretto.
+baseline_fallback_ignores_snr_gate = true
+baseline_fallback_min_snr          = 3.0   # floor anti-garbage = reject rilevamento stella PHD2
 
 [lever_optimization]
 # §30 (Agente v2.3) — Satisfaction gate sul ramo "guida ottima" del controller.
@@ -175,6 +183,26 @@ mode                      = "guardian"
 min_frames                = 30
 jitter_high_factor        = 1.6
 hfd_high_factor           = 1.25
+# §37: HFD declassato a SOLO INFORMATIVO. Sulla camera di guida l'HFD e' cieco al
+# seeing (hfd_avg/hfd_ref ~ 1.0 a ogni cielo): faceva da gate AND che azzerava SEEING.
+# false (shipped) = HFD NON gatea: SEEING si decide su jitter+RMS; HFD solo loggato + card.
+# true = vecchio gate §31 (SEEING richiede anche HFD alto) per confronto A/B.
+hfd_gates_seeing          = false
+# §38: le reference (jitter_ref/hfd_ref) si formano col best-fraction su finestra mobile
+# (i frame piu' calmi), come la baseline §33 — non piu' solo nel raro ramo rms<=rms_low.
+# Cosi' jitter_ref si forma sempre e presto e il motore puo' diagnosticare SEEING anche
+# nelle notti turbolente. Post-§37 refs_ready dipende SOLO da jitter_ref (HFD informativo).
+# true (shipped) = nuova formazione; false = formazione EMA-in-NOMINAL §31 (A/B).
+refs_always_form          = true
+refs_window_frames        = 120     # ampiezza finestra mobile dei campioni
+refs_best_fraction        = 0.25    # quota dei frame piu' calmi usata per la reference
+refs_warmup_frames        = 15      # ritardo iniziale; qualita' dal best-fraction su finestra
+# §39: i riferimenti di calma sopravvivono a dither/settle (un dither sposta la stella,
+# non l'atmosfera) e si azzerano solo a cambio esposizione/pixel-scale/target/restart.
+# Elimina il churn "warmup vs cadenza dither" del §38. true (shipped) = preserva;
+# false = azzera sempre (comportamento §31, per A/B). Le cause di reset sono loggate
+# nella colonna CSV `reset_cause` (schema_version 4).
+preserve_refs_on_dither   = true
 lag1_oscillation_thresh   = -0.35
 trend_drift_min           = 0.05
 ema_alpha                 = 0.1

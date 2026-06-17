@@ -140,7 +140,11 @@ class AutoCalibrationConfig:
     rms_high_factor: float = 1.3   # cuscinetto sopra baseline (§25: 1.5 -> 1.3 protegge focali lunghe)
     rms_low_factor: float = 0.75
     baseline_window_frames: int = 60
-    baseline_min_snr: float = 10.0
+    # §40 — soglia SNR per il percorso baseline. 6.0 = pavimento "Minimum star SNR for
+    # AutoFind" di default di PHD2 (ogni utente lo ha) -> la baseline si forma per tutti.
+    # Resta <= snr_low (8) -> coerente. Decoupling: 6 = soglia RILEVAMENTO stella,
+    # 8 = soglia CONTROLLO esposizione. Prima era 10 (bloccava le notti a SNR basso).
+    baseline_min_snr: float = 6.0
     # Clamp proporzionale del cap su rms_high (§23, sostituisce il clamp fisso §22):
     # cap_efficace = clamp(rms_high_max_factor * pixel_scale, rms_high_min_arcsec, rms_high_max_arcsec)
     rms_high_max_factor: float = 2.0     # k del cap proporzionale: cap = k * pixel_scale
@@ -184,6 +188,13 @@ class AutoCalibrationConfig:
     # fondamentalmente rotta".
     baseline_fallback_max_cov: float = 0.50
     baseline_fallback_reject_arcsec: float = 4.0
+    # §40 — il FALLBACK §33 non deve essere congelato dalla soglia SNR alta: su una
+    # notte genuinamente fioca (SNR < baseline_min_snr) la baseline si forma comunque
+    # dai frame meno peggio (best-fraction), escludendo solo implosion e i frame sotto
+    # il floor anti-garbage (= reject di rilevamento stella di PHD2). La soglia alta
+    # baseline_min_snr PREFERISCE i frame migliori (percorso NOMINAL), non BLOCCA tutto.
+    baseline_fallback_ignores_snr_gate: bool = True   # shipped ON (born-operative)
+    baseline_fallback_min_snr: float = 3.0            # floor anti-garbage = reject PHD2
 
 
 @dataclass
@@ -240,6 +251,24 @@ class DiagnosticEngineConfig:
     min_frames: int = 30
     jitter_high_factor: float = 1.6
     hfd_high_factor: float = 1.25
+    # §37: false (shipped) => HFD declassato a informativo, NON gatea SEEING/OVER/DRIFT
+    # (sulla camera di guida e' cieco al seeing); true => gate §31 legacy (per A/B).
+    hfd_gates_seeing: bool = False
+    # §38: formazione reference robusta (best-fraction su finestra mobile, stile §33).
+    # true (shipped) => jitter_ref/hfd_ref si formano sempre dai frame piu' calmi e
+    # refs_ready dipende solo da jitter_ref; false => formazione EMA-in-NOMINAL §31 (A/B).
+    refs_always_form: bool = True
+    refs_window_frames: int = 120     # ampiezza finestra mobile dei campioni
+    refs_best_fraction: float = 0.25  # quota di frame piu' calmi usata per la reference
+    # campioni minimi prima di formare la reference: governa SOLO il ritardo iniziale
+    # (la qualita' del best-fraction viene dalla finestra che cresce fino a refs_window).
+    # 15 = robusto anche con reset frequenti (dither/exposure) restando "breve" (ordine §33).
+    refs_warmup_frames: int = 15
+    # §39: i riferimenti di calma (+ finestre §38) sopravvivono a dither/settle/mode
+    # transition (non cambiano il regime del jitter) e si azzerano solo a cambio
+    # esposizione/pixel-scale/target/restart. true (shipped) = preserva; false = azzera
+    # sempre (comportamento §31, per A/B).
+    preserve_refs_on_dither: bool = True
     lag1_oscillation_thresh: float = -0.35
     trend_drift_min: float = 0.05
     ema_alpha: float = 0.1
@@ -408,7 +437,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rms_high_factor=float(a.get("rms_high_factor", 1.3)),
             rms_low_factor=float(a.get("rms_low_factor", 0.75)),
             baseline_window_frames=int(a.get("baseline_window_frames", 60)),
-            baseline_min_snr=float(a.get("baseline_min_snr", 10.0)),
+            baseline_min_snr=float(a.get("baseline_min_snr", 6.0)),
             rms_high_max_factor=float(a.get("rms_high_max_factor", 2.0)),
             rms_high_min_arcsec=float(a.get("rms_high_min_arcsec", 0.70)),
             rms_high_max_arcsec=float(a.get("rms_high_max_arcsec", 1.00)),
@@ -424,6 +453,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rms_low_high_ratio_max=float(a.get("rms_low_high_ratio_max", 0.85)),
             baseline_fallback_max_cov=float(a.get("baseline_fallback_max_cov", 0.50)),
             baseline_fallback_reject_arcsec=float(a.get("baseline_fallback_reject_arcsec", 4.0)),
+            baseline_fallback_ignores_snr_gate=bool(a.get("baseline_fallback_ignores_snr_gate", True)),
+            baseline_fallback_min_snr=float(a.get("baseline_fallback_min_snr", 3.0)),
         )
 
     # §30 — Satisfaction gate (sezione opzionale; assente -> default dataclass)
@@ -451,6 +482,12 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             min_frames=int(de.get("min_frames", 30)),
             jitter_high_factor=float(de.get("jitter_high_factor", 1.6)),
             hfd_high_factor=float(de.get("hfd_high_factor", 1.25)),
+            hfd_gates_seeing=bool(de.get("hfd_gates_seeing", False)),
+            refs_always_form=bool(de.get("refs_always_form", True)),
+            refs_window_frames=int(de.get("refs_window_frames", 120)),
+            refs_best_fraction=float(de.get("refs_best_fraction", 0.25)),
+            refs_warmup_frames=int(de.get("refs_warmup_frames", 15)),
+            preserve_refs_on_dither=bool(de.get("preserve_refs_on_dither", True)),
             lag1_oscillation_thresh=float(de.get("lag1_oscillation_thresh", -0.35)),
             trend_drift_min=float(de.get("trend_drift_min", 0.05)),
             ema_alpha=float(de.get("ema_alpha", 0.1)),

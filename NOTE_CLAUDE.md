@@ -2046,3 +2046,200 @@ severa ma corretta. Le soglie nel TOML restano numericamente identiche (sono gi�
   1.524" → baseline **PRIMA rifiutata (1.79 px), DOPO accettata (0.91")**. Suite: **154 test verdi** (145 + 9).
 - **P1**: misura e soglie ora nella stessa unità → prerequisito di baseline/cap/RECOVERY/diagnosi. Da verificare in
   campo che la dashboard RC8 mostri ~1" non ~2".
+
+## 37. HFD declassato a SOLO INFORMATIVO: fuori dal gate SEEING — Agente v2.5 (2026-06-16)
+
+### Problema (verificato sul campo, tutti i setup / tutte le notti)
+La diagnosi **SEEING** richiedeva un gate AND `rms_total > rms_high AND jitter_high AND hfd_high`
+(`diagnostic_engine.py` §31). Ma sulla **camera di guida** l'HFD resta piatto (`hfd_avg/hfd_ref ≈ 1.0`) a
+ogni scala/SNR: `hfd_high` non scatta MAI → il termine AND **azzerava SEEING** anche con guida realmente
+turbolenta. Conferma 2026-06-16 RC8: `SEEING=0` con guida ottima a 0.83". L'HFD sulla guida è **cieco al
+seeing**; il segnale di seeing vero arriverà in futuro dalla camera di **ripresa** (roadmap NINA).
+
+### Cosa fa (isolato a `diagnostic_engine.py` + config)
+- **SEEING ridefinito sulla sola firma DINAMICA**: `rms_total > rms_high AND jitter_high AND not oscillation`.
+  Il `not oscillation` lo tiene **specifico** (distinto da OVERCORRECTION, che è `oscillation`); da DRIFT è già
+  distinto perché `drift` esclude `jitter_high` per costruzione. Confidence SEEING ora su 2 segnali (RMS+jitter)
+  → 76 (≥ `act_min_confidence`/`guardian_min_confidence` 60: le azioni jitter/micro-guardian restano possibili).
+- **HFD rimosso da OGNI decisione**: tolto `and hfd_high` da SEEING e `and not hfd_high` da OVERCORRECTION/DRIFT.
+  `hfd_high` resta **calcolato** e i campi `hfd`/`hfd_ref` restano nelle `metrics` (CSV + card dashboard intatti):
+  HFD ora è **solo lettura/telemetria**. Evidence aggiornata ("◦ HFD informativo (non-gating)").
+- **Guardian invariato** (review-only): il motore continua a CONFIRM/ATTENUATE/BLOCK e fa micro-correzioni solo
+  a v2.3 ferma. Riabilitare SEEING senza HFD non lo fa "pilotare": test dedicato verifica che con v2.3 attiva
+  (CASO1) non parte alcuna micro extra.
+
+### Kill-switch (shipped sul comportamento nuovo — born operative)
+`[diagnostic_engine] hfd_gates_seeing` (`config.py` default `False`, `config.toml` = `false`). **false (shipped)**
+= HFD informativo, SEEING su jitter+RMS. **true** = gate §31 legacy (SEEING richiede anche `hfd_high`,
+OVER/DRIFT richiedono `not hfd_high`) per confronto A/B. Retrocompatibilità verificata in test.
+
+### File modificati
+`phd2_agent/diagnostic_engine.py` (classify: gate ramificato su `hfd_gates`; `_build_evidence`; docstring) ·
+`phd2_agent/config.py` (`DiagnosticEngineConfig.hfd_gates_seeing=False` + parsing `[diagnostic_engine]`) ·
+`config.toml` (`hfd_gates_seeing = false` + commento) · `tests/test_diagnostic_engine.py` (+7: SEEING con HFD
+piatto, specificità RMS, oscillazione→OVER, HFD ancora loggato, regressione gate legacy, guardian review-only).
+
+### Scelta di design
+Questa è la via **semplice** scelta da Alessandro (declassamento netto dell'HFD) al posto del weighting
+sampling-aware proposto in `DESIGN_RATIONALE_HFD_SAMPLING_AWARE.md` / `PROPOSTA_§32_HFD_SAMPLING_AWARE.md`:
+non si pretende dall'HFD un'informazione che lo strumento (camera di guida) non può dare.
+
+### Validazione
+- Suite **161 test verdi** (154 + 7). Il replay sul log RC8 `session_20260615_211617` (conteggio di quante volte
+  SEEING scatterebbe ora, verificando che siano eventi reali di alta turbolenza e non rumore) è **da eseguire su
+  Minix100**: il CSV non è nel repo (i `logs/` sono in `.gitignore`).
+- **P1**: una leva/segnale non informativo non deve condizionare le decisioni. Declassare l'HFD libera la diagnosi
+  SEEING dai segnali dinamici reali (jitter+RMS), senza pretendere un dato che lo strumento non può fornire.
+
+## 38. jitter_ref/hfd_ref che si formano SEMPRE (motore finalmente operativo) — Agente v2.5 (2026-06-16)
+
+### Problema (scoperta riprodotta sui log reali, fratello del §33 un livello più sotto)
+Dopo §34 (freeze=logging) e §37 (HFD fuori dal gate) il motore continuava a **non diagnosticare SEEING**. Causa: le
+reference EMA (`_jitter_ref`/`_hfd_ref`) si formavano **solo** nel ramo stretto `rms_total <= rms_low AND
+condition == NOMINAL` (`diagnostic_engine.py` §31), e `refs_ready` (gate di `jitter_high`, quindi di SEEING)
+richiedeva entrambe non-None. Su notti turbolente quel ramo capita di rado e, peggio, `reset()` azzera le ref a ogni
+cambio esposizione/dither/StartGuiding → tra un reset e l'altro la ref spesso non si forma mai. È lo **stesso schema
+del bug baseline §33**: la reference campiona solo una condizione rara.
+
+### Verdetto Fase 1 (riprodotto): CONFERMATA
+Replay su RC8 `session_20260615_211617` (866 frame `evaluated`): `jitter_ref>0` solo **11,8%** (mediana 0);
+`rms<=rms_low_active` **2,2%**; `condition==NOMINAL` 56,7%; `rms>rms_high_active` 33%; `hfd_high` 0%; **SEEING = 0**
+in assoluto (552 UNCERTAIN, 113 DRIFT). Il jitter è **sempre > 0** (min 0,53): la ref a 0 dipende solo dal ramo
+stretto + i reset, non dalla mancanza di dati. Con una `jitter_ref` robusta (p20 del jitter di sessione) **~9% dei
+frame sarebbero SEEING-eligibili** — oggi 0 diagnosticati. Citazioni: `diagnostic_engine.py:157-159` (refs_ready),
+`:203-205` (formazione stretta), `:218-219` (jitter_high gated da refs_ready).
+
+### Cosa fa (isolato a `diagnostic_engine.py` + config)
+- **Reference via BEST-FRACTION su finestra mobile** (approccio A, specchio §33): finestre `deque(maxlen=refs_window_frames)`
+  di `jitter_rms`/`hfd_avg` alimentate a OGNI frame valido (`_update_refs_window`, chiamato in `classify` dopo il gate
+  INSUFFICIENT e prima del ramo NOMINAL). Dopo `refs_warmup_frames` campioni, `jitter_ref`/`hfd_ref` = mediana del
+  best-fraction (i valori più BASSI = guida più calma). Si forma **sempre e presto**, anche senza frame `rms<=rms_low`.
+- **`refs_ready` dipende SOLO da `jitter_ref`** (post-§37 l'HFD è informativo: gating la prontezza su `hfd_ref` era un
+  residuo). `hfd_ref` resta calcolato/loggato (card dashboard intatta). Aggiunta guardia `_hfd_ref is not None` nel
+  calcolo di `hfd_high` (ora refs_ready può essere vero con hfd_ref None → evitato TypeError).
+- **NOMINAL e satisfaction-gate INVARIATI**: la formazione reference è isolata; l'EMA-in-NOMINAL §31 resta solo in
+  modalità legacy. Condizioni SEEING/OVERCORRECTION/DRIFT (§37) non toccate.
+
+### Kill-switch + parametri (shipped sul nuovo comportamento — born operative)
+`[diagnostic_engine] refs_always_form` (`config.py` default `True`, `config.toml` `true`). **true** = best-fraction
+sempre-forma; **false** = formazione EMA-in-NOMINAL §31 (refs_ready su entrambe le ref) per A/B. Parametri attivi:
+`refs_window_frames=120`, `refs_best_fraction=0.25`, `refs_warmup_frames=15`. NB: il warmup governa solo il **ritardo
+iniziale** dopo ogni reset; la qualità del best-fraction viene dalla finestra che cresce fino a `refs_window_frames`.
+15 è scelto per robustezza ai reset frequenti (dither/exposure) restando breve.
+
+### File modificati
+`phd2_agent/diagnostic_engine.py` (finestre + `_update_refs_window`/`_best_fraction_stat`; `refs_ready`; guardia
+`hfd_high`; `reset()` pulisce le finestre; docstring) · `phd2_agent/config.py` (4 chiavi `refs_*` + parsing) ·
+`config.toml` (chiavi attive) · `tests/test_diagnostic_engine.py` (helper `_build_refs`/`_warm_refs` warmup-aware;
+`test_refs_form_after_warmup` aggiornato; +7 test §38: riproduzione, warmup, indipendenza da hfd_ref, payoff SEEING,
+regressione legacy, NOMINAL invariato).
+
+### Validazione
+- Suite **168 test verdi** (161 + 7). Verdetto Fase 1 CONFERMATA con numeri riprodotti (sopra).
+- **Replay reale** `211617` col motore §38: `refs_ready` da **11,8% → 95,4%** (solo reset da cambio esposizione,
+  derivabili dal CSV) e **52 SEEING** (prima 0). Il CSV non contiene gli eventi dither/StartGuiding che nel run reale
+  chiamano `reset()`, quindi è una stima ottimistica; resettando periodicamente per mimare il dither, alla cadenza che
+  riproduce l'11,8% legacy (~ogni 100 frame) §38 tiene **~60-83%** (warmup 30→15) vs **~11%** del legacy: **5-7×**.
+- **P1**: un motore che deve riconoscere il seeing ha bisogno di un *riferimento di calma* che si formi davvero. §38 è
+  il fratello del §33: "il riferimento si forma sempre, dalla migliore prestazione disponibile nelle condizioni
+  correnti". Da validare in campo (dashboard SEEING ora non più sempre a 0 in notti turbolente).
+
+## 39. Il riferimento di calma SOPRAVVIVE al dither + logging cause di reset — Agente v2.5 (2026-06-16)
+
+### Problema (passo 2/2 del motore operativo, dopo §38)
+Il §38 fa riformare in fretta `jitter_ref`/`hfd_ref`, ma la causa profonda restava: `diagnostic_engine.reset()`
+azzerava i riferimenti **e** le finestre §38 a OGNI dither/settle, e il dithering avviene ogni pochi minuti → il
+motore passava la vita a ricostruire un riferimento che gli veniva continuamente cancellato. Un dither **non cambia
+l'atmosfera** (sposta la stella): azzerare lì il "jitter di calma" è sbagliato — stessa lezione del §36
+sull'invalidazione della baseline solo a vero cambio di regime.
+
+### Verdetto Fase 1 (confermato): CONFERMATA
+7 call-site di `diagnostic_engine.reset()` classificati: `main.py:338` StartGuiding (**guiding_restart**→azzera),
+`main.py:371` fine dither (**dither**→preserva), `main.py:400` SettleDone (**settle**→preserva), `controller.py:1646`
+transizione modalità (**mode_transition**→preserva), `controller.py:1727/1748/1819/1862` Path B (**exposure_change**→
+azzera). Churn dimostrato: il reset azzerava refs+finestre; ai dati §38, reset ~ogni 25 frame → refs_ready 0%.
+
+### Cosa fa (isolato a call-site reset + reset(cause) + logger)
+- **2A — disciplina di reset.** `reset(cause)` (`diagnostic_engine.py`): azzera SEMPRE solo `_last`; azzera i
+  RIFERIMENTI (+ finestre §38) **solo** se la causa cambia il regime del jitter. `_PRESERVE_CAUSES =
+  {dither, settle, mode_transition}` → preservano; `exposure_change/pixel_scale_change/target_change/guiding_restart/
+  manual` → azzerano. Ogni call-site mappato alla causa corretta. **`analyzer.reset()` NON toccato** (la finestra RMS
+  deve resettarsi al dither: le posizioni saltano); il best-fraction §38 è robusto al transiente post-dither (ancorato
+  ai frame calmi già in finestra) — verificato in test (`test_no_poisoning_after_dither`).
+- **2B — logging cause di reset.** Nuova colonna CSV **`reset_cause`** (vuota senza reset, valorizzata col motivo sul
+  primo frame dopo il reset, via `consume_reset_cause()` read-and-clear nel logger). **`schema_version` 3→4**. Rende
+  fedeli i replay futuri (oggi i reset da dither NON erano nei log: ecco perché §38 non era pienamente validabile).
+
+### Kill-switch (shipped sul nuovo comportamento)
+`[diagnostic_engine] preserve_refs_on_dither` (`config.py` default `True`, `config.toml` `true`). **true** = preserva
+su dither/settle/mode_transition; **false** = azzera sempre (comportamento §31) per A/B. Retrocompatibilità verificata
+(`test_legacy_mode_wipes_on_dither`).
+
+### File modificati
+`phd2_agent/diagnostic_engine.py` (`_PRESERVE_CAUSES`; `reset(cause)`; `consume_reset_cause()`; `_pending_reset_cause`)
+· `main.py` (3 call-site → cause) · `phd2_agent/controller.py` (5 call-site → cause) · `phd2_agent/config.py`
+(`preserve_refs_on_dither=True` + parsing) · `config.toml` (chiave attiva) · `phd2_agent/logger.py` (colonna
+`reset_cause`, `consume_reset_cause`, `schema_version`=4) · `tests/test_diagnostic_engine.py` (+7 test §39).
+
+### Validazione
+- Suite **175 test verdi** (168 + 7). Demo sintetica churn (warmup=15): con §39 `refs_ready` resta **97,7% a
+  qualunque cadenza di dither**; legacy (azzera) crolla — 44% a dither ogni 25 frame, 0% a ogni 10.
+- **Limite onesto del replay**: il log RC8 `session_20260615_211617` è **pre-§39 e NON contiene `reset_cause`**, quindi
+  NON può validare appieno il §39 (i reset reali da dither non sono nei log). La validazione piena arriva dal
+  **prossimo run di campo** con `reset_cause` loggato; sul vecchio log si vede solo il churn legacy come baseline.
+- **P1 / coerenza §36**: un riferimento si invalida solo quando cambia davvero il regime che descrive. §38 forma in
+  fretta, §39 evita di dover riformare di continuo: insieme rendono il motore davvero operativo (passo 2/2).
+
+## 40. La baseline si forma anche a SNR basso (chiude il buco low-SNR) — Agente v2.6 (2026-06-17)
+
+### Problema (validato in LIVE da Alessandro)
+Il gate `_update_rms_baseline` (`controller.py`) aveva `if not snr_ok: return` con `snr_ok = snap.snr_avg >=
+baseline_min_snr` (=**10**): bloccava SIA il percorso NOMINAL SIA il fallback §33. Su una notte a SNR basso la
+baseline non si formava per NESSUNA via. Campo 71F `session_20260617_221428`: SNR mediano **9,2**, 100% frame < 10 →
+baseline mai formata → `rms_high_active` inchiodato a 1,20. Validato in LIVE: forzando PHD2 a guidare su stella a
+SNR 10 la baseline si è formata subito.
+
+### Cosa fa (isolato al gate baseline + config)
+- **`baseline_min_snr` 10 → 6.0** = pavimento "Minimum star SNR for AutoFind" di default di PHD2 (ogni utente lo ha →
+  la baseline si forma per tutti). Resta ≤ `snr_low` (8): decoupling voluto — 6 = soglia RILEVAMENTO stella, 8 =
+  soglia CONTROLLO esposizione.
+- **Fallback §33 non più congelabile dalla soglia SNR.** Il gate non early-returna più su SNR basso: scarta solo
+  `implosion`. Il percorso NOMINAL resta gated da `baseline_min_snr` (notti buone invariate); il FALLBACK accumula i
+  frame sopra un **floor anti-garbage** `baseline_fallback_min_snr=3.0` (= reject rilevamento stella di PHD2) e forma
+  dal best-fraction → su una notte genuinamente fioca la baseline si forma comunque dai frame meno peggio. La soglia
+  alta PREFERISCE i frame migliori (NOMINAL), non BLOCCA tutto.
+- **NOMINAL/cap/anti-inversione/reject §33 intatti** (cap rms_high 1,00", `rms_low ≤ rms_high×0.85`, reject su
+  instabilità/tetto). Esclusione implosion mantenuta.
+
+### Kill-switch (shipped sul nuovo comportamento)
+`[auto_calibration] baseline_fallback_ignores_snr_gate` (`config.py` default `True`, `config.toml` `true`) +
+`baseline_fallback_min_snr=3.0`. **true** = fallback usa il floor (si forma a SNR basso); **false** = gate stretto §33
+(fallback gated da `baseline_min_snr`) per A/B. `baseline_min_snr` shipped a 6.0.
+
+### File modificati
+`phd2_agent/controller.py` (`_update_rms_baseline`: gate disaccoppiato) · `phd2_agent/config.py`
+(`baseline_min_snr=6.0`, `baseline_fallback_ignores_snr_gate=True`, `baseline_fallback_min_snr=3.0` + parsing) ·
+`config.toml` (chiavi attive) · `tests/test_baseline_formation.py` (`TestSnrGate` riscritto + `TestLowSnrBaselineV40`).
+
+### Validazione
+- Suite **180 test verdi** (175 + 5). Replay `session_20260617_221428` (71F, SNR mediano 9,2): PRE-§40 baseline
+  **None**, `rms_high_active` 1,20 (inchiodato); §40 baseline **0,58"**, `rms_high_active` **0,752"** (si stacca),
+  `rms_low_active` 0,434". (Il prompt stimava ~0,68"; il misurato è 0,58".)
+- **P1**: terza volta che "il riferimento deve formarsi sempre" (baseline §33, jitter_ref §38, baseline a SNR basso
+  §40). Con la v2.6 il principio è chiuso: nessun riferimento di prestazione può essere bloccato — né da assenza di
+  frame NOMINAL, né da reset frequenti, né da una stella debole.
+
+---
+
+# RELEASE v2.6 (2026-06-17) — motore diagnostico operativo + RMS in arcsec + baseline robusta
+
+Prima versione ufficiale sopra la 2.5 (commit §36 `13d2848`). Il motore di diagnosi del seeing passa da **dormiente a
+operativo**, parte attivo in GUARDIAN e misura nella giusta unità. Milestone §37→§40:
+- **§37** HFD declassato a informativo (fuori dal gate SEEING; SEEING su jitter+RMS).
+- **§38** `jitter_ref`/`hfd_ref` sempre-forma (best-fraction su finestra mobile); `refs_ready` scollegato da hfd_ref.
+- **§39** i riferimenti sopravvivono a dither/settle; logging `reset_cause`; schema CSV 3→4.
+- **§40** baseline anche a SNR basso (`baseline_min_snr` 10→6 = floor AutoFind PHD2; fallback non-congelabile).
+- (su base **§36**, già in v2.5: RMS px→arcsec.)
+Tutte le feature **default-ON** nel `config.toml` (born operative). Validato sul campo (71F @490 2026-06-17:
+jitter_ref 12%→87%, motore che diagnostica, baseline che si forma). Bump versione 2.5→2.6 in `__about__.py`
+(single source: ZIP, version_info, agent_version, banner).

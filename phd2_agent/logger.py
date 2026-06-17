@@ -53,6 +53,7 @@ _CSV_FIELDS = [
     "diag_state",
     "diag_confidence",
     "evaluated",        # §34: True = frame valutato (tick), False = riga di solo log fuori-tick
+    "reset_cause",      # §39: causa del reset del motore in questo frame (vuota se nessun reset)
     "actions_count",
     "actions_summary",
 ]
@@ -139,6 +140,9 @@ class SessionLogger:
         rms_low_active = round(ctrl.cfg.thresholds.rms_low, 4) if ctrl is not None else 0.0
         jitter_ref = round(eng.jitter_ref, 4) if eng is not None else 0.0
         hfd_ref = round(eng.hfd_ref, 3) if eng is not None else 0.0
+        # §39 — causa del reset del motore (read-and-clear): compare sul primo frame
+        # loggato dopo un reset, vuota altrove. Rende i replay futuri fedeli.
+        reset_cause = eng.consume_reset_cause() if eng is not None else ""
 
         row = {
             "timestamp_iso": datetime.fromtimestamp(snapshot.timestamp).isoformat(timespec="seconds"),
@@ -170,6 +174,7 @@ class SessionLogger:
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
             "evaluated": bool(getattr(snapshot, "evaluated", False)),   # §34
+            "reset_cause": reset_cause,   # §39
             "actions_count": len(actions),
             "actions_summary": actions_summary,
         }
@@ -197,7 +202,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 3,   # §34: colonna `evaluated`; §36: misura RMS/jitter in ARCSEC (px×scale)
+            "schema_version": 4,   # §34: `evaluated`; §36: RMS/jitter in ARCSEC; §39: colonna `reset_cause`
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

@@ -35,7 +35,65 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-06-15 (FIX unità RMS px→arcsec §36 — Agente v2.5)
+## Stato attuale — aggiornato al 2026-06-17 (RELEASE v2.6 — motore diagnostico operativo)
+
+### RELEASE v2.6 (2026-06-17) — milestone §37→§40
+Prima versione ufficiale sopra la 2.5. Il motore di diagnosi del seeing passa da **dormiente a operativo** (parte
+attivo in GUARDIAN) e misura in arcsec. Raccoglie: **§37** (HFD informativo, fuori dal gate SEEING), **§38**
+(`jitter_ref`/`hfd_ref` sempre-forma via best-fraction), **§39** (i riferimenti sopravvivono al dither/settle; logging
+`reset_cause`; schema CSV 3→4), **§40** (baseline anche a SNR basso), su base **§36** (RMS px→arcsec, già in v2.5).
+Tutte le feature default-ON (born operative). Validato sul campo (71F @490, 2026-06-17: jitter_ref 12%→87%, motore che
+diagnostica, baseline che si forma). Versione bumpata 2.5→2.6 in `__about__.py`. Dettagli: NOTE_CLAUDE §40 + nota release.
+
+### §40 — la baseline si forma anche a SNR basso — Agente v2.6 (fatto, 2026-06-17)
+Il gate `_update_rms_baseline` con `baseline_min_snr=10` bloccava sia NOMINAL sia il fallback §33 → su notti a SNR
+basso la baseline non si formava (campo 71F `221428`: SNR mediano 9,2, 100% < 10, `rms_high_active` inchiodato a 1,20).
+Fix isolato al gate: `baseline_min_snr` 10→**6** (= floor "Minimum star SNR for AutoFind" di PHD2); il **fallback §33
+non è più congelabile** dalla soglia SNR — accumula i frame sopra un floor anti-garbage (`baseline_fallback_min_snr=3`,
+= reject PHD2) e forma dal best-fraction, così la baseline si forma anche su notti fioche dai frame meno peggio. NOMINAL/
+cap 1,00"/anti-inversione/reject §33 intatti; esclusione implosion mantenuta. Kill-switch
+`baseline_fallback_ignores_snr_gate=true` shipped (false = gate stretto §33). Replay `221428`: baseline da None →
+**0,58"**, `rms_high_active` da 1,20 → **0,752"**. 180 test verdi (5 nuovi). Terza chiusura del principio "il
+riferimento si forma sempre" (dopo baseline §33 e jitter_ref §38). Dettagli: NOTE_CLAUDE §40.
+
+### §39 — il riferimento di calma SOPRAVVIVE al dither + logging reset_cause — Agente v2.5 (fatto, 2026-06-16)
+Passo 2/2 del motore operativo (dopo §38). Causa profonda: `diagnostic_engine.reset()` azzerava `jitter_ref`/`hfd_ref`
++ finestre §38 a OGNI dither/settle (ogni pochi minuti) → il motore riformava all'infinito un riferimento che gli
+veniva cancellato. Ma un dither sposta la stella, non l'atmosfera (stessa lezione del §36: invalidare solo a vero
+cambio di regime). Fix in due parti, isolato ai call-site di reset + `reset(cause)` + logger: **(A)** `reset(cause)`
+preserva refs+finestre su `dither`/`settle`/`mode_transition` e le azzera solo su `exposure_change`/`pixel_scale_change`/
+`target_change`/`guiding_restart` (il jitter scala col tempo di posa / cambia il cielo); `analyzer.reset()` NON toccato
+(la finestra RMS deve resettarsi al dither). **(B)** nuova colonna CSV `reset_cause` (causa loggata sul frame del reset),
+`schema_version` 3→**4**, così i replay futuri sono fedeli. Kill-switch `[diagnostic_engine] preserve_refs_on_dither=true`
+shipped (false = azzera sempre §31). Demo: `refs_ready` resta **97,7% a qualunque cadenza di dither** (legacy crolla a
+0% con dither frequenti). 175 test verdi (7 nuovi). Limite onesto: il log RC8 `211617` è pre-§39 (senza `reset_cause`),
+validazione piena dal prossimo run di campo. Coerente con P1/§36. Dettagli: NOTE_CLAUDE §39.
+
+### §38 — jitter_ref/hfd_ref che si formano SEMPRE (motore operativo) — Agente v2.5 (fatto, 2026-06-16)
+Fratello del §33 "un livello più sotto". Dopo §34/§37 il motore continuava a non diagnosticare SEEING perché le
+reference EMA (`jitter_ref`/`hfd_ref`) si formavano solo nel ramo stretto `rms<=rms_low AND NOMINAL` (e venivano
+azzerate a ogni reset): replay reale RC8 `211617` → `jitter_ref` formata solo **11,8%** dei frame, **SEEING=0** in
+assoluto (scoperta riprodotta e CONFERMATA). Fix isolato a `diagnostic_engine.py`: le reference si formano col
+**best-fraction su finestra mobile** (i frame più calmi), come la baseline §33 — sempre e presto, anche nelle notti
+turbolente. `refs_ready` ora dipende **solo da `jitter_ref`** (post-§37 l'HFD è informativo); `hfd_ref` resta
+calcolato/loggato. NOMINAL/satisfaction-gate e le condizioni SEEING/OVER/DRIFT (§37) **invariati**. Kill-switch
+`[diagnostic_engine] refs_always_form=true` shipped (false = formazione §31 per A/B); parametri attivi
+`refs_window_frames=120`, `refs_best_fraction=0.25`, `refs_warmup_frames=15`. Replay §38: `refs_ready` **11,8%→95,4%**,
+**52 SEEING** (prima 0); alla cadenza di reset realistica ~60-83% vs ~11% legacy (5-7×). 168 test verdi (7 nuovi).
+Coerente con P1: il riferimento di calma ora si forma davvero. Dettagli: NOTE_CLAUDE §38.
+
+### §37 — HFD declassato a SOLO INFORMATIVO: fuori dal gate SEEING — Agente v2.5 (fatto, 2026-06-16)
+Verificato sul campo (tutti i setup/notti): sulla camera di guida l'HFD resta piatto (`hfd_avg/hfd_ref ≈ 1.0`), quindi
+`hfd_high` non scattava mai e il gate AND `rms>rms_high AND jitter_high AND hfd_high` **azzerava SEEING** anche con
+guida turbolenta (conferma RC8 2026-06-16: SEEING=0 a 0.83"). Fix isolato a `diagnostic_engine.py`: SEEING ridefinito
+sulla sola **firma dinamica** `rms_total>rms_high AND jitter_high AND not oscillation` (specifico, distinto da
+OVERCORRECTION=oscillazione e da DRIFT=trend); HFD tolto da OGNI decisione (anche `not hfd_high` da OVER/DRIFT) ma
+**ancora calcolato/loggato** (`hfd`/`hfd_ref` nelle metrics → CSV + card dashboard intatti). Guardian resta review-only
+(nessuna micro spuria: verificato in test). Kill-switch `[diagnostic_engine] hfd_gates_seeing=false` **shipped sul
+nuovo comportamento** (true = gate §31 legacy per A/B). 161 test verdi (7 nuovi). Via **semplice** scelta da Alessandro
+al posto del weighting sampling-aware (`PROPOSTA_§32_HFD_SAMPLING_AWARE.md`): non si pretende dall'HFD della guida un
+seeing che non può misurare (il segnale vero arriverà dalla camera di ripresa, roadmap NINA). Replay RC8 `211617` da
+eseguire su Minix100 (log fuori repo). Coerente con P1. Dettagli: NOTE_CLAUDE §37.
 
 ### §36 — FIX unità: RMS misurato in PIXEL ma trattato come ARCSEC — Agente v2.5 (fatto, 2026-06-15)
 Bug confermato su codice (PHD2 + Agente): le distanze di guida di PHD2 (`RADistanceRaw/DECDistanceRaw`) sono in PIXEL,

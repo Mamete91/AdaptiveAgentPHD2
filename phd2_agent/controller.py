@@ -491,17 +491,25 @@ class AdaptiveController:
         ac = self.cfg.auto_calibration
         if not ac.enabled or self._rms_baseline_done:
             return
-        snr_ok = (snap.snr_avg is not None and snap.snr_avg >= ac.baseline_min_snr
-                  and not snap.implosion_detected)
-        if not snr_ok:
+        # §40 — scartiamo solo i frame davvero inutilizzabili (implosion). La soglia SNR
+        # NON deve bloccare TUTTO: prima azzerava sia NOMINAL sia il fallback §33 ->
+        # niente baseline sulle notti a SNR basso (es. 71F a SNR 9 con gate=10).
+        if snap.implosion_detected:
             return
-        # Percorso primario (come sempre): solo frame NOMINAL.
-        if snap.condition == SeeingCondition.NOMINAL:
+        snr = snap.snr_avg if snap.snr_avg is not None else 0.0
+        # Percorso PRIMARIO (notti buone): frame NOMINAL con SNR >= baseline_min_snr.
+        if snap.condition == SeeingCondition.NOMINAL and snr >= ac.baseline_min_snr:
             self._rms_baseline_samples.append(snap.rms_total)
-        # §33 — finestra rolling di tutti i frame SNR-validi, per il fallback.
+        # §33/§40 — finestra rolling per il FALLBACK. Con baseline_fallback_ignores_snr_gate
+        # (shipped) basta superare il floor anti-garbage (= reject PHD2): la baseline si
+        # forma anche a SNR basso dai frame meno peggio. A OFF torna il gate stretto §33.
         if ac.baseline_always_form:
-            self._rms_baseline_all_samples.append(snap.rms_total)
-            self._baseline_frames_seen += 1
+            fb_floor = (ac.baseline_fallback_min_snr
+                        if ac.baseline_fallback_ignores_snr_gate
+                        else ac.baseline_min_snr)
+            if snr >= fb_floor:
+                self._rms_baseline_all_samples.append(snap.rms_total)
+                self._baseline_frames_seen += 1
         # Finalize: prima il percorso NOMINAL (notti buone), poi il fallback §33.
         if len(self._rms_baseline_samples) >= ac.baseline_window_frames:
             self._finalize_rms_baseline()
@@ -1643,7 +1651,7 @@ class AdaptiveController:
         if self.analyzer is not None:
             self.analyzer.reset()
         if self.diagnostic_engine is not None:
-            self.diagnostic_engine.reset()
+            self.diagnostic_engine.reset("mode_transition")  # §39: non cambia regime -> preserva refs
         self._warmup_frames_left = self.cfg.diagnostic_engine.warmup_frames_after_switch
         self._outcome_pending = None
         self._diag_pre_buffer = []
@@ -1724,7 +1732,7 @@ class AdaptiveController:
                     if self.analyzer is not None:
                         self.analyzer.reset()
                     if self.diagnostic_engine is not None:
-                        self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                        self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
                 actions.append(action)
 
         elif (snapshot.condition != SeeingCondition.LOW_SNR
@@ -1745,7 +1753,7 @@ class AdaptiveController:
                 if self.analyzer is not None:
                     self.analyzer.reset()
                 if self.diagnostic_engine is not None:
-                    self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                    self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
             actions.append(action)
 
         return actions
@@ -1816,7 +1824,7 @@ class AdaptiveController:
                         if self.analyzer is not None:
                             self.analyzer.reset()
                         if self.diagnostic_engine is not None:
-                            self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                            self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
                         # §35 — programma il check saturazione/riselezione dopo un breve
                         # settle (il nuovo tempo deve diventare attivo prima del check).
                         if ed.restar_on_pathb_saturation:
@@ -1859,7 +1867,7 @@ class AdaptiveController:
                         if self.analyzer is not None:
                             self.analyzer.reset()
                         if self.diagnostic_engine is not None:
-                            self.diagnostic_engine.reset()   # §31: ref EMA invalide al cambio esposizione
+                            self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
                         # §35 — tornando a un'esposizione più bassa la stella non satura
                         # più: annulla l'eventuale check di riselezione in sospeso.
                         self._pathb_restar_pending = False

@@ -335,7 +335,7 @@ def _event_loop(
             log.info("PHD2 ha avviato la guida")
             analyzer.reset()
             if controller.diagnostic_engine is not None:
-                controller.diagnostic_engine.reset()   # §31: ref EMA al re-start guida
+                controller.diagnostic_engine.reset("guiding_restart")  # §39: cielo/campo nuovi -> azzera
             if not controller.is_initialized():
                 controller.initialize()
             try:
@@ -368,7 +368,7 @@ def _event_loop(
                     is_settling = False
                     analyzer.reset()
                     if controller.diagnostic_engine is not None:
-                        controller.diagnostic_engine.reset()   # §31: ref EMA dopo dither
+                        controller.diagnostic_engine.reset("dither")  # §39: dither non tocca l'atmosfera -> preserva refs
                     try:
                         _broadcast({"type": "settling", "ts": time.time(), "is_settling": False})
                     except Exception:
@@ -397,7 +397,7 @@ def _event_loop(
                 is_settling = False
                 analyzer.reset()
                 if controller.diagnostic_engine is not None:
-                    controller.diagnostic_engine.reset()   # §31: ref EMA dopo dither
+                    controller.diagnostic_engine.reset("settle")  # §39: settle non tocca l'atmosfera -> preserva refs
                 try:
                     _broadcast({"type": "settling", "ts": time.time(), "is_settling": False})
                 except Exception:
