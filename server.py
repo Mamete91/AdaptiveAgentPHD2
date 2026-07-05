@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from phd2_agent.__about__ import about_payload
 
@@ -40,6 +40,12 @@ app.add_middleware(
 _controller = None
 _analyzer = None
 _session_logger = None
+# §41 — store telemetria NINA (opzionale). Registrato via set_nina_store() per
+# NON toccare la firma di set_global_state (retrocompat totale). None => nessun
+# canale NINA: /status riporta nina disabilitato/assente (graceful).
+_nina_store = None
+# §45 — tracker Layer-2 (Transparency Index). None => blocco transparency assente.
+_transparency_tracker = None
 
 # Broadcast buffer per WebSocket
 _ws_queue: asyncio.Queue = None
@@ -51,6 +57,31 @@ def set_global_state(controller, analyzer, session_logger):
     _controller = controller
     _analyzer = analyzer
     _session_logger = session_logger
+
+
+def set_nina_store(store) -> None:
+    """§41 — registra lo store telemetria NINA (duck-typed: NinaTelemetryStore).
+    Setter dedicato per non modificare la firma di set_global_state."""
+    global _nina_store
+    _nina_store = store
+
+
+def set_transparency_tracker(tracker) -> None:
+    """§45 — registra il TransparencyTracker (Layer-2). Alimentato sul POST telemetria
+    ed esposto in /status.nina.transparency."""
+    global _transparency_tracker
+    _transparency_tracker = tracker
+
+
+# Forma di default del blocco `nina` in /status quando lo store non è registrato
+# (es. --no-dashboard non lo registra, o nessuno l'ha mai impostato). Graceful.
+_NINA_ABSENT_BLOCK = {
+    "enabled": False,
+    "connected": False,
+    "schema_version": None,
+    "last_age_s": None,
+    "metrics": {},
+}
 
 
 async def get_ws_queue() -> asyncio.Queue:
@@ -163,11 +194,37 @@ async def get_status():
 
     if _controller is not None:
         ctrl_status["ai_find_enabled"] = _controller.ai_find_enabled
-        
+
+    # §41 — blocco top-level `nina` (telemetria esterna, NON stato del controller).
+    # Difensivo: qualunque errore dello store degrada a "assente", non rompe /status.
+    try:
+        nina_status = (_nina_store.status_block()
+                       if _nina_store is not None else dict(_NINA_ABSENT_BLOCK))
+    except Exception:
+        logger.exception("Errore leggendo NinaTelemetryStore in /status")
+        nina_status = dict(_NINA_ABSENT_BLOCK)
+
+    # §45/§48 — sotto-blocco transparency (Layer-2, unico riconoscitore N1). Graceful:
+    # assente -> available:false. `fresh` (§48) è la freschezza single-source dello store
+    # §43: N6 (plugin) lo usa come FAIL-SAFE (nubi neutre se la telemetria è stantia).
+    try:
+        transp = (_transparency_tracker.status_block() if _transparency_tracker is not None
+                  else {"enabled": False, "available": False, "index": None, "state": None})
+        try:
+            transp["fresh"] = bool(_nina_store.is_fresh) if _nina_store is not None else False
+        except Exception:
+            transp["fresh"] = False
+        nina_status["transparency"] = transp
+    except Exception:
+        logger.exception("Errore leggendo TransparencyTracker in /status")
+        nina_status["transparency"] = {"enabled": False, "available": False,
+                                       "index": None, "state": None, "fresh": False}
+
     return JSONResponse({
         "timestamp": time.time(),
         "controller": ctrl_status,
         "analyzer": analyzer_status,
+        "nina": nina_status,
     })
 
 
@@ -210,6 +267,74 @@ async def set_diagnostic_mode(payload: DiagModePayload):
     if _controller:
         return JSONResponse(_controller.set_diagnostic_mode(payload.mode))
     return JSONResponse({"mode": payload.mode})
+
+
+# ------------------------------------------------------------------ #
+#  §41 — Ingresso telemetria NINA (POST /nina/telemetry)             #
+# ------------------------------------------------------------------ #
+#
+# Contratto JSON versionato (schema_version=1), inoltrato dal plugin a ogni
+# sotto-posa salvata (IImageSaveMediator.ImageSaved — lato plugin RIMANDATO al
+# ripristino del PC, vedi NOTE §41). Difensivo: tutti i campi opzionali tranne
+# schema_version; validazione di range (>=0) -> 422 senza toccare lo store;
+# nessuna eccezione raggiunge mai il loop di guida (endpoint isolato sul thread
+# uvicorn, non chiama controller/motore/leve). Step 0: nessun consumatore agisce.
+
+class NinaImageMetrics(BaseModel):
+    """Metriche per-posa dalla star detection NINA (camera di ripresa).
+    Tutte opzionali; i campi mancanti restano None (tolleranza di contratto)."""
+    hfr: Optional[float] = Field(default=None, ge=0)            # HFR medio (px)
+    fwhm: Optional[float] = Field(default=None, ge=0)           # FWHM medio (arcsec) — cross-setup comparabile
+    hfr_std: Optional[float] = Field(default=None, ge=0)
+    star_count: Optional[int] = Field(default=None, ge=0)       # stelle rilevate
+    eccentricity: Optional[float] = Field(default=None, ge=0)   # medio (se disponibile)
+    mean_adu: Optional[float] = Field(default=None, ge=0)       # proxy SNR/fondo
+    median_adu: Optional[float] = Field(default=None, ge=0)
+    stdev_adu: Optional[float] = Field(default=None, ge=0)
+    exposure_s: Optional[float] = Field(default=None, ge=0)
+    filter: Optional[str] = None
+
+
+class NinaContext(BaseModel):
+    """Contesto operativo per il futuro N2 context-gating (può mancare in §41)."""
+    activity: Optional[str] = None   # EXPOSING | AUTOFOCUS | MERIDIAN_FLIP | ...
+    target: Optional[str] = None
+
+
+class NinaTelemetryPayload(BaseModel):
+    """Payload del contratto NINA→Agente. `schema_version` obbligatorio; il resto
+    opzionale e tollerante (campi mancanti ignorati, mai un 500)."""
+    schema_version: int = Field(ge=1)
+    source: Optional[str] = None
+    ts_unix: Optional[float] = Field(default=None, ge=0)
+    image: Optional[NinaImageMetrics] = None
+    context: Optional[NinaContext] = None
+
+
+@app.post("/nina/telemetry")
+async def ingest_nina_telemetry(payload: NinaTelemetryPayload):
+    """Riceve le metriche per-posa di NINA e le conserva nello store opzionale.
+
+    - store assente o disabilitato -> 200 {"accepted": false, "reason": ...},
+      nessuna memorizzazione (kill-switch [nina_telemetry] enabled=false).
+    - payload valido -> 200 {"accepted": true, "schema_version": N}, store aggiornato.
+    - payload malformato/fuori-range -> 422 gestito da FastAPI prima di qui (lo
+      store NON viene toccato). L'endpoint non chiama mai controller/motore/leve.
+    """
+    store = _nina_store
+    if store is None or not getattr(store, "enabled", False):
+        return JSONResponse({"accepted": False, "reason": "disabled"})
+    try:
+        dumped = payload.model_dump()
+        store.update(dumped, payload.schema_version)
+        # §45 — alimenta il tracker Layer-2 (derivato da Layer-1, non sporca lo store).
+        if _transparency_tracker is not None:
+            _transparency_tracker.ingest(dumped)
+    except Exception:
+        # Difesa in profondità: un bug nello store non deve mai propagarsi.
+        logger.exception("Errore aggiornando NinaTelemetryStore (telemetria scartata)")
+        return JSONResponse({"accepted": False, "reason": "store_error"})
+    return JSONResponse({"accepted": True, "schema_version": payload.schema_version})
 
 
 # ------------------------------------------------------------------ #

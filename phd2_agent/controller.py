@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import os
 import statistics
 import time
@@ -98,6 +99,9 @@ class ControlAction:
     new_value: float
     reason: str
     dry_run: bool
+    # §47 — attribuzione: chi ha generato il softening + MinMove efficace in arcsec.
+    softening_source: str = "other"   # SEEING | minmove_recovery_§32 | guardian_micro | oscillation | optimization | other
+    minmove_arcsec: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -108,6 +112,8 @@ class ControlAction:
             "new_value": round(self.new_value, 3),
             "reason": self.reason,
             "dry_run": self.dry_run,
+            "softening_source": self.softening_source,
+            "minmove_arcsec": self.minmove_arcsec,
         }
 
     def __str__(self) -> str:
@@ -133,6 +139,30 @@ _AGGR_ALIASES = (
 # Parametri che PHD2 espone in scala 0-1 (NON 0-100).
 # Verificato su guide_algorithm_hysteresis.cpp e guide_algorithm_resistswitch.cpp.
 _AGGR_FRACTIONAL_PARAMS = frozenset({"aggression", "Aggression"})
+
+# §50 — valori standard PHD2 all'INIT (aggr in scala config 0-100, minmove in px/arcsec):
+#   RA  (Hysteresis):     Aggressiveness 70  (native 0.70), MinMove 0.20
+#   DEC (Resist Switch):  Aggressiveness 100 (native 1.00), MinMove 0.20
+_STANDARD_INIT = {"ra": (70.0, 0.20), "dec": (100.0, 0.20)}
+# Scala nativa frazionaria (0-1) = famiglia 'aggression' (Hysteresis / Resist Switch).
+# È il discriminante di sicurezza: i default 70/100 hanno senso solo su questa scala.
+_FRACTIONAL_AGGR_SCALE = 0.01
+
+# §0-bis — persistenza (s) del flag clamping_active dopo un taglio del cap MinMove:
+# anti-flicker per il badge ACTIVE (il clamp si valuta solo sui tick di softening).
+_MINMOVE_CLAMP_PERSIST_S = 90.0
+
+# §53 — soglia (arcsec) oltre cui l'RMS è considerato "in salita" nella finestra recente
+# (pre-gate del recupero simmetrico: non irrigidire mentre l'RMS sta chiaramente salendo).
+_RMS_RISING_EPS = 0.02
+
+# §47 — attribuzione del softening: mappa il "caso" v2.3 alla sorgente leggibile.
+_CASO_TO_SOURCE = {
+    "CASO1": "SEEING",                  # seeing-softening (aggr giù / MinMove su)
+    "CASO2": "oscillation",             # ramo oscillazioni (disattivo di default §47)
+    "CASO3": "optimization",            # guida ottima (aggr su / MinMove giù) — non softening
+    "RECOVERY": "minmove_recovery_§32",  # §32 recupero MinMove nella banda morta
+}
 
 
 def _aggr_native_scale(param_name: str) -> float:
@@ -182,6 +212,12 @@ class AdaptiveController:
         # collegato da main.py per scrivere experimental_*.jsonl (no import circolare).
         self.diagnostic_engine: Optional[SeeingDiagnosticEngine] = None
         self.session_logger = None
+        # §45/§46 — telemetria NINA Layer-1 (store) + indici Layer-2 (transparency tracker).
+        # Collegati da main.py (duck-typed). None => motore PHD2-only (graceful, pre-N8).
+        self.nina_store = None
+        self.transparency_tracker = None
+        # §47 — breakdown sorgenti di softening della sessione (per /status + dashboard).
+        self._softening_source_counts: dict[str, int] = {}
         self._diag_last_state = None
         self._current_diag = None                 # ultimo DiagnosisResult di classify()
         self._warmup_frames_left = 0
@@ -234,6 +270,19 @@ class AdaptiveController:
         self._rms_baseline_all_samples: deque[float] = deque(
             maxlen=max(1, config.auto_calibration.baseline_fallback_frames))
         self._baseline_frames_seen: int = 0
+        # §44 — finestra mobile per il tracker continuo/bidirezionale (post-formazione).
+        # Ampiezza = baseline_window_frames; alimentata dai frame SNR-validi.
+        self._rms_rolling: deque[float] = deque(
+            maxlen=max(1, config.auto_calibration.baseline_window_frames))
+        # §51 — EMA temporale della baseline §44 (riferimento del cap MinMove adattivo).
+        # Segue la baseline su ~decine di minuti (filter_tau_minutes) senza inseguire le
+        # fluttuazioni. Fallback: None -> nessun cap adattivo (MinMove limitato solo da minmove_max).
+        self._minmove_baseline_ema: Optional[float] = None
+        self._minmove_baseline_ema_t: Optional[float] = None
+        self._minmove_cap_info: Optional[dict] = None   # ultimo cap (per /status)
+        # §51/dashboard — clamping_active: il cap ha TAGLIATO una richiesta MinMove-up
+        # (requested > cap). Persistenza anti-flicker: resta true fino a questo istante.
+        self._minmove_clamp_active_until: float = 0.0
         self._rms_baseline_value: Optional[float] = None
         self._rms_baseline_done: bool = False
         # §23: gate di rifiuto + clamp proporzionale
@@ -254,6 +303,12 @@ class AdaptiveController:
         self._recovery_actions_since_anchor: int = 0         # recuperi applicati dall'ultimo anchor
         self._recovery_blocked: bool = False                 # anti-windup: softening sospeso
         self._recovery_applied_this_tick: bool = False       # flag per il bookkeeping per-tick
+        # §53 — recupero simmetrico: verso del run corrente ("stiffen"/"soften"/None) e
+        # blocco specifico dell'irrigidimento (l'esito ha provato che serviva ammorbidire).
+        self._recovery_direction: Optional[str] = None
+        self._recovery_stiffen_blocked: bool = False
+        self._rms_recent: deque[float] = deque(
+            maxlen=max(2, config.lever_optimization.recovery_outcome_window_frames))
 
     def _read_setup_id_from_config(self) -> str:
         """Estrae profile_name dal config se presente, altrimenti default."""
@@ -328,6 +383,12 @@ class AdaptiveController:
             # Step 2: salva baseline DOPO aver letto i parametri puliti
             self.save_baseline()
 
+            # §50 — INIT ai valori standard PHD2 (stato iniziale NOTO): DOPO la calibrazione
+            # (params letti) e save_baseline (valori utente salvati per il restore), PRIMA
+            # della formazione baseline. Su reconnect il Baseline Guardian ha già ripristinato
+            # i valori utente (orphan restore) prima di questo punto → non si perde nulla.
+            self._init_to_phd2_standard()
+
             logger.info(
                 "Setup: profile=%s, guide_pixel_scale=%.2f arcsec/px "
                 "(reducer_active=%s, native=%.2f, reduced=%.2f)",
@@ -380,6 +441,41 @@ class AdaptiveController:
             axis_state.param_names,
         )
 
+    def _init_to_phd2_standard(self) -> None:
+        """§50 — porta le leve ai valori standard PHD2 all'inizio guida (stato iniziale
+        NOTO). Algoritmo-aware: applica SOLO se l'asse usa la scala frazionaria 'aggression'
+        (Hysteresis/Resist Switch, native 0.01); altrimenti NON forza valori a scala sbagliata
+        → WARNING + skip di quell'asse (fail-safe). Rispetta dry_run (via _apply)."""
+        if not self.cfg.control.init_to_phd2_standard:
+            return
+        for axis_state, limits in ((self._ra, self.cfg.ra), (self._dec, self.cfg.dec)):
+            std_aggr, std_mm = _STANDARD_INIT[axis_state.axis]
+            if (not axis_state.aggr_param
+                    or axis_state.aggr_native_scale != _FRACTIONAL_AGGR_SCALE):
+                logger.warning(
+                    "[init-std] Asse %s: algoritmo non standard (aggr_param=%s, native_scale=%.2f, "
+                    "params=%s) → INIT ai valori standard SALTATO (nessun valore a scala sbagliata).",
+                    axis_state.axis.upper(), axis_state.aggr_param,
+                    axis_state.aggr_native_scale, axis_state.param_names,
+                )
+                continue
+            if axis_state.aggr_param and std_aggr != axis_state.current_aggr:
+                self._apply(axis_state, limits, axis_state.aggr_param,
+                            axis_state.current_aggr, std_aggr,
+                            f"[init-std] {axis_state.axis.upper()} Aggressiveness → {std_aggr:.0f} "
+                            f"(standard PHD2, native {std_aggr * axis_state.aggr_native_scale:.2f})",
+                            softening_source="init_standard")
+                axis_state.current_aggr = std_aggr
+            if axis_state.minmove_param and std_mm != axis_state.current_minmove:
+                self._apply(axis_state, limits, axis_state.minmove_param,
+                            axis_state.current_minmove, std_mm,
+                            f"[init-std] {axis_state.axis.upper()} MinMove → {std_mm:.2f} (standard PHD2)",
+                            is_minmove=True, softening_source="init_standard")
+                axis_state.current_minmove = std_mm
+            logger.info("[init-std] Asse %s ai valori standard: aggr=%.0f (native %.2f) minmove=%.2f",
+                        axis_state.axis.upper(), std_aggr,
+                        std_aggr * axis_state.aggr_native_scale, std_mm)
+
     def reinitialize(self) -> None:
         """Ri-legge i parametri da PHD2 (es. dopo cambio profilo utente)."""
         self._initialized = False
@@ -398,7 +494,25 @@ class AdaptiveController:
                                          self.cfg.thresholds.rms_low),
             baseline_provider=lambda: (self._rms_baseline_value
                                        if not self._rms_baseline_rejected else None),
+            transparency_provider=self._nina_confidence_input,   # §46 N8
         )
+
+    def _nina_confidence_input(self) -> Optional[dict]:
+        """§46 — input trasparenza per il motore. Graceful: None (nessuna modulazione)
+        se la feature è off, store/tracker non collegati, o telemetria NON fresca (la
+        freschezza è single-source nello store §43, adattiva alla posa)."""
+        if not self.cfg.diagnostic_engine.confidence_use_nina:
+            return None
+        store = self.nina_store
+        tracker = self.transparency_tracker
+        if store is None or tracker is None:
+            return None
+        try:
+            if not store.is_fresh:
+                return None
+            return tracker.confidence_input()
+        except Exception:
+            return None
 
     def _init_diagnostic_engine(self) -> None:
         """Istanzia (o dismette) il motore in base a cfg.diagnostic_engine.enabled.
@@ -464,6 +578,7 @@ class AdaptiveController:
         Le soglie attive restano agli ultimi valori validi (o TOML) nel frattempo."""
         self._rms_baseline_samples.clear()
         self._rms_baseline_all_samples.clear()   # §33
+        self._rms_rolling.clear()                # §44
         self._baseline_frames_seen = 0           # §33
         self._rms_baseline_value = None
         self._rms_baseline_done = False
@@ -489,7 +604,7 @@ class AdaptiveController:
         SEMPRE, anche nelle notti brutte dove non esistono 60 frame NOMINAL — requisito
         di P1: senza riferimento, satisfaction-gate (§30) e RECOVERY (§32) sono inerti."""
         ac = self.cfg.auto_calibration
-        if not ac.enabled or self._rms_baseline_done:
+        if not ac.enabled:
             return
         # §40 — scartiamo solo i frame davvero inutilizzabili (implosion). La soglia SNR
         # NON deve bloccare TUTTO: prima azzerava sia NOMINAL sia il fallback §33 ->
@@ -497,19 +612,32 @@ class AdaptiveController:
         if snap.implosion_detected:
             return
         snr = snap.snr_avg if snap.snr_avg is not None else 0.0
+        # Floor anti-garbage (= reject rilevamento PHD2) usato sia dal FALLBACK §33 sia
+        # dalla finestra mobile §44. Con baseline_fallback_ignores_snr_gate (shipped) la
+        # baseline si forma anche a SNR basso dai frame meno peggio.
+        fb_floor = (ac.baseline_fallback_min_snr
+                    if ac.baseline_fallback_ignores_snr_gate
+                    else ac.baseline_min_snr)
+        # §44 — finestra mobile del tracker continuo/bidirezionale: tutti i frame SNR-validi.
+        if ac.baseline_track_bidirectional and snr >= fb_floor:
+            self._rms_rolling.append(snap.rms_total)
+
+        if self._rms_baseline_done:
+            # §44 — dopo la formazione iniziale, aggiornamento CONTINUO e BIDIREZIONALE su
+            # finestra mobile (la baseline segue la scala reale della notte). Il refresh
+            # ciclico §25 è disattivato in questa modalità (vedi _maybe_start_refresh).
+            if ac.baseline_track_bidirectional:
+                self._continuous_track_baseline()
+            return
+
+        # ----- FORMAZIONE INIZIALE (§33/§40, invariata) -----
         # Percorso PRIMARIO (notti buone): frame NOMINAL con SNR >= baseline_min_snr.
         if snap.condition == SeeingCondition.NOMINAL and snr >= ac.baseline_min_snr:
             self._rms_baseline_samples.append(snap.rms_total)
-        # §33/§40 — finestra rolling per il FALLBACK. Con baseline_fallback_ignores_snr_gate
-        # (shipped) basta superare il floor anti-garbage (= reject PHD2): la baseline si
-        # forma anche a SNR basso dai frame meno peggio. A OFF torna il gate stretto §33.
-        if ac.baseline_always_form:
-            fb_floor = (ac.baseline_fallback_min_snr
-                        if ac.baseline_fallback_ignores_snr_gate
-                        else ac.baseline_min_snr)
-            if snr >= fb_floor:
-                self._rms_baseline_all_samples.append(snap.rms_total)
-                self._baseline_frames_seen += 1
+        # §33/§40 — finestra rolling per il FALLBACK (tutti i frame sopra fb_floor).
+        if ac.baseline_always_form and snr >= fb_floor:
+            self._rms_baseline_all_samples.append(snap.rms_total)
+            self._baseline_frames_seen += 1
         # Finalize: prima il percorso NOMINAL (notti buone), poi il fallback §33.
         if len(self._rms_baseline_samples) >= ac.baseline_window_frames:
             self._finalize_rms_baseline()
@@ -615,32 +743,13 @@ class AdaptiveController:
         # ----- APPLICAZIONE (primo finalize OR refresh accettato) -----
         self._rms_baseline_value = new_baseline
 
-        # Clamp proporzionale (§23) — il CAP su rms_high NON cambia.
-        cap_proporzionale = ac.rms_high_max_factor * scale
-        cap_efficace = max(ac.rms_high_min_arcsec,
-                           min(ac.rms_high_max_arcsec, cap_proporzionale))
-        derived_high = ac.rms_high_factor * new_baseline
-        new_high = min(cap_efficace, derived_high)
-        self._rms_high_cap_active = (derived_high > cap_efficace)
-        self._rms_high_cap_value = cap_efficace
-
-        # Floor rms_low (§23) + §33 cap anti-inversione (rms_low sempre sotto rms_high,
-        # anche con baseline alta e rms_high cappato: altrimenti rms_low>rms_high rompe
-        # la logica delle bande).
-        derived_low = ac.rms_low_factor * new_baseline
-        new_low = max(ac.rms_low_min_arcsec, derived_low)
-        inversion_capped = False
-        if ac.baseline_always_form:
-            inv_cap = new_high * ac.rms_low_high_ratio_max
-            if new_low > inv_cap:
-                new_low = inv_cap
-                inversion_capped = True
-
-        self.cfg.thresholds.rms_high = new_high
-        self.cfg.thresholds.rms_low = new_low
-        if self.analyzer is not None:
-            self.analyzer.rms_high = new_high
-            self.analyzer.rms_low = new_low
+        # §24 — derivazione soglie (CAP proporzionale MANTENUTO, floor rms_low,
+        # anti-inversione §33) nel punto UNICO _apply_derived_thresholds, condiviso col
+        # tracker continuo §44 (così cap/anti-inversione hanno una sola sorgente di verità).
+        d = self._apply_derived_thresholds(new_baseline)
+        new_high, new_low = d["new_high"], d["new_low"]
+        cap_proporzionale, cap_efficace = d["cap_proporzionale"], d["cap_efficace"]
+        inversion_capped, derived_low = d["inversion_capped"], d["derived_low"]
         self._rms_baseline_done = True
         self._rms_baseline_rejected = False
         self._baseline_finalize_time = time.monotonic()   # §25: timer del prossimo refresh
@@ -669,11 +778,149 @@ class AdaptiveController:
                 new_low, low_tag,
             )
 
+    def _apply_derived_thresholds(self, new_baseline: float) -> dict:
+        """§24 — deriva rms_high/rms_low da `new_baseline` e li scrive in cfg.thresholds
+        + analyzer. Punto UNICO di derivazione soglie, condiviso dal finalize (§33/§25) e
+        dal tracker continuo (§44): così il CAP §24, il floor rms_low e l'anti-inversione
+        §33 hanno una sola sorgente di verità (nessuna divergenza). NON modifica
+        `_rms_baseline_value` né i timer. Ritorna i valori utili al logging."""
+        ac = self.cfg.auto_calibration
+        scale = self.cfg.setup.guide_pixel_scale_arcsec
+        # CAP proporzionale §23/§24 — MANTENUTO: tetto di sicurezza contro soglie troppo larghe.
+        cap_proporzionale = ac.rms_high_max_factor * scale
+        cap_efficace = max(ac.rms_high_min_arcsec,
+                           min(ac.rms_high_max_arcsec, cap_proporzionale))
+        derived_high = ac.rms_high_factor * new_baseline
+        new_high = min(cap_efficace, derived_high)
+        self._rms_high_cap_active = (derived_high > cap_efficace)
+        self._rms_high_cap_value = cap_efficace
+        # Floor rms_low (§23) + §33 anti-inversione (rms_low sempre sotto rms_high).
+        derived_low = ac.rms_low_factor * new_baseline
+        new_low = max(ac.rms_low_min_arcsec, derived_low)
+        inversion_capped = False
+        if ac.baseline_always_form:
+            inv_cap = new_high * ac.rms_low_high_ratio_max
+            if new_low > inv_cap:
+                new_low = inv_cap
+                inversion_capped = True
+        self.cfg.thresholds.rms_high = new_high
+        self.cfg.thresholds.rms_low = new_low
+        if self.analyzer is not None:
+            self.analyzer.rms_high = new_high
+            self.analyzer.rms_low = new_low
+        return {
+            "new_high": new_high, "new_low": new_low,
+            "cap_proporzionale": cap_proporzionale, "cap_efficace": cap_efficace,
+            "inversion_capped": inversion_capped, "derived_low": derived_low,
+        }
+
+    def _continuous_track_baseline(self) -> None:
+        """§44 — tracker CONTINUO e BIDIREZIONALE della baseline su finestra mobile.
+        Eseguito a ogni frame dopo la formazione iniziale (solo se
+        `baseline_track_bidirectional`). Ricalcola la baseline col best-fraction della
+        finestra mobile (aggiornamento liscio: mediana su finestra, non per-frame) e
+        ri-deriva le soglie via `_apply_derived_thresholds` (CAP §24 mantenuto,
+        anti-inversione §33). BIDIREZIONALE: la baseline può SALIRE col peggiorare del
+        seeing o stringersi col migliorare. Backstop: gate di rifiuto §23 (baseline
+        assurda da setup rotto -> nessun aggiornamento, soglie correnti mantenute)."""
+        ac = self.cfg.auto_calibration
+        if len(self._rms_rolling) < ac.baseline_window_frames:
+            return   # finestra non ancora piena -> mantieni le soglie correnti
+        srt = sorted(self._rms_rolling)
+        k = max(1, int(len(srt) * ac.baseline_best_fraction))
+        cand = statistics.median(srt[:k])
+        # Gate di rifiuto §23 (identico al finalize non-fallback): baseline oltre il
+        # tetto "setup rotto" -> non aggiornare (backstop intatto anche in cap-continuo).
+        scale = self.cfg.setup.guide_pixel_scale_arcsec
+        reject_threshold = max(ac.baseline_reject_min_arcsec, ac.baseline_reject_factor * scale)
+        if cand > reject_threshold:
+            return
+        prev = self._rms_baseline_value
+        # Aggiornamento liscio: ignora micro-variazioni (no churn delle soglie / no spam log).
+        if prev is not None and abs(cand - prev) < 0.01:
+            return
+        self._rms_baseline_value = cand
+        self._rms_baseline_rejected = False
+        self._apply_derived_thresholds(cand)
+        arrow = (" ↑" if prev is not None and cand > prev
+                 else (" ↓" if prev is not None and cand < prev else ""))
+        logger.info(
+            "[autocal] baseline continua §44 = %.3f\"%s -> rms_high=%.3f\"%s rms_low=%.3f\"",
+            cand, arrow, self.cfg.thresholds.rms_high,
+            " [CAP]" if self._rms_high_cap_active else "", self.cfg.thresholds.rms_low,
+        )
+
+    def _update_minmove_baseline_filter(self) -> None:
+        """§51 — aggiorna l'EMA temporale della baseline §44 (una volta per tick). Costante
+        di tempo `filter_tau_minutes`: l'EMA segue lentamente la baseline reale della notte.
+        No-op se il cap è disabilitato o la baseline non è pronta/rifiutata (fallback)."""
+        mc = self.cfg.minmove_cap
+        if not mc.enabled:
+            return
+        b = (self._rms_baseline_value
+             if (self._rms_baseline_value is not None and not self._rms_baseline_rejected)
+             else None)
+        if b is None:
+            return
+        now = time.monotonic()
+        if self._minmove_baseline_ema is None:
+            self._minmove_baseline_ema = b
+            self._minmove_baseline_ema_t = now
+            return
+        dt = now - (self._minmove_baseline_ema_t or now)
+        tau = max(1.0, mc.filter_tau_minutes * 60.0)
+        alpha = 1.0 - math.exp(-dt / tau) if dt > 0 else 0.0
+        self._minmove_baseline_ema += alpha * (b - self._minmove_baseline_ema)
+        self._minmove_baseline_ema_t = now
+
+    def _minmove_cap_px(self) -> Optional[float]:
+        """§51 — cap MinMove adattivo in PIXEL, o None (fallback = nessun cap) se
+        disabilitato o EMA baseline non ancora pronta. Aggiorna anche `_minmove_cap_info`
+        (arcsec + px + termine vincente) per /status. Formula:
+          cap_arcsec = min(k × baseline_filtrata, imaging_ceiling_arcsec); cap_px = /pixel_scale."""
+        mc = self.cfg.minmove_cap
+        if not mc.enabled or self._minmove_baseline_ema is None:
+            self._minmove_cap_info = None
+            return None
+        scale = self.cfg.setup.guide_pixel_scale_arcsec
+        if scale <= 0:
+            self._minmove_cap_info = None
+            return None
+        cap_guiding = mc.baseline_factor * self._minmove_baseline_ema   # arcsec
+        cap_arcsec = min(cap_guiding, mc.imaging_ceiling_arcsec)
+        winning = "guiding" if cap_guiding <= mc.imaging_ceiling_arcsec else "imaging"
+        cap_px = cap_arcsec / scale
+        self._minmove_cap_info = {
+            "cap_arcsec": round(cap_arcsec, 3),
+            "cap_px": round(cap_px, 3),
+            "winning": winning,
+            "baseline_filtered_arcsec": round(self._minmove_baseline_ema, 3),
+        }
+        return cap_px
+
+    def _cap_minmove_up(self, new_mm: float, limits: AxisLimits) -> float:
+        """§51 — applica il cap adattivo a un MinMove che sta salendo. Tetto superiore:
+        new_mm non supera cap_px; il floor minmove_min resta la barriera inferiore.
+        Fallback (cap None): ritorna new_mm invariato (comportamento legacy).
+        §0-bis: se il cap TAGLIA la richiesta (cap_px < new_mm) registra clamping_active
+        con persistenza anti-flicker (per il badge ACTIVE della dashboard)."""
+        cap_px = self._minmove_cap_px()
+        if cap_px is None:
+            return new_mm
+        if cap_px < new_mm:   # il controllore chiedeva più del cap -> il cap ha tagliato
+            self._minmove_clamp_active_until = time.monotonic() + _MINMOVE_CLAMP_PERSIST_S
+        return max(limits.minmove_min, min(new_mm, cap_px))
+
     def _maybe_start_refresh(self) -> None:
         """§25: se il refresh ciclico e' abilitato, la baseline e' applicata e il timer
         e' scaduto, riapre la raccolta. Le soglie correnti restano attive durante la
         ri-misura: solo al termine si decide se applicare o rifiutare (tightest-wins)."""
         ac = self.cfg.auto_calibration
+        # §44 — in modalità continua/bidirezionale il tracker gestisce gli aggiornamenti
+        # a ogni frame: il refresh ciclico §25 (con la sua attesa e il tightest-wins) è
+        # disattivato per non interferire.
+        if ac.baseline_track_bidirectional:
+            return
         if (not ac.enabled or not ac.refresh_enabled
                 or self._baseline_refresh_in_progress
                 or not self._rms_baseline_done
@@ -903,6 +1150,7 @@ class AdaptiveController:
         snapshot.evaluated = True
 
         self._update_guiding_state(snapshot)
+        self._update_minmove_baseline_filter()   # §51 — EMA baseline per il cap MinMove
 
         # §31 — Seeing Diagnostic Engine: diagnosi causale a ogni tick (alimenta la
         # dashboard e gli eventuali interventi). A motore spento e' un no-op completo.
@@ -1076,6 +1324,7 @@ class AdaptiveController:
                     and mm_elapsed >= minmove_cooldown):
                 old_mm = axis_state.current_minmove
                 new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
+                new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo
                 if new_mm != old_mm:
                     reason = (
                         f"Seeing degradato - aumento MinMove "
@@ -1091,7 +1340,11 @@ class AdaptiveController:
         # ---- CASO 2: Oscillazione -> abbassa aggressivita' (RA + DEC) ----
         # Modifica vs versione originale: includiamo anche DEC perche' le
         # oscillazioni in DEC con backlash sono altrettanto comuni e gravi.
-        elif (condition == SeeingCondition.OSCILLATING
+        # §47 — esperimento outcome-first: gateato da oscillation_branch_enabled
+        # (default false -> un trend non riduce piu' l'aggressivita' "perche' oscilla";
+        # la condizione cade nel ramo successivo / banda morta). Reversibile.
+        elif (self.cfg.diagnostic_engine.oscillation_branch_enabled
+              and condition == SeeingCondition.OSCILLATING
               and axis_state.aggr_param):
 
             elapsed = now - axis_state.last_action_time
@@ -1187,30 +1440,82 @@ class AdaptiveController:
         # CONFERMA (caso ignoto -> CONFIRM), §31 non e' toccato.
         elif (self.cfg.lever_optimization.minmove_recovery_enabled
               and not self._recovery_blocked
-              and self._recovery_consec >= thresh.consecutive_frames
-              and axis_state.minmove_param):
-            recovery_threshold = self._recovery_threshold()
-            mm_elapsed = now - axis_state.last_minmove_action_time
-            if (recovery_threshold is not None and rms > recovery_threshold
-                    and mm_elapsed >= minmove_cooldown):
-                old_mm = axis_state.current_minmove
-                new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
-                if new_mm != old_mm:
-                    lo_factor = self.cfg.lever_optimization.minmove_recovery_factor
-                    reason = (
-                        f"Recupero leve: RMS {axis_state.axis.upper()}={rms:.2f}\" sopra "
-                        f"mediana×{lo_factor:.2f} nella banda morta - alzo MinMove "
-                        f"verso la morbidezza"
-                    )
-                    action = self._apply_with_guardian(axis_state, limits,
-                                                       axis_state.minmove_param,
-                                                       old_mm, new_mm, reason,
-                                                       is_minmove=True, caso="RECOVERY",
-                                                       snapshot=snapshot)
-                    actions.append(action)
-                    self._recovery_applied_this_tick = True
+              and self._recovery_consec >= thresh.consecutive_frames):
+            # §53 — il VERSO è deciso globalmente in _update_recovery_state (esito/stabilità).
+            # Un solo verso per asse/tick (anti-flapping). caso="RECOVERY" -> guardian CONFIRM.
+            if self._recovery_direction == "stiffen":
+                self._recovery_stiffen_axis(axis_state, limits, snapshot,
+                                            actions, now, cooldown, minmove_cooldown)
+            else:
+                self._recovery_soften_axis(axis_state, limits, rms, snapshot,
+                                           actions, now, minmove_cooldown)
 
         return actions
+
+    def _recovery_stiffen_axis(self, axis_state: "AxisState", limits: AxisLimits,
+                               snapshot: AnalysisSnapshot, actions: list, now: float,
+                               cooldown: float, minmove_cooldown: float) -> None:
+        """§53 — irrigidimento verso lo standard §50: aggr SU (solo assi a scala frazionaria,
+        mai OLTRE il nominale §50) + MinMove GIÙ (mai SOTTO il nominale §50). Un gradino per
+        cooldown; l'esito è valutato in _finalize_recovery_windup (KEEP/STOP)."""
+        lo = self.cfg.lever_optimization
+        nom_aggr, nom_mm = _STANDARD_INIT[axis_state.axis]
+        anchor = (self._recovery_anchor_rms if self._recovery_anchor_rms is not None
+                  else snapshot.rms_total)
+        # Aggr SU verso il nominale §50 (solo Hysteresis/Resist Switch: scala frazionaria).
+        if (lo.recovery_stiffen_aggression and axis_state.aggr_param
+                and axis_state.aggr_native_scale == _FRACTIONAL_AGGR_SCALE
+                and axis_state.current_aggr < nom_aggr - 1e-6
+                and now - axis_state.last_action_time >= cooldown):
+            old_v = axis_state.current_aggr
+            new_v = min(nom_aggr, old_v + limits.aggr_step_up)   # mai oltre il nominale §50
+            if new_v != old_v:
+                reason = (f"Recupero simmetrico §53: banda morta stabile - irrigidisco Aggr "
+                          f"{axis_state.axis.upper()} {old_v:.0f}→{new_v:.0f} verso lo standard "
+                          f"(anchor RMS {anchor:.2f}\")")
+                actions.append(self._apply_with_guardian(
+                    axis_state, limits, axis_state.aggr_param, old_v, new_v, reason,
+                    caso="RECOVERY", snapshot=snapshot))
+                self._recovery_applied_this_tick = True
+        # MinMove GIÙ verso il nominale §50 (mai sotto il nominale; il cap §51 è tetto in salita).
+        if (axis_state.minmove_param and axis_state.current_minmove > nom_mm + 1e-6
+                and now - axis_state.last_minmove_action_time >= minmove_cooldown):
+            old_mm = axis_state.current_minmove
+            new_mm = max(nom_mm, old_mm - limits.minmove_step)   # mai sotto il nominale §50
+            if new_mm != old_mm:
+                reason = (f"Recupero simmetrico §53: banda morta stabile - abbasso MinMove "
+                          f"{axis_state.axis.upper()} {old_mm:.2f}→{new_mm:.2f} verso lo standard "
+                          f"(anchor RMS {anchor:.2f}\")")
+                actions.append(self._apply_with_guardian(
+                    axis_state, limits, axis_state.minmove_param, old_mm, new_mm, reason,
+                    is_minmove=True, caso="RECOVERY", snapshot=snapshot))
+                self._recovery_applied_this_tick = True
+
+    def _recovery_soften_axis(self, axis_state: "AxisState", limits: AxisLimits, rms: float,
+                              snapshot: AnalysisSnapshot, actions: list, now: float,
+                              minmove_cooldown: float) -> None:
+        """§32 — ammorbidimento (alza MinMove verso la morbidezza) nella banda morta. In §53
+        è il FALLBACK: scatta quando il verso del run è 'soften' (leve già allo standard, o
+        l'esito ha bloccato l'irrigidimento = seeing vero). Cap §51 tetto in salita, invariato."""
+        if not axis_state.minmove_param:
+            return
+        recovery_threshold = self._recovery_threshold()
+        mm_elapsed = now - axis_state.last_minmove_action_time
+        if (recovery_threshold is None or rms <= recovery_threshold
+                or mm_elapsed < minmove_cooldown):
+            return
+        old_mm = axis_state.current_minmove
+        new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
+        new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo
+        if new_mm == old_mm:
+            return
+        lo_factor = self.cfg.lever_optimization.minmove_recovery_factor
+        reason = (f"Recupero leve (soften §32): RMS {axis_state.axis.upper()}={rms:.2f}\" sopra "
+                  f"mediana×{lo_factor:.2f} nella banda morta - alzo MinMove verso la morbidezza")
+        actions.append(self._apply_with_guardian(
+            axis_state, limits, axis_state.minmove_param, old_mm, new_mm, reason,
+            is_minmove=True, caso="RECOVERY", snapshot=snapshot))
+        self._recovery_applied_this_tick = True
 
     # ------------------------------------------------------------------ #
     #  §32 — Recupero MinMove nella banda morta (asimmetria leve §4)        #
@@ -1228,20 +1533,65 @@ class AdaptiveController:
         return self._rms_baseline_value * lo.minmove_recovery_factor
 
     def _update_recovery_state(self, snapshot: AnalysisSnapshot) -> None:
-        """§32 — aggiorna il contatore consecutivo del trigger di recupero. Globale
-        (su rms_total), una volta per tick prima dei due assi. Quando l'RMS rientra
-        nel corridoio (<= soglia) o il recupero non e' disponibile, chiude il run e
-        azzera lo stato anti-windup: cosi' recupero (su) e CASO 3 (giu') non oscillano
-        e il blocco anti-windup si rilascia quando le condizioni cambiano."""
+        """§32/§53 — stato del recupero (una volta per tick, prima degli assi). Aggiorna il
+        contatore consecutivo (rms_total > soglia) e la finestra RMS per il trend; §53:
+        decide il VERSO del run — 'stiffen' (leve più morbide dello standard §50 + guida
+        stabile → irrigidisci verso lo standard) o 'soften' (§32 legacy). Reset del run
+        quando l'RMS rientra nel corridoio (<= soglia) o il recupero non è disponibile."""
         self._recovery_applied_this_tick = False
+        self._rms_recent.append(snapshot.rms_total)
         threshold = self._recovery_threshold()
-        if threshold is not None and snapshot.rms_total > threshold:
-            self._recovery_consec += 1
-        else:
+        if threshold is None or snapshot.rms_total <= threshold:
             self._recovery_consec = 0
             self._recovery_anchor_rms = None
             self._recovery_actions_since_anchor = 0
             self._recovery_blocked = False
+            self._recovery_stiffen_blocked = False
+            self._recovery_direction = None
+            return
+        self._recovery_consec += 1
+        # §53 — verso del run: STIFFEN solo se feature on, irrigidimento non già bloccato
+        # dall'esito, leve più morbide dello standard §50 e guida stabile; altrimenti SOFTEN.
+        lo = self.cfg.lever_optimization
+        if (lo.symmetric_recovery_enabled and not self._recovery_stiffen_blocked
+                and self._levers_softened() and self._recovery_is_stable(snapshot)):
+            self._recovery_direction = "stiffen"
+        else:
+            self._recovery_direction = "soften"
+
+    def _levers_softened(self) -> bool:
+        """§53 — True se almeno un asse è più MORBIDO dello standard §50 (aggr sotto il
+        nominale su assi a scala frazionaria, oppure MinMove sopra il nominale)."""
+        for axis_state in (self._ra, self._dec):
+            nom_aggr, nom_mm = _STANDARD_INIT[axis_state.axis]
+            if (axis_state.aggr_native_scale == _FRACTIONAL_AGGR_SCALE
+                    and axis_state.aggr_param
+                    and axis_state.current_aggr < nom_aggr - 1e-6):
+                return True
+            if axis_state.minmove_param and axis_state.current_minmove > nom_mm + 1e-6:
+                return True
+        return False
+
+    def _rms_rising(self) -> bool:
+        """§53 — True se l'RMS recente è in salita (ultimo − primo della finestra > eps)."""
+        w = list(self._rms_recent)
+        if len(w) < 3:
+            return False
+        return (w[-1] - w[0]) > _RMS_RISING_EPS
+
+    def _recovery_is_stable(self, snapshot: AnalysisSnapshot) -> bool:
+        """§53 — guida STABILE = RMS non in salita, non-SEEING, e (advisory) trasparenza
+        N1 non-CLOUD. Pre-condizione per tentare l'irrigidimento verso lo standard."""
+        if self._rms_rising():
+            return False
+        if snapshot.condition == SeeingCondition.DEGRADED_SEEING:
+            return False
+        if self._current_diag is not None and self._current_diag.state.name == "SEEING":
+            return False
+        ci = self._nina_confidence_input()   # None se non fresco/assente (advisory N1)
+        if ci is not None and ci.get("state") == "CLOUD":
+            return False
+        return True
 
     def _finalize_recovery_windup(self, snapshot: AnalysisSnapshot) -> None:
         """§32 — anti-windup puro-RMS, una volta per tick dopo entrambi gli assi.
@@ -1253,12 +1603,37 @@ class AdaptiveController:
         if not self._recovery_applied_this_tick:
             return
         rms = snapshot.rms_total
-        k = max(1, self.cfg.lever_optimization.recovery_no_progress_k)
+        lo = self.cfg.lever_optimization
         if self._recovery_anchor_rms is None:
             self._recovery_anchor_rms = rms
             self._recovery_actions_since_anchor = 1
             return
         self._recovery_actions_since_anchor += 1
+
+        # §53 — STIFFEN: outcome gate. Dopo la finestra, se l'RMS regge (<= anchor×tol)
+        # continua e ri-ancora; se peggiora oltre tolleranza -> STOP (era seeing vero),
+        # blocca l'irrigidimento e passa a soften (§32 diventa legittimo).
+        if self._recovery_direction == "stiffen":
+            win = max(1, lo.recovery_outcome_window_frames)
+            if self._recovery_actions_since_anchor >= win:
+                tol = self._recovery_anchor_rms * lo.recovery_outcome_tolerance_factor
+                if rms <= tol:
+                    logger.info("[recovery §53] STIFFEN KEEP: RMS %.3f\" regge vs anchor %.3f\" "
+                                "(×%.2f) -> continuo verso lo standard",
+                                rms, self._recovery_anchor_rms, lo.recovery_outcome_tolerance_factor)
+                    self._recovery_anchor_rms = rms
+                    self._recovery_actions_since_anchor = 0
+                else:
+                    logger.info("[recovery §53] STIFFEN STOP: RMS %.3f\" peggiora oltre anchor "
+                                "%.3f\"×%.2f -> era seeing, tengo le leve e passo a soften",
+                                rms, self._recovery_anchor_rms, lo.recovery_outcome_tolerance_factor)
+                    self._recovery_stiffen_blocked = True
+                    self._recovery_anchor_rms = None
+                    self._recovery_actions_since_anchor = 0
+            return
+
+        # SOFTEN — anti-windup §32 (invariato): dopo K recuperi senza calo RMS, blocca.
+        k = max(1, lo.recovery_no_progress_k)
         if self._recovery_actions_since_anchor >= k:
             if rms < self._recovery_anchor_rms - _RECOVERY_PROGRESS_EPS:
                 # Il softening sta aiutando: ri-ancora e continua a recuperare.
@@ -1303,9 +1678,10 @@ class AdaptiveController:
         di current_*. In guardian consulta engine.review(): CONFIRM applica invariato,
         ATTENUATE applica una frazione (guardian_attenuate_factor), BLOCK non applica e
         ritorna un evento axis="guardian". current_* aggiornato solo se applicato."""
+        src = _CASO_TO_SOURCE.get(caso, "other")   # §47 attribuzione
         if not self._guardian_active():
             action = self._apply(axis_state, limits, param_name, old_value, new_value,
-                                 reason, is_minmove=is_minmove)
+                                 reason, is_minmove=is_minmove, softening_source=src)
             self._set_current(axis_state, is_minmove, new_value)
             return action
 
@@ -1314,7 +1690,7 @@ class AdaptiveController:
 
         if verdict == GuardianVerdict.CONFIRM:
             action = self._apply(axis_state, limits, param_name, old_value, new_value,
-                                 reason, is_minmove=is_minmove)
+                                 reason, is_minmove=is_minmove, softening_source=src)
             self._set_current(axis_state, is_minmove, new_value)
             return action
 
@@ -1329,7 +1705,7 @@ class AdaptiveController:
                                                   "guardian_attenuate", "attenuate", snapshot)
             full_reason = f"{reason} [GUARDIAN ATTENUATE x{factor:.2f}]"
             action = self._apply(axis_state, limits, param_name, old_value, new2,
-                                 full_reason, is_minmove=is_minmove)
+                                 full_reason, is_minmove=is_minmove, softening_source=src)
             self._set_current(axis_state, is_minmove, new2)
             logger.info("[GUARDIAN] ATTENUATE %s/%s %.3f->%.3f (v2.3 voleva %.3f) — %s",
                         axis_state.axis, param_name, old_value, new2, new_value, vreason)
@@ -1371,7 +1747,7 @@ class AdaptiveController:
 
     def _apply_proposal(
         self, axis_state: AxisState, limits: AxisLimits, proposal, factor: float,
-        reason: str,
+        reason: str, softening_source: str = "guardian_micro",
     ) -> tuple[list[dict], list[ControlAction]]:
         """Traduce una LeverProposal (direzione) in mosse concrete con clamp ai
         [limits], applicate via _apply (×1.0 in jitter, ×guardian_action_factor nelle
@@ -1390,7 +1766,8 @@ class AdaptiveController:
                      else min(limits.aggr_max, old_v + step))
             if new_v != old_v:
                 actions.append(self._apply(axis_state, limits, axis_state.aggr_param,
-                                           old_v, new_v, reason))
+                                           old_v, new_v, reason,
+                                           softening_source=softening_source))
                 axis_state.current_aggr = new_v
                 lever_changes.append({"axis": axis_state.axis, "param": axis_state.aggr_param,
                                       "old": round(old_v, 4), "new": round(new_v, 4)})
@@ -1400,9 +1777,12 @@ class AdaptiveController:
             old_mm = axis_state.current_minmove
             new_mm = (min(limits.minmove_max, old_mm + step) if proposal.minmove > 0
                       else max(limits.minmove_min, old_mm - step))
+            if proposal.minmove > 0:
+                new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo (solo in salita)
             if new_mm != old_mm:
                 actions.append(self._apply(axis_state, limits, axis_state.minmove_param,
-                                           old_mm, new_mm, reason, is_minmove=True))
+                                           old_mm, new_mm, reason, is_minmove=True,
+                                           softening_source=softening_source))
                 axis_state.current_minmove = new_mm
                 lever_changes.append({"axis": axis_state.axis, "param": axis_state.minmove_param,
                                       "old": round(old_mm, 4), "new": round(new_mm, 4)})
@@ -1628,6 +2008,16 @@ class AdaptiveController:
         if target not in ("jitter", "guardian"):
             logger.warning("[diagnostic_engine] target modalita' '%s' ignoto", target)
             return {"mode": de.mode if de.enabled else "off", "error": "unknown_mode"}
+
+        # §54 — guard-rail JITTER (difesa in profondità, oltre alla UI): senza
+        # allow_experimental_jitter la richiesta viene coerciata a GUARDIAN con WARNING
+        # prominente; si ritorna la modalità EFFETTIVA così la UI riflette la realtà.
+        if target == "jitter" and not getattr(de, "allow_experimental_jitter", False):
+            logger.warning(
+                "[diagnostic_engine] modalità JITTER DEPRECATA e non validata — scavalca "
+                "§44/§50/§51/§53; ignorata, uso GUARDIAN. Per esercitarla deliberatamente "
+                "impostare [diagnostic_engine] allow_experimental_jitter=true.")
+            target = "guardian"
 
         if not de.allow_dashboard_mode_switch:
             logger.warning(
@@ -2175,8 +2565,12 @@ class AdaptiveController:
         new_value: float,
         reason: str,
         is_minmove: bool = False,
+        softening_source: str = "other",
     ) -> ControlAction:
         """Invia (o simula) la modifica a PHD2."""
+        # §47 — MinMove efficace in arcsec (px × pixel-scale viva) per l'attribuzione.
+        mm_arcsec = (round(new_value * self.cfg.setup.guide_pixel_scale_arcsec, 3)
+                     if is_minmove else None)
         action = ControlAction(
             timestamp=time.time(),
             axis=axis_state.axis,
@@ -2185,7 +2579,12 @@ class AdaptiveController:
             new_value=new_value,
             reason=reason,
             dry_run=self.dry_run,
+            softening_source=softening_source,
+            minmove_arcsec=mm_arcsec,
         )
+        # §47 — breakdown sorgenti softening della sessione.
+        self._softening_source_counts[softening_source] = (
+            self._softening_source_counts.get(softening_source, 0) + 1)
 
         if self.dry_run:
             logger.info("[TEST] %s", action)
@@ -2316,7 +2715,9 @@ class AdaptiveController:
                     if self._rms_high_cap_value is not None else None
                 ),
                 "rms_high_cap_active": self._rms_high_cap_active,
-                # §25 — refresh ciclico baseline (tightest-wins)
+                # §44 — baseline a rinnovo continuo/bidirezionale (vs legacy §25)
+                "track_bidirectional": self.cfg.auto_calibration.baseline_track_bidirectional,
+                # §25 — refresh ciclico baseline (tightest-wins, modalità legacy)
                 "refresh_enabled": self.cfg.auto_calibration.refresh_enabled,
                 "refresh_interval_seconds": self.cfg.auto_calibration.refresh_interval_seconds,
                 "refresh_in_progress": self._baseline_refresh_in_progress,
@@ -2359,6 +2760,50 @@ class AdaptiveController:
                  "mode": self.cfg.diagnostic_engine.mode,
                  "allow_dashboard_mode_switch": self.cfg.diagnostic_engine.allow_dashboard_mode_switch}
             ),
+            # §51 — cap MinMove adattivo: MinMove efficace (arcsec) per asse, cap corrente
+            # (arcsec/px) e termine vincente (guiding vs imaging). Aggiorna _minmove_cap_info.
+            "minmove_cap": {
+                "enabled": self.cfg.minmove_cap.enabled,
+                "k": self.cfg.minmove_cap.baseline_factor,
+                "imaging_ceiling_arcsec": self.cfg.minmove_cap.imaging_ceiling_arcsec,
+                "filter_tau_minutes": self.cfg.minmove_cap.filter_tau_minutes,
+                "cap_active": self._minmove_cap_px() is not None,
+                # §0-bis — ACTIVE = il cap ha tagliato una richiesta MinMove-up (non "MinMove==cap").
+                "clamping_active": time.monotonic() < self._minmove_clamp_active_until,
+                "cap_arcsec": (self._minmove_cap_info or {}).get("cap_arcsec"),
+                "cap_px": (self._minmove_cap_info or {}).get("cap_px"),
+                "winning": (self._minmove_cap_info or {}).get("winning"),
+                "baseline_filtered_arcsec": (self._minmove_cap_info or {}).get("baseline_filtered_arcsec"),
+                "minmove_ra_arcsec": round(
+                    self._ra.current_minmove * self.cfg.setup.guide_pixel_scale_arcsec, 3),
+                "minmove_dec_arcsec": round(
+                    self._dec.current_minmove * self.cfg.setup.guide_pixel_scale_arcsec, 3),
+            },
+            # §53 — recupero simmetrico guidato dall'esito (banda morta bidirezionale).
+            "recovery": {
+                "enabled": self.cfg.lever_optimization.symmetric_recovery_enabled,
+                "state": ("IDLE" if self._recovery_consec == 0
+                          else ("RECOVERING" if (self._recovery_direction == "stiffen"
+                                                 and not self._recovery_stiffen_blocked)
+                                else "HOLDING")),
+                "direction": self._recovery_direction,
+                "anchor_rms": (round(self._recovery_anchor_rms, 3)
+                               if self._recovery_anchor_rms is not None else None),
+                "consec": self._recovery_consec,
+                "blocked": self._recovery_blocked,
+                "stiffen_blocked": self._recovery_stiffen_blocked,
+            },
+            # §47 — esperimento outcome-first: stato ramo oscillazioni + breakdown
+            # delle sorgenti di softening della sessione (per dashboard/attribuzione).
+            "oscillation_experiment": {
+                "branch_enabled": self.cfg.diagnostic_engine.oscillation_branch_enabled,
+                "softening_sources": dict(self._softening_source_counts),
+                "osc_would_fire": (self.diagnostic_engine.get_state().get("osc_would_fire", 0)
+                                   if self.diagnostic_engine is not None else 0),
+                "osc_would_fire_degraded": (
+                    self.diagnostic_engine.get_state().get("osc_would_fire_degraded", 0)
+                    if self.diagnostic_engine is not None else 0),
+            },
             "last_actions": [a.to_dict() for a in self.action_history[-10:]],
         }
 

@@ -14,6 +14,7 @@ let frameCount = 0;
 let actionCount = 0;
 let isDryRun = true;
 let exposureMarkerMeta = [];  // parallel to chart labels; null or {dir, old_ms, new_ms, state}
+let ninaMarkerMeta = [];      // §46: parallel; null o {penalty, conf_phd2, conf_final, state}
 
 // ===== CHART =====
 const chartCtx = document.getElementById('guide-chart').getContext('2d');
@@ -71,6 +72,18 @@ const guideChart = new Chart(chartCtx, {
         pointHoverRadius: (ctx) => (exposureMarkerMeta[ctx.dataIndex] ? 10 : 0),
         pointStyle: 'triangle',
       },
+      {
+        // §46 — marcatore "NINA ha modulato la confidence del SEEING"
+        label: 'NINA mod',
+        data: [],
+        borderColor: 'transparent',
+        backgroundColor: 'rgba(167,139,250,0.95)',
+        borderWidth: 0,
+        showLine: false,
+        pointRadius: (ctx) => (ninaMarkerMeta[ctx.dataIndex] ? 7 : 0),
+        pointHoverRadius: (ctx) => (ninaMarkerMeta[ctx.dataIndex] ? 9 : 0),
+        pointStyle: 'rectRot',
+      },
     ],
   },
   options: {
@@ -97,6 +110,7 @@ const guideChart = new Chart(chartCtx, {
         bodyColor: '#8a9cc0',
         filter: (item) => {
           if (item.datasetIndex === 3 && !exposureMarkerMeta[item.dataIndex]) return false;
+          if (item.datasetIndex === 4 && !ninaMarkerMeta[item.dataIndex]) return false;
           return true;
         },
         callbacks: {
@@ -104,6 +118,11 @@ const guideChart = new Chart(chartCtx, {
             if (ctx.datasetIndex === 3) {
               const meta = exposureMarkerMeta[ctx.dataIndex];
               if (meta) return ` Exp ${meta.dir}: ${meta.old_ms}ms → ${meta.new_ms}ms`;
+              return null;
+            }
+            if (ctx.datasetIndex === 4) {
+              const meta = ninaMarkerMeta[ctx.dataIndex];
+              if (meta) return ` NINA: confidence ${meta.conf_phd2}→${meta.conf_final} (trasparenza ${meta.state || ''})`;
               return null;
             }
             return ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)}″`;
@@ -268,6 +287,12 @@ function applyFullStatus(data) {
     updateDiagnosticEngine(ctrl.diagnostic_engine);
   }
 
+  // §45 — Transparency Index (NINA, Layer-2)
+  updateTransparency(data.nina);
+
+  // §51 — Adaptive MinMove (cap adattivo)
+  updateMinMoveCap(ctrl.minmove_cap);
+
   // Actions history
   if (ctrl.last_actions?.length) {
     el('action-log').innerHTML = ''; // prevent duplication
@@ -297,8 +322,19 @@ function updateGuideStep(msg) {
     }
   }
 
+  // §46 — marcatore quando NINA ha modulato (penalizzato) la confidence del SEEING
+  let ninaMarker = null;
+  if (msg.nina_mod && msg.nina_mod.penalty > 0) {
+    ninaMarker = {
+      penalty: msg.nina_mod.penalty,
+      conf_phd2: msg.nina_mod.conf_phd2,
+      conf_final: msg.nina_mod.conf_final,
+      state: msg.nina_mod.state,
+    };
+  }
+
   const ts = new Date(msg.ts * 1000).toLocaleTimeString('it-IT', { hour12: false });
-  addChartPoint(ts, msg.rms_ra, msg.rms_dec, msg.rms_total, expMarker);
+  addChartPoint(ts, msg.rms_ra, msg.rms_dec, msg.rms_total, expMarker, ninaMarker);
 
   // Condizione
   if (msg.condition) {
@@ -340,7 +376,7 @@ function setGauge(valId, rms, barId) {
   barEl.style.background = barColor;
 }
 
-function addChartPoint(label, ra, dec, tot, expMarker = null) {
+function addChartPoint(label, ra, dec, tot, expMarker = null, ninaMarker = null) {
   const d = guideChart.data;
   d.labels.push(label);
   d.datasets[0].data.push(ra);
@@ -349,11 +385,15 @@ function addChartPoint(label, ra, dec, tot, expMarker = null) {
   // 4th dataset: small y-value at marker points (renders as triangle dot)
   d.datasets[3].data.push(expMarker ? 0.06 : null);
   exposureMarkerMeta.push(expMarker);
+  // 5th dataset (§46): marcatore NINA-modulazione, leggermente più in basso
+  d.datasets[4].data.push(ninaMarker ? 0.03 : null);
+  ninaMarkerMeta.push(ninaMarker);
 
   if (d.labels.length > MAX_CHART_POINTS) {
     d.labels.shift();
     d.datasets.forEach(ds => ds.data.shift());
     exposureMarkerMeta.shift();
+    ninaMarkerMeta.shift();
   }
   guideChart.update('none');
 }
@@ -530,13 +570,111 @@ function fmtDelta(v) {
   return (v > 0 ? '+' : '') + v.toFixed(3);
 }
 
+const TRANSP_STATE = {
+  CLEAR: { icon: '🌌', color: '#4ade80', label: 'CIELO LIMPIDO' },
+  HAZE:  { icon: '🌫️', color: '#fbbf24', label: 'VELATURE' },
+  CLOUD: { icon: '☁️', color: '#f87171', label: 'NUVOLE' },
+};
+
+// §45 — card Transparency Index (NINA). Graceful: senza telemetria la card è nascosta.
+function updateTransparency(nina) {
+  const card = el('transparency-card');
+  if (!card) { return; }
+  const t = (nina && nina.transparency) || null;
+  if (!t || !t.enabled || !t.available || t.index == null) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  const cfg = TRANSP_STATE[t.state] || { icon: '🌌', color: '#9ca3af', label: t.state || '—' };
+  el('transp-icon').textContent = cfg.icon;
+  el('transp-state').textContent = cfg.label;
+  el('transp-state').style.color = cfg.color;
+  const dpct = (t.deficit_pct != null) ? t.deficit_pct : 0;
+  el('transp-index-desc').textContent = dpct > 0
+    ? `−${dpct}% vs cielo limpido recente`
+    : 'al livello del cielo limpido recente';
+  el('transp-stars').textContent = (t.star_count != null && t.base_stars != null)
+    ? `${Math.round(t.star_count)}/${Math.round(t.base_stars)}` : '—';
+  el('transp-index').textContent = t.index != null ? t.index.toFixed(2) : '—';
+  el('transp-filter').textContent = t.filter || '—';
+}
+
+// §51 — card "Adaptive MinMove": badge ACTIVE/IDLE (da clamping_active), cap, baseline
+// filtrata, termine vincente (GUIDING/IMAGING), MinMove efficace RA/DEC. Graceful: cap
+// assente/kill-switch off -> "non attivo" (badge grigio), nessun crash.
+function updateMinMoveCap(mc) {
+  const badge = el('mmcap-status-badge');
+  if (!badge) { return; }
+  const winner = el('mmcap-winner-badge');
+
+  // Graceful: blocco assente o cap disabilitato/non pronto.
+  if (!mc || mc.enabled === false || mc.cap_active !== true) {
+    badge.textContent = 'NON ATTIVO';
+    badge.style.background = 'rgba(138,156,192,0.15)';
+    badge.style.color = '#8a9cc0';
+    badge.title = mc && mc.enabled === false
+      ? 'Cap MinMove adattivo disattivato (kill-switch)'
+      : 'Cap MinMove adattivo non ancora pronto (baseline filtrata in formazione)';
+    el('mmcap-cap').textContent = '—';
+    el('mmcap-baseline').textContent = '—';
+    el('mmcap-minmove').textContent = '—';
+    el('mmcap-params').textContent = '—';
+    if (winner) { winner.style.display = 'none'; }
+    return;
+  }
+
+  // Badge ACTIVE/IDLE — guidato da clamping_active (NON da "MinMove == cap").
+  if (mc.clamping_active === true) {
+    badge.textContent = 'ACTIVE';
+    badge.style.background = 'rgba(251,146,60,0.18)';
+    badge.style.color = '#fb923c';
+    badge.title = 'Il MinMove richiesto dal controllore è stato limitato dal cap adattivo';
+  } else {
+    badge.textContent = 'IDLE';
+    badge.style.background = 'rgba(74,222,128,0.15)';
+    badge.style.color = '#4ade80';
+    badge.title = 'Il controllore sta operando senza limitazioni del cap adattivo';
+  }
+
+  const capArc = mc.cap_arcsec != null ? mc.cap_arcsec.toFixed(2) : '—';
+  const capPx = mc.cap_px != null ? mc.cap_px.toFixed(2) : '—';
+  el('mmcap-cap').textContent = `${capArc}″ (${capPx} px)`;
+  el('mmcap-baseline').textContent = mc.baseline_filtered_arcsec != null
+    ? mc.baseline_filtered_arcsec.toFixed(2) + '″' : '—';
+  const ra = mc.minmove_ra_arcsec != null ? mc.minmove_ra_arcsec.toFixed(2) : '—';
+  const dec = mc.minmove_dec_arcsec != null ? mc.minmove_dec_arcsec.toFixed(2) : '—';
+  el('mmcap-minmove').textContent = `${ra}″ / ${dec}″`;
+  el('mmcap-params').textContent = (mc.k != null ? `k=${mc.k}` : 'k=—')
+    + (mc.imaging_ceiling_arcsec != null ? ` · imaging ≤ ${mc.imaging_ceiling_arcsec}″` : '');
+
+  if (winner) {
+    if (mc.winning === 'guiding' || mc.winning === 'imaging') {
+      winner.style.display = '';
+      const isGuiding = mc.winning === 'guiding';
+      winner.textContent = isGuiding ? 'GUIDING' : 'IMAGING';
+      winner.style.background = isGuiding ? 'rgba(91,156,246,0.18)' : 'rgba(167,139,250,0.18)';
+      winner.style.color = isGuiding ? '#5b9cf6' : '#a78bfa';
+      winner.title = isGuiding
+        ? 'Il limite è attualmente determinato dalla baseline di guida'
+        : 'Il limite è determinato dal requisito di imaging del setup';
+    } else {
+      winner.style.display = 'none';
+    }
+  }
+}
+
 function updateDiagnosticEngine(de) {
   const enabled = de.enabled === true;
 
-  // Badge modalità (read-only)
+  // Badge modalità (read-only). §54: JITTER è deprecata (fuori dal toggle); se un config
+  // legacy la riporta ancora, la mostriamo etichettata "(deprecato)" senza rompere nulla.
   const modeBadge = el('diag-mode-badge');
-  modeBadge.textContent = enabled ? (de.mode || 'guardian').toUpperCase() : 'OFF';
-  modeBadge.className = 'diag-mode-badge ' + (enabled ? ('mode-' + (de.mode || 'guardian')) : 'mode-off');
+  const curMode = de.mode || 'guardian';
+  modeBadge.textContent = enabled
+    ? (curMode === 'jitter' ? 'JITTER (deprecato)' : curMode.toUpperCase())
+    : 'OFF';
+  modeBadge.className = 'diag-mode-badge ' + (enabled ? ('mode-' + curMode) : 'mode-off');
 
   // HERO — diagnosi
   const state = de.state || 'INSUFFICIENT_DATA';
@@ -546,7 +684,18 @@ function updateDiagnosticEngine(de) {
 
   const confEl = el('diag-confidence');
   if (enabled && de.confidence != null) {
-    confEl.textContent = de.confidence + '%' + (de.confidence_calibrated ? '' : ' · provvisoria');
+    // §46 — decomposizione confidence quando NINA ha modulato il SEEING:
+    // "57% (PHD2 76 − NINA 19)". Numeri di confidence, mai conteggi assoluti di stelle.
+    const m = de.metrics || {};
+    let txt = de.confidence + '%';
+    if (m.nina_penalty != null && m.nina_penalty > 0 && m.confidence_phd2 != null) {
+      txt += ` (PHD2 ${m.confidence_phd2} − NINA ${m.nina_penalty})`;
+    } else if (!de.confidence_calibrated) {
+      txt += ' · provvisoria';
+    } else if (m.transparency_state) {
+      txt += ` · trasparenza ${m.transparency_state}`;
+    }
+    confEl.textContent = txt;
     confEl.style.display = '';
   } else {
     confEl.style.display = 'none';
@@ -605,9 +754,10 @@ function updateDiagnosticEngine(de) {
   el('diag-m-counts').textContent =
     `${gc.CONFIRM || 0} / ${gc.ATTENUATE || 0} / ${gc.BLOCK || 0} / ${gc.micro || 0}`;
 
-  // Switcher: OFF sempre attivo (kill switch); GUARDIAN/JITTER gated
+  // Switcher: OFF sempre attivo (kill switch); GUARDIAN gated. §54: JITTER rimossa dal
+  // toggle (deprecata/sperimentale, mai validata — scavalca §44/§50/§51/§53).
   const allow = de.allow_dashboard_mode_switch === true;
-  ['off', 'guardian', 'jitter'].forEach(mode => {
+  ['off', 'guardian'].forEach(mode => {
     const btn = el('diag-btn-' + mode);
     if (!btn) return;
     const active = enabled ? (de.mode === mode) : (mode === 'off');
@@ -672,6 +822,7 @@ el('btn-clear-chart').addEventListener('click', () => {
   guideChart.data.labels = [];
   guideChart.data.datasets.forEach(ds => ds.data = []);
   exposureMarkerMeta = [];
+  ninaMarkerMeta = [];
   guideChart.update();
   frameCount = 0;
   el('frame-count').textContent = '0 frame';
@@ -712,15 +863,14 @@ el('ai-find-switch').addEventListener('change', async function () {
   }
 });
 
-// §31 — switcher modalità motore. OFF = kill switch (nessuna conferma); attivare
-// GUARDIAN/JITTER richiede conferma (e allow_dashboard_mode_switch lato server).
-['off', 'guardian', 'jitter'].forEach(mode => {
+// §31/§54 — switcher modalità motore. OFF = kill switch (nessuna conferma); attivare
+// GUARDIAN richiede conferma (e allow_dashboard_mode_switch lato server). JITTER è
+// deprecata e NON esposta qui (guard-rail anche lato backend).
+['off', 'guardian'].forEach(mode => {
   const btn = el('diag-btn-' + mode);
   if (!btn) return;
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
-    if (mode === 'jitter' &&
-        !confirm('Attivare JITTER? Il motore diventa UNICA AUTORITÀ sulle leve (Aggressività/MinMove): i rami CASO 1/2/3 della v2.3 sono sospesi.')) return;
     if (mode === 'guardian' &&
         !confirm('Attivare GUARDIAN? La v2.3 continua a pilotare; il motore conferma/attenua/blocca le sue mosse e fa micro-correzioni nei buchi.')) return;
     try {

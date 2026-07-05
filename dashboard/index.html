@@ -114,6 +114,29 @@
           </div>
         </div>
       </div>
+
+      <!-- Trasparenza NINA (§45 N1) -->
+      <div class="condition-card" id="transparency-card" style="display:none">
+        <div class="condition-label">Trasparenza (NINA)</div>
+        <div class="condition-icon" id="transp-icon">🌌</div>
+        <div class="condition-name" id="transp-state">In attesa…</div>
+        <div class="condition-desc" id="transp-index-desc"></div>
+        <div class="separator"></div>
+        <div class="mini-stats">
+          <div class="mini-stat">
+            <span class="mini-label">Stelle</span>
+            <span class="mini-val" id="transp-stars">—</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">Indice</span>
+            <span class="mini-val" id="transp-index">—</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">Filtro</span>
+            <span class="mini-val" id="transp-filter">—</span>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Chart + Controller Status -->
@@ -280,6 +303,38 @@
              title="Sessione non rappresentativa: mantengo le soglie iniziali del TOML">BASELINE RIFIUTATA</div>
       </div>
 
+      <!-- Adaptive MinMove (§51) -->
+      <div class="exposure-card" id="minmove-cap-card">
+        <div class="diag-header" style="margin-bottom:8px">
+          <h2>Adaptive MinMove</h2>
+          <span class="gate-status-badge" id="mmcap-status-badge">—</span>
+        </div>
+        <div class="param-group">
+          <div class="param-row">
+            <span class="param-label">Cap corrente</span>
+            <span class="param-val mono" id="mmcap-cap">—</span>
+          </div>
+          <div class="param-row">
+            <span class="param-label">Baseline filtrata</span>
+            <span class="param-val mono" id="mmcap-baseline">—</span>
+          </div>
+          <div class="param-row">
+            <span class="param-label">Termine vincente</span>
+            <span class="param-val mono">
+              <span class="gate-status-badge" id="mmcap-winner-badge" style="display:none">—</span>
+            </span>
+          </div>
+          <div class="param-row">
+            <span class="param-label">MinMove eff. RA / DEC</span>
+            <span class="param-val mono" id="mmcap-minmove">—</span>
+          </div>
+          <div class="param-row">
+            <span class="param-label">k / soffitto imaging</span>
+            <span class="param-val mono" id="mmcap-params">—</span>
+          </div>
+        </div>
+      </div>
+
     </section>
 
     <!-- Seeing Diagnostic Engine (§31) -->
@@ -329,7 +384,8 @@
           <div class="diag-switcher" id="diag-switcher">
             <button class="diag-btn" data-mode="off" id="diag-btn-off">OFF</button>
             <button class="diag-btn" data-mode="guardian" id="diag-btn-guardian" title="Assistito: la v2.3 pilota, il motore conferma/attenua/blocca e micro-corregge">GUARDIAN</button>
-            <button class="diag-btn" data-mode="jitter" id="diag-btn-jitter" title="Controllo causale completo: il motore è unica autorità sulle leve">JITTER</button>
+            <!-- §54: JITTER deprecata (mai validata, scavalca §44/§50/§51/§53) — rimossa dal toggle; attivabile solo con allow_experimental_jitter=true nel config -->
+            <!-- <button class="diag-btn" data-mode="jitter" id="diag-btn-jitter" title="DEPRECATO">JITTER</button> -->
           </div>
         </div>
       </div>

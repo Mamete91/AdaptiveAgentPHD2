@@ -13,6 +13,14 @@ __pycache__/
 # Distribution archives
 *.zip
 
+# Third-party: sorgente completo di PHD2 (incl. DLL di runtime e SDK camere).
+# Non ri-ospitare codice/binari di terzi su repo pubblico (bloat, licensing).
+# Il file locale resta; qui si smette solo di tracciarlo (milestone push).
+phd2-master/
+
+# Binari compilati (es. .dll del plugin NINA): si allegano alle Release, non al sorgente.
+*.dll
+
 # Runtime artifacts
 logs/
 baseline.json
@@ -27,3 +35,17 @@ Pacchetto_Distribuzione/
 
 # §26: version_info.txt generato da version_info_template.py durante build_dist.py
 version_info.txt
+
+# File esclusi dal repo pubblico (restano in locale) — milestone push.
+# Nota: .gitignore non supporta commenti in coda alla riga, solo righe intere.
+# - script di manutenzione locale (contiene un path personale)
+pulizia_workspace.ps1
+# - build script datati (builder ufficiale: build_dist.py)
+Build_v2.4.bat
+Build_v2.5_RECOVERY_BASELINE.bat
+# - artefatto di sviluppo (Claude Code skill)
+phd2-adaptive-agent-feature-prompt.skill
+# - manuale ufficiale di PHD2: materiale di terzi
+PHD2_User_Guide 2.6.14.pdf
+# - duplicato del manuale (si tengono .md e .pdf)
+doc/Manuale_Utente_Agent .txt

@@ -1,18 +1,21 @@
-# 🔭 PHD2 Adaptive Guiding Agent
- ⚠️ **Stato del documento**: questo README descrive il progetto a livello concettuale ed è ora allineato alla **versione 1.2**.
- 
- Per lo stato aggiornato consultare:
- - **`CONTESTO_PROGETTO.md`** — stato globale e roadmap
- - **`NOTE_CLAUDE.md`** — cronologia tecnica dettagliata delle modifiche
- - **`doc/CONFRONTO_GA_AGENT.md`** — analisi vs Guiding Assistant PHD2
- - **`config.toml`** — **config unico** auto-configurante (dalla §22): la pixel scale di guida è letta da PHD2 e le
- soglie RMS sono derivate da una baseline misurata. La scelta del telescopio si fa selezionando il **profilo in PHD2**.
- I 3 vecchi TOML per-setup e i 6 `.bat` sono stati eliminati.
+# 🔭 Adaptive Agent for PHD2
 
-> Aggiornamento README completato il 2026-05-03. Ulteriori revisioni verranno fatte dopo le prossime sessioni reali se emergono nuovi comportamenti da documentare. 
+**Versione 2.7 — motore "Outcome-First"** · Licenza **BSD-3-Clause**
 
+Un agente Python che si connette a **PHD2** via TCP/IP (JSON-RPC 2.0) per monitorare la guida in tempo reale e applicare correzioni adattive ai parametri algoritmici — senza toccare il mouse. L'agente regola `Aggressiveness` e `MinMove` **solo quando l'esito misurato lo giustifica**, con kill-switch su ogni intervento e ripristino garantito dei parametri utente a fine sessione.
 
-Un agente Python che si connette a **PHD2** via TCP/IP (JSON-RPC 2.0) per monitorare la guida in tempo reale e applicare correzioni adattive ai parametri algoritmici — senza toccare il mouse.
+## 📚 Documentazione
+
+**Documenti ufficiali (root):**
+- **[`ARCHITETTURA_MOTORE.md`](ARCHITETTURA_MOTORE.md)** — *com'è fatto*: architettura del motore Outcome-First — baseline RMS bidirezionale (§44), INIT ai valori standard PHD2 (§50), cap MinMove adattivo (§51), recupero simmetrico guidato dall'esito (§53) — e del filone NINA (N1 trasparenza, N8 fusione confidence, N6 sicurezza).
+- **[`STUDIO_PHD2_DESIGN.md`](STUDIO_PHD2_DESIGN.md)** — *perché quelle scelte*: studio del design di PHD2 e delle sue leve, che motiva ogni decisione del motore.
+- **[`CHANGELOG.md`](CHANGELOG.md)** — sintesi delle milestone e delle versioni.
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — come provare l'agente sul campo e riportare i risultati.
+- **[Manuale utente (PDF)](doc/Manuale_Utente_Agent.pdf)** — guida operativa passo-passo all'installazione e all'uso.
+
+**Percorso di sviluppo completo — [`docs/development/`](docs/development/):** tracciabilità integrale dell'evoluzione del progetto. `NOTE_CLAUDE.md` (cronologia tecnica §-by-§), `CONTESTO_PROGETTO.md` (stato globale e roadmap), `VALIDAZIONE_CAMPO_v2.6.md`, i prompt di implementazione e le note di design. Mantenuti pubblici per trasparenza, fuori dalla root per leggibilità.
+
+> **Config unico auto-configurante** (`config.toml`): la pixel scale di guida è letta da PHD2 e le soglie RMS derivano da una baseline misurata. La scelta del telescopio si fa selezionando il **profilo in PHD2**.
 
 ---
 
@@ -46,7 +49,8 @@ Un agente Python che si connette a **PHD2** via TCP/IP (JSON-RPC 2.0) per monito
 
 ### Setup
 ```powershell
-cd "PHD2 Assist"
+git clone https://github.com/Mamete91/AdaptiveAgentPHD2.git
+cd AdaptiveAgentPHD2
 python -m pip install -r requirements.txt
 ```
 
@@ -68,7 +72,7 @@ Per cambiare telescopio basta selezionare un altro profilo in PHD2: pixel scale 
 
 #### Plugin NINA opzionale (alternativa al browser)
 
-Per chi usa NINA come suite di acquisizione esiste un plugin C# separato — **Adaptive Agent for PHD2 — Dashboard** — che aggiunge a NINA un pannello dockable contenente la dashboard stessa, caricata via WebView2 da `http://localhost:8080`. Il plugin è opzionale: il browser web resta sempre il modo "ufficiale" di accedere alla dashboard, ed è obbligatorio per chi vuole guardarla da tablet, secondo monitor o PC remoto sulla stessa rete. Il plugin è solo una comodità per gli utenti NINA che vogliono evitare di tenere un browser aperto. Sequenza di avvio consigliata: PHD2 → `Avvia.bat` → NINA (il pannello carica la dashboard automaticamente; se NINA era già aperto basta premere "Riprova" nel pannello). Dettagli architetturali in `NOTE_CLAUDE.md §27`.
+Per chi usa NINA come suite di acquisizione esiste un plugin C# separato — **Adaptive Agent for PHD2 — Dashboard** — che aggiunge a NINA un pannello dockable contenente la dashboard stessa, caricata via WebView2 da `http://localhost:8080`. Il plugin è opzionale: il browser web resta sempre il modo "ufficiale" di accedere alla dashboard, ed è obbligatorio per chi vuole guardarla da tablet, secondo monitor o PC remoto sulla stessa rete. Il plugin è solo una comodità per gli utenti NINA che vogliono evitare di tenere un browser aperto. Sequenza di avvio consigliata: PHD2 → `Avvia.bat` → NINA (il pannello carica la dashboard automaticamente; se NINA era già aperto basta premere "Riprova" nel pannello). Dettagli architetturali in `docs/development/NOTE_CLAUDE.md §27`.
 
 ### Avvio da sorgente Python
 
@@ -118,14 +122,12 @@ aggr_step_down = 5       # Passo di riduzione (conservativo)
 aggr_step_up   = 2       # Passo di aumento (molto conservativo)
 ```
 
-### Config reali per setup
-Esistono 3 configurazioni per setup reali con valori specifici calibrati sulla scala focale:
-
-| Setup | rms_high | rms_low | RA aggr_max | DEC aggr_max | minmove_max RA/DEC |
-|-------|----------|---------|-------------|--------------|---------------------|
-| Askar 71F | 1.30 | 0.70 | 85 | 80 | 0.80 / 0.85 |
-| Tecnosky 115 | 1.00 | 0.55 | 80 | 75 | 0.80 / 0.85 |
-| RC8 | 0.85 | 0.50 | 75 | 70 | 0.80 / 0.85 |
+### Auto-configurazione (config unico)
+Il progetto usa un **unico `config.toml` auto-configurante**: non servono configurazioni
+per-setup. La pixel scale di guida è letta dal **profilo PHD2 attivo** e le soglie RMS sono
+derivate da una **baseline misurata** sul campo. Per cambiare telescopio basta selezionare
+un altro profilo in PHD2 — pixel scale e soglie si adattano da sole. I valori mostrati sopra
+sono solo un esempio: in esercizio non vanno impostati a mano.
 
 ---
 

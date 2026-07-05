@@ -139,12 +139,16 @@ class SeeingDiagnosticEngine:
         cfg,
         thresholds_provider: Callable[[], tuple[float, float]],
         baseline_provider: Callable[[], Optional[float]],
+        transparency_provider: Optional[Callable[[], Optional[dict]]] = None,
     ):
         self.cfg = cfg
         # thresholds_provider() -> (rms_high, rms_low) efficaci (post auto-cal §22-25)
         self._thresholds_provider = thresholds_provider
         # baseline_provider() -> mediana baseline (None se non pronta/rifiutata, §30)
         self._baseline_provider = baseline_provider
+        # §46 — transparency_provider() -> dict {index,state,deficit,confirmed_subs} o None
+        # (telemetria NINA assente/stantia/feature off). Solo informativo per il SEEING.
+        self._transparency_provider = transparency_provider
 
         self._jitter_ref: Optional[float] = None
         self._hfd_ref: Optional[float] = None
@@ -165,6 +169,10 @@ class SeeingDiagnosticEngine:
         self._guardian_counts: dict[str, int] = {
             "CONFIRM": 0, "ATTENUATE": 0, "BLOCK": 0, "micro": 0,
         }
+        # §47 — shadow: quante volte il ramo oscillazioni AVREBBE agito da disattivo
+        # (e in quante di quelle l'RMS stava davvero peggiorando, rms>rms_high).
+        self._osc_would_fire: int = 0
+        self._osc_would_fire_degraded: int = 0
 
     # ------------------------------------------------------------------ #
     #  Stato reference                                                     #
@@ -337,15 +345,32 @@ class SeeingDiagnosticEngine:
         if seeing:
             signals = 3 if hfd_gates else 2
             conf = min(95, 40 + 18 * signals)
+            # §46 N8 — modulazione SOLO sul SEEING: la trasparenza in calo abbassa la
+            # confidence (penalità proporzionale, dead-band + persistenza). NINA non tocca
+            # mai le altre diagnosi né aumenta la confidence/aggressività.
+            nina_pen, nina_mod = self._nina_modulation(conf)
+            conf_final = max(0, conf - nina_pen)
             proposal = LeverProposal(aggr=-1, minmove=+1)
-            return self._finalize(DiagnosisState.SEEING, conf, proposal, snap,
-                                  jitter_high, hfd_high, oscillation, drift)
+            return self._finalize(DiagnosisState.SEEING, conf_final, proposal, snap,
+                                  jitter_high, hfd_high, oscillation, drift,
+                                  confidence_calibrated=(nina_mod is not None),
+                                  nina_mod=nina_mod)
 
         # OVERCORRECTION: il loop si ribalta (lag-1 << 0). Legacy: solo con HFD nella norma.
         if oscillation and (not hfd_high or not hfd_gates):
             signals = 2 + (1 if jitter_high else 0)
             conf = min(95, 40 + 18 * signals)
-            proposal = LeverProposal(aggr=-1, minmove=0)
+            # §47 — esperimento outcome-first: con oscillation_branch_enabled=false lo stato
+            # OVERCORRECTION resta INFORMATIVO ma NON emette alcuna azione (proposal=None).
+            # Shadow: contiamo quante volte AVREBBE agito (e se l'RMS stava peggiorando).
+            osc_on = getattr(self.cfg, "oscillation_branch_enabled", False)
+            if osc_on:
+                proposal = LeverProposal(aggr=-1, minmove=0)
+            else:
+                proposal = None
+                self._osc_would_fire += 1
+                if snap.rms_total > rms_high:
+                    self._osc_would_fire_degraded += 1
             return self._finalize(DiagnosisState.OVERCORRECTION, conf, proposal, snap,
                                   jitter_high, hfd_high, oscillation, drift)
 
@@ -360,6 +385,41 @@ class SeeingDiagnosticEngine:
         return self._finalize(DiagnosisState.UNCERTAIN, 40, None, snap,
                               jitter_high, hfd_high, oscillation, drift)
 
+    def _nina_modulation(self, base_conf: int) -> tuple[int, Optional[dict]]:
+        """§46 N8 — penalità di confidence PROPORZIONALE al calo % di trasparenza (N1),
+        applicata SOLO al SEEING dal chiamante. Curva: dead-band sul rumore -> ramp lineare
+        fino a `nina_max_penalty` a `nina_full_deficit`; scatta solo se il calo è confermato
+        su >= `nina_persist_subs` pose (anti singolo frame anomalo). Ritorna (penalità, info);
+        info=None se NINA non disponibile (graceful: nessuna modulazione, confidence PHD2-only)."""
+        if not getattr(self.cfg, "confidence_use_nina", False):
+            return 0, None
+        prov = self._transparency_provider
+        if prov is None:
+            return 0, None
+        data = prov()
+        if not data:
+            return 0, None
+        deficit = float(data.get("deficit", 0.0))
+        confirmed = int(data.get("confirmed_subs", 0))
+        deadband = getattr(self.cfg, "nina_deadband", 0.10)
+        full = getattr(self.cfg, "nina_full_deficit", 0.45)
+        max_pen = int(getattr(self.cfg, "nina_max_penalty", 40))
+        persist = int(getattr(self.cfg, "nina_persist_subs", 2))
+        penalty = 0
+        if confirmed >= persist and deficit > deadband and full > deadband:
+            frac = min(1.0, (deficit - deadband) / (full - deadband))
+            penalty = int(round(frac * max_pen))
+        info = {
+            "calibrated": True,                       # NINA fresca -> confidence calibrata
+            "confidence_phd2": int(base_conf),
+            "penalty": penalty,
+            "deficit": round(deficit, 3),
+            "confirmed_subs": confirmed,
+            "index": round(float(data.get("index", 0.0)), 3),
+            "state": data.get("state"),
+        }
+        return penalty, info
+
     def _finalize(
         self,
         state: DiagnosisState,
@@ -370,31 +430,53 @@ class SeeingDiagnosticEngine:
         hfd_high: bool,
         oscillation: bool,
         drift: bool,
+        confidence_calibrated: bool = False,
+        nina_mod: Optional[dict] = None,
     ) -> DiagnosisResult:
-        """Costruisce il DiagnosisResult, aggiorna i contatori e lo memorizza."""
+        """Costruisce il DiagnosisResult, aggiorna i contatori e lo memorizza.
+        §46: se `nina_mod` è presente (SEEING con NINA fresca) la evidence riporta la
+        modulazione esplicita e le metriche portano la decomposizione del confidence."""
+        evidence = self._build_evidence(state, jitter_high, hfd_high,
+                                        oscillation, drift, snap)
+        metrics = {
+            "rms": round(snap.rms_total, 4),
+            "hfd": round(snap.hfd_avg, 3),
+            "hfd_ref": round(self._hfd_ref, 3) if self._hfd_ref is not None else 0.0,
+            "jitter": round(snap.jitter_rms, 4),
+            "jitter_ref": round(self._jitter_ref, 4) if self._jitter_ref is not None else 0.0,
+            "lag1_ra": round(snap.lag1_ra, 3),
+            "lag1_dec": round(snap.lag1_dec, 3),
+            "trend_max": round(max(abs(snap.trend_ra), abs(snap.trend_dec)), 4),
+        }
+        if nina_mod is not None:
+            # Decomposizione confidence per dashboard/log/replay (numeri RELATIVI).
+            metrics["confidence_phd2"] = nina_mod["confidence_phd2"]
+            metrics["nina_penalty"] = nina_mod["penalty"]
+            metrics["transparency_index"] = nina_mod["index"]
+            metrics["transparency_deficit"] = nina_mod["deficit"]
+            metrics["transparency_state"] = nina_mod["state"]
+            d_pct = round(nina_mod["deficit"] * 100)
+            if nina_mod["penalty"] > 0:
+                evidence.append(
+                    f"◦ trasparenza in calo (−{d_pct}% vs riferimento campo) → "
+                    f"confidence {nina_mod['confidence_phd2']}→{confidence}")
+            else:
+                evidence.append(
+                    f"◦ trasparenza stabile (−{d_pct}% vs riferimento campo) → "
+                    f"nessuna modulazione")
         result = DiagnosisResult(
             state=state,
             confidence=confidence,
-            confidence_calibrated=False,
+            confidence_calibrated=confidence_calibrated,
             proposal=proposal,
             label=_STATE_LABEL[state],
             suggestion=_STATE_SUGGESTION[state],
-            evidence=self._build_evidence(state, jitter_high, hfd_high,
-                                          oscillation, drift, snap),
+            evidence=evidence,
             jitter_high=jitter_high,
             hfd_high=hfd_high,
             oscillation=oscillation,
             drift=drift,
-            metrics={
-                "rms": round(snap.rms_total, 4),
-                "hfd": round(snap.hfd_avg, 3),
-                "hfd_ref": round(self._hfd_ref, 3) if self._hfd_ref is not None else 0.0,
-                "jitter": round(snap.jitter_rms, 4),
-                "jitter_ref": round(self._jitter_ref, 4) if self._jitter_ref is not None else 0.0,
-                "lag1_ra": round(snap.lag1_ra, 3),
-                "lag1_dec": round(snap.lag1_dec, 3),
-                "trend_max": round(max(abs(snap.trend_ra), abs(snap.trend_dec)), 4),
-            },
+            metrics=metrics,
         )
         self._counts[state.name] += 1
         self._last = result
@@ -506,6 +588,9 @@ class SeeingDiagnosticEngine:
         if state == DiagnosisState.SEEING:
             return LeverProposal(aggr=-1, minmove=+1)
         if state == DiagnosisState.OVERCORRECTION:
+            # §47 — ramo oscillazioni disattivo: nessuna micro su OVERCORRECTION.
+            if not getattr(self.cfg, "oscillation_branch_enabled", False):
+                return None
             return LeverProposal(aggr=-1, minmove=0)
         return None
 
@@ -538,6 +623,9 @@ class SeeingDiagnosticEngine:
                             "trend_max": 0.0},
                 "counts": dict(self._counts),
                 "guardian_counts": dict(self._guardian_counts),
+                "oscillation_branch_enabled": getattr(self.cfg, "oscillation_branch_enabled", False),
+                "osc_would_fire": self._osc_would_fire,
+                "osc_would_fire_degraded": self._osc_would_fire_degraded,
             }
         return {
             "enabled": self.cfg.enabled,
@@ -556,4 +644,7 @@ class SeeingDiagnosticEngine:
             "metrics": r.metrics,
             "counts": dict(self._counts),
             "guardian_counts": dict(self._guardian_counts),
+            "oscillation_branch_enabled": getattr(self.cfg, "oscillation_branch_enabled", False),
+            "osc_would_fire": self._osc_would_fire,
+            "osc_would_fire_degraded": self._osc_would_fire_degraded,
         }

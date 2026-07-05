@@ -31,6 +31,8 @@ from phd2_agent.analyzer import StatisticsAnalyzer, SeeingCondition
 from phd2_agent.controller import AdaptiveController
 from phd2_agent.logger import SessionLogger
 from phd2_agent.config import load_config
+from phd2_agent.nina_telemetry import NinaTelemetryStore
+from phd2_agent.nina_indices import TransparencyTracker
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -118,12 +120,41 @@ def main():
     controller.session_logger = session_logger
     session_logger.bind_controller(controller)
 
+    # §41 — store telemetria NINA (opzionale/graceful). Creato sempre (inerte
+    # finché il plugin non POSTa); registrato sul server solo se la dashboard è
+    # attiva. Nessun consumatore lo legge in §41: motore/controller/leve intatti.
+    nina_store = NinaTelemetryStore(
+        enabled=cfg.nina_telemetry.enabled,
+        staleness_seconds=cfg.nina_telemetry.staleness_seconds,
+        history_frames=cfg.nina_telemetry.history_frames,
+        log_arrivals=cfg.nina_telemetry.log_arrivals,
+        staleness_exposure_factor=cfg.nina_telemetry.staleness_exposure_factor,
+    )
+
+    # §45 — Transparency Index (Layer-2). Alimentato dai payload NINA (lato server) e
+    # letto da /status e dal motore §46 (via il controller). §46 — il controller riceve
+    # store+tracker per la fusione confidence (freschezza presa dallo store §43).
+    transparency_tracker = TransparencyTracker(
+        enabled=cfg.nina_indices.enabled,
+        baseline_window_subs=cfg.nina_indices.baseline_window_subs,
+        base_best_fraction=cfg.nina_indices.base_best_fraction,
+        clear_above=cfg.nina_indices.clear_above,
+        cloud_below=cfg.nina_indices.cloud_below,
+        hysteresis=cfg.nina_indices.hysteresis,
+        deadband_deficit=cfg.nina_indices.deadband_deficit,
+    )
+    controller.nina_store = nina_store
+    controller.transparency_tracker = transparency_tracker
+
     # --- Dashboard ---
 
     if not args.no_dashboard:
         try:
-            from server import start_server, set_global_state
+            from server import (start_server, set_global_state, set_nina_store,
+                                 set_transparency_tracker)
             set_global_state(controller, analyzer, session_logger)
+            set_nina_store(nina_store)
+            set_transparency_tracker(transparency_tracker)
             dash_thread = threading.Thread(
                 target=start_server,
                 kwargs={"host": cfg.dashboard.host, "port": cfg.dashboard.port},
@@ -307,6 +338,16 @@ def _event_loop(
                     "actions": [a.to_dict() for a in actions],
                     "saturation_active": controller.saturated_lock_since is not None,
                 }
+                # §46 — marcatore grafico: NINA ha modulato la confidence del SEEING.
+                # Telemetria read-only verso la dashboard (non tocca la guida).
+                _diag = getattr(controller, "_current_diag", None)
+                if _diag is not None and _diag.metrics.get("nina_penalty", 0) > 0:
+                    msg["nina_mod"] = {
+                        "penalty": _diag.metrics.get("nina_penalty", 0),
+                        "conf_phd2": _diag.metrics.get("confidence_phd2"),
+                        "conf_final": _diag.confidence,
+                        "state": _diag.metrics.get("transparency_state"),
+                    }
                 _broadcast(msg)
             except Exception:
                 pass

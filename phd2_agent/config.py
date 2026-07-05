@@ -67,6 +67,13 @@ class ControlConfig:
     # (exposure_ms=0, diag_state=INSUFFICIENT) che gonfiavano l'"85% INSUFFICIENT".
     # Default true (shipped ON). A false: comportamento storico per-tick.
     per_frame_baseline: bool = True
+    # §50 — INIT ai valori standard PHD2 all'inizio della guida (dopo calibrazione, prima
+    # della baseline): stato iniziale NOTO -> log dei tester confrontabili. RA (Hysteresis)
+    # aggr 70 / MinMove 0.20; DEC (Resist Switch) aggr 100 / MinMove 0.20. Algoritmo-aware:
+    # applicato solo dove l'asse usa la scala frazionaria 'aggression' (skip+warning altrove).
+    # I valori utente sono salvati dal Baseline Guardian e ripristinati allo shutdown pulito.
+    # false = eredita i valori PHD2 correnti come oggi.
+    init_to_phd2_standard: bool = True
 
 
 @dataclass
@@ -96,6 +103,26 @@ class AxisLimits:
     minmove_min: float = 0.15
     minmove_max: float = 0.85
     minmove_step: float = 0.05
+
+
+@dataclass
+class MinMoveCapConfig:
+    """§51 — cap MinMove ADATTIVO. Il MinMove può salire per assorbire il seeing, ma mai
+    oltre ciò che il setup può davvero raggiungere né oltre ciò che l'immagine tollera.
+    Riferimento = baseline §44 FILTRATA nel tempo (EMA su ~decine di minuti): capacità
+    reale media della notte, segue lentamente l'evoluzione senza inseguire le fluttuazioni.
+
+      cap_arcsec = min( baseline_factor(k) × baseline_filtrata , imaging_ceiling_arcsec )
+      cap_px     = cap_arcsec / pixel_scale
+
+    k è un RAPPORTO (dead-band ÷ RMS raggiungibile) → scale-indipendente → UNIVERSALE (<1).
+    imaging_ceiling è il requisito di imaging (stub di N5), setup-dependent: la dipendenza
+    dalla scala di RIPRESA entra QUI, non in k.
+    """
+    enabled: bool = True
+    baseline_factor: float = 0.8          # k universale (<1): dead-band = frazione dell'RMS raggiungibile
+    imaging_ceiling_arcsec: float = 2.0   # tetto imaging per-setup (stub N5); default generoso
+    filter_tau_minutes: float = 18.0      # costante di tempo dell'EMA sulla baseline §44
 
 
 @dataclass
@@ -158,8 +185,15 @@ class AutoCalibrationConfig:
     # §25 — Refresh ciclico baseline (regola tightest-wins): l'Agente non concede
     # mai reattività al cielo che peggiora, ma si adatta quando migliora.
     refresh_enabled: bool = True
-    refresh_interval_seconds: float = 1800.0     # 30 minuti
+    refresh_interval_seconds: float = 1800.0     # 30 minuti (solo modalità legacy tightest-wins)
     refresh_only_if_tighter: bool = True
+    # §44 — baseline a rinnovo CONTINUO e BIDIREZIONALE. true (shipped): la baseline si
+    # aggiorna in continuo su finestra mobile (best-fraction) e può SALIRE col peggiorare
+    # del seeing (così un RMS alto-ma-stabile per la notte è NOMINAL, non SEEING spurio) o
+    # stringersi col migliorare. Sostituisce l'attesa refresh_interval + tightest-wins §25.
+    # false = comportamento legacy §25 (refresh ciclico ogni 1800s, solo se più stretta).
+    # Il CAP §24 e il gate di rifiuto §23 restano attivi come tetto/backstop in entrambi i casi.
+    baseline_track_bidirectional: bool = True
 
     # --- §33 — La baseline deve formarsi SEMPRE (prerequisito di P1) ---
     # Kill-switch dell'intero fix §33. A OFF: comportamento identico (baseline solo
@@ -234,6 +268,18 @@ class LeverOptimizationConfig:
     # (RMS atmosferico, non correggibile dalle leve) -> niente windup verso minmove_max.
     recovery_no_progress_k: int = 3
 
+    # --- §53: recupero SIMMETRICO guidato dall'esito (banda morta bidirezionale) ---
+    # Chiude l'asimmetria allargamento/recupero: nella banda morta, se le leve sono più
+    # MORBIDE dello standard §50 e la guida è STABILE, si prova a IRRIGIDIRE verso lo
+    # standard (aggr SU / MinMove GIÙ), si misura l'esito, si TIENE se l'RMS regge/migliora,
+    # si ammorbidisce (§32) solo se l'esito prova che serviva (allora è seeing vero).
+    # Àncora del recupero = valori standard §50; il cap §51 resta il tetto in salita.
+    # false = comportamento §32 attuale (solo-MinMove verso il morbido, ratchet).
+    symmetric_recovery_enabled: bool = True
+    recovery_stiffen_aggression: bool = True    # estende il recupero all'aggressività (oggi senza recupero)
+    recovery_outcome_window_frames: int = 6     # frame su cui giudicare l'esito di un irrigidimento
+    recovery_outcome_tolerance_factor: float = 1.05  # rms <= anchor×questo -> "regge" (continua); oltre -> STOP
+
 
 @dataclass
 class DiagnosticEngineConfig:
@@ -282,6 +328,28 @@ class DiagnosticEngineConfig:
     guardian_action_factor: float = 0.4    # ampiezza delle micro-correzioni proprie di guardian (vs step pieni)
     # --- UI ---
     allow_dashboard_mode_switch: bool = False
+    # §54 — sblocca la modalità JITTER DEPRECATA/sperimentale, mai validata sul campo;
+    # scavalca il controllore outcome-first (CASO/§44/§50/§51/§53). Default false: la
+    # richiesta di jitter (dashboard o config legacy) ricade su GUARDIAN con WARNING.
+    allow_experimental_jitter: bool = False
+    # --- §46 N8: fusione confidence con la trasparenza NINA (SOLO diagnosi SEEING) ---
+    # NINA non comanda le leve: MODULA la fiducia del motore nel SEEING con una penalità
+    # PROPORZIONALE al calo % di trasparenza (dead-band sul rumore -> ramp progressivo),
+    # confermata su >= persist_subs pose (anti singolo frame anomalo). Effetto solo
+    # "astieniti" (abbassa la confidence sotto il gate guardian); mai più aggressività.
+    confidence_use_nina: bool = True       # born-operative; false = confidence PHD2-only (pre-N8)
+    nina_deadband: float = 0.10            # calo % sotto cui la penalità è ~0 (rumore frame-to-frame)
+    nina_full_deficit: float = 0.45        # calo % a cui la penalità è massima
+    nina_max_penalty: int = 40             # punti di confidence sottratti al deficit pieno
+    nina_persist_subs: int = 2             # pose consecutive di conferma prima di penalizzare
+    # --- §47: esperimento OUTCOME-FIRST — ramo oscillazioni (reversibile) ---
+    # false (default, proposta Alessandro): il motore NON emette azioni leva su
+    # OVERCORRECTION/lag-1 (stato calcolato solo come informativo, proposal=None) e il
+    # CASO2 v2.3 "oscillazione=trend" è disattivato. Tesi: una vera oscillazione
+    # patologica si manifesta comunque come peggioramento di RMS/outcome (SEEING/§32/
+    # Guardian restano gli attori). true = comportamento legacy (ramo oscillazioni attivo).
+    # Codice dormiente dietro il flag: reversibile, nessuna cancellazione.
+    oscillation_branch_enabled: bool = False
 
 
 @dataclass
@@ -296,6 +364,45 @@ class AnalyzerConfig:
 
 
 @dataclass
+class NinaTelemetryConfig:
+    """§41 — canale in ingresso per la telemetria per-posa di NINA (Step 0).
+
+    OPZIONALE e GRACEFUL: senza POST il comportamento dell'Agente è bit-identico
+    a oggi. Nessun consumatore agisce sui dati in §41 (context-gating/trasparenza/
+    safety/confidence = N1–N8, prompt successivi). enabled=True di default
+    (born-operative, ma inerte finché il plugin non inoltra). enabled=False =
+    kill-switch: l'endpoint risponde 200 {"accepted":false,"reason":"disabled"}.
+    """
+    enabled: bool = True
+    staleness_seconds: float = 180.0   # PAVIMENTO della finestra di freschezza
+    history_frames: int = 60           # storico in memoria per future baseline per-campo
+    log_arrivals: bool = False         # se True, logga ogni arrivo (debug)
+    # §43 — la freschezza è adattiva alla posa: effective_window =
+    # max(staleness_seconds, staleness_exposure_factor × exposure_s ultima posa).
+    # Le pose sono lunghe (300s) e la telemetria arriva una volta per posa: una
+    # finestra fissa darebbe falsi "disconnesso". 0 disattiva l'adattività.
+    staleness_exposure_factor: float = 1.5
+
+
+@dataclass
+class NinaIndicesConfig:
+    """§45 — Indici Layer-2 derivati dalla telemetria NINA (N1 Transparency Index).
+
+    OPZIONALE/GRACEFUL: senza telemetria gli indici sono None e nulla cambia. Il
+    riferimento è SEMPRE RELATIVO al campo+filtro corrente (rolling-high su finestra
+    mobile, mai soglie assolute): un campo povero ma stabile resta CLEAR; un calo %
+    rapido del conteggio stelle (velature/nubi) fa scendere l'indice → HAZE/CLOUD.
+    """
+    enabled: bool = True
+    baseline_window_subs: int = 12     # finestra mobile (sotto-pose) per il riferimento per-filtro
+    base_best_fraction: float = 0.5    # quota "alta" della finestra = cielo più limpido recente
+    clear_above: float = 0.8           # TI >= -> CLEAR
+    cloud_below: float = 0.5           # TI <  -> CLOUD (in mezzo: HAZE)
+    hysteresis: float = 0.05           # margine anti-flicker sulle soglie di stato
+    deadband_deficit: float = 0.10     # calo % sotto cui è rumore (non conta per confirmed_subs)
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -305,6 +412,7 @@ class AgentConfig:
     emergency: EmergencyConfig = field(default_factory=EmergencyConfig)
     ra: AxisLimits = field(default_factory=AxisLimits)
     dec: AxisLimits = field(default_factory=AxisLimits)   # §24: RA/DEC armonizzati
+    minmove_cap: MinMoveCapConfig = field(default_factory=MinMoveCapConfig)   # §51
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     phd2_log: PHD2LogConfig = field(default_factory=PHD2LogConfig)
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
@@ -312,6 +420,8 @@ class AgentConfig:
     lever_optimization: LeverOptimizationConfig = field(default_factory=LeverOptimizationConfig)
     diagnostic_engine: DiagnosticEngineConfig = field(default_factory=DiagnosticEngineConfig)
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
+    nina_telemetry: NinaTelemetryConfig = field(default_factory=NinaTelemetryConfig)
+    nina_indices: NinaIndicesConfig = field(default_factory=NinaIndicesConfig)
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -359,6 +469,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             "cooldown_seconds", cfg.control.cooldown_seconds)
         cfg.control.per_frame_baseline = bool(ctrl.get(
             "per_frame_baseline", cfg.control.per_frame_baseline))
+        cfg.control.init_to_phd2_standard = bool(ctrl.get(
+            "init_to_phd2_standard", cfg.control.init_to_phd2_standard))
 
     # Thresholds
     th_dict = raw.get("thresholds", {})
@@ -392,6 +504,14 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
                 target.minmove_min = ax.get("minmove_min", target.minmove_min)
                 target.minmove_max = ax.get("minmove_max", target.minmove_max)
                 target.minmove_step = ax.get("minmove_step", target.minmove_step)
+        # §51 — cap MinMove adattivo: chiavi scalari sotto [limits] (accanto a [limits.ra/dec]).
+        lim = raw["limits"]
+        cfg.minmove_cap = MinMoveCapConfig(
+            enabled=bool(lim.get("minmove_cap_adaptive_enabled", True)),
+            baseline_factor=float(lim.get("minmove_cap_baseline_factor", 0.8)),
+            imaging_ceiling_arcsec=float(lim.get("minmove_imaging_ceiling_arcsec", 2.0)),
+            filter_tau_minutes=float(lim.get("baseline_filter_tau_minutes", 18.0)),
+        )
 
     # Logging
     if "logging" in raw:
@@ -447,6 +567,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             refresh_enabled=bool(a.get("refresh_enabled", True)),
             refresh_interval_seconds=float(a.get("refresh_interval_seconds", 1800.0)),
             refresh_only_if_tighter=bool(a.get("refresh_only_if_tighter", True)),
+            baseline_track_bidirectional=bool(a.get("baseline_track_bidirectional", True)),
             baseline_always_form=bool(a.get("baseline_always_form", True)),
             baseline_fallback_frames=int(a.get("baseline_fallback_frames", 180)),
             baseline_best_fraction=float(a.get("baseline_best_fraction", 0.33)),
@@ -466,6 +587,10 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             minmove_recovery_enabled=bool(lo.get("minmove_recovery_enabled", True)),
             minmove_recovery_factor=float(lo.get("minmove_recovery_factor", 1.0)),
             recovery_no_progress_k=int(lo.get("recovery_no_progress_k", 3)),
+            symmetric_recovery_enabled=bool(lo.get("symmetric_recovery_enabled", True)),
+            recovery_stiffen_aggression=bool(lo.get("recovery_stiffen_aggression", True)),
+            recovery_outcome_window_frames=int(lo.get("recovery_outcome_window_frames", 6)),
+            recovery_outcome_tolerance_factor=float(lo.get("recovery_outcome_tolerance_factor", 1.05)),
         )
 
     # §31 — Seeing Diagnostic Engine (sezione opzionale; assente -> default).
@@ -475,6 +600,16 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         mode = str(de.get("mode", "guardian"))
         if mode not in ("jitter", "guardian"):
             logger.warning("[diagnostic_engine] mode '%s' ignoto -> guardian", mode)
+            mode = "guardian"
+        # §54 — JITTER deprecata/sperimentale (mai validata; scavalca CASO/§44/§50/§51/§53).
+        # Un config legacy con mode="jitter" ricade su GUARDIAN se allow_experimental_jitter è
+        # false (default). Solo il flag esplicito la abilita (percorso di validazione deliberata).
+        allow_jitter = bool(de.get("allow_experimental_jitter", False))
+        if mode == "jitter" and not allow_jitter:
+            logger.warning(
+                "[diagnostic_engine] mode='jitter' DEPRECATO e non validato "
+                "(scavalca §44/§50/§51/§53) -> GUARDIAN. Impostare "
+                "allow_experimental_jitter=true per esercitarlo deliberatamente.")
             mode = "guardian"
         cfg.diagnostic_engine = DiagnosticEngineConfig(
             enabled=bool(de.get("enabled", False)),
@@ -498,6 +633,13 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             guardian_attenuate_factor=float(de.get("guardian_attenuate_factor", 0.5)),
             guardian_action_factor=float(de.get("guardian_action_factor", 0.4)),
             allow_dashboard_mode_switch=bool(de.get("allow_dashboard_mode_switch", False)),
+            confidence_use_nina=bool(de.get("confidence_use_nina", True)),
+            nina_deadband=float(de.get("nina_deadband", 0.10)),
+            nina_full_deficit=float(de.get("nina_full_deficit", 0.45)),
+            nina_max_penalty=int(de.get("nina_max_penalty", 40)),
+            nina_persist_subs=int(de.get("nina_persist_subs", 2)),
+            oscillation_branch_enabled=bool(de.get("oscillation_branch_enabled", False)),
+            allow_experimental_jitter=allow_jitter,
         )
 
     # §36 — Analyzer (sezione opzionale; assente -> default = conversione ATTIVA)
@@ -505,6 +647,31 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         an = raw["analyzer"]
         cfg.analyzer = AnalyzerConfig(
             convert_distance_to_arcsec=bool(an.get("convert_distance_to_arcsec", True)),
+        )
+
+    # §41 — Telemetria NINA (sezione opzionale; assente -> default born-operative
+    # enabled=True ma inerte finché nessuno POSTa). Vedi NinaTelemetryConfig.
+    if "nina_telemetry" in raw:
+        nt = raw["nina_telemetry"]
+        cfg.nina_telemetry = NinaTelemetryConfig(
+            enabled=bool(nt.get("enabled", True)),
+            staleness_seconds=float(nt.get("staleness_seconds", 180.0)),
+            history_frames=int(nt.get("history_frames", 60)),
+            log_arrivals=bool(nt.get("log_arrivals", False)),
+            staleness_exposure_factor=float(nt.get("staleness_exposure_factor", 1.5)),
+        )
+
+    # §45 — Indici NINA (N1 Transparency). Sezione opzionale; assente -> default attivo.
+    if "nina_indices" in raw:
+        ni = raw["nina_indices"]
+        cfg.nina_indices = NinaIndicesConfig(
+            enabled=bool(ni.get("enabled", True)),
+            baseline_window_subs=int(ni.get("baseline_window_subs", 12)),
+            base_best_fraction=float(ni.get("base_best_fraction", 0.5)),
+            clear_above=float(ni.get("clear_above", 0.8)),
+            cloud_below=float(ni.get("cloud_below", 0.5)),
+            hysteresis=float(ni.get("hysteresis", 0.05)),
+            deadband_deficit=float(ni.get("deadband_deficit", 0.10)),
         )
 
     return cfg

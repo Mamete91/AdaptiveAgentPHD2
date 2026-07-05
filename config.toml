@@ -37,6 +37,12 @@ cooldown_seconds = 30
 # sul tick da interval_seconds). Risolve la baseline lenta (~37 -> ~8 min) e
 # l'"85% INSUFFICIENT" artefatto (in realta' ~15% sui frame valutati).
 per_frame_baseline = true
+# §50 — INIT ai valori standard PHD2 all'inizio guida (stato iniziale NOTO → log dei tester
+# confrontabili): RA (Hysteresis) aggr 70 / MinMove 0.20; DEC (Resist Switch) aggr 100 /
+# MinMove 0.20. Algoritmo-aware (skip+warning se l'asse usa un algoritmo a scala diversa).
+# I valori utente sono salvati dal Baseline Guardian e ripristinati allo shutdown pulito.
+# false = eredita i valori PHD2 correnti come oggi.
+init_to_phd2_standard = true
 
 [analyzer]
 # §36 — FIX UNITÀ: le distanze di guida di PHD2 (RADistanceRaw/DECDistanceRaw) sono in
@@ -60,10 +66,25 @@ max_exposure_ms      = 4000   # unificato a 4s per tutti i setup
 find_star_delay      = 10
 saturation_timeout_s = 300
 
+# §51 — CAP MinMove ADATTIVO (chiavi scalari sotto [limits], PRIMA delle sottotabelle
+# [limits.ra]/[limits.dec]). Il MinMove può salire per assorbire il seeing ma mai oltre
+# ciò che il setup può raggiungere (k × baseline §44 FILTRATA nel tempo) né oltre il
+# requisito di imaging (imaging_ceiling). cap_arcsec = min(k×baseline_filtrata, ceiling);
+# cap_px = cap_arcsec / pixel_scale. Applicato su RA+DEC e a tutti i punti che alzano MinMove.
+[limits]
+minmove_cap_adaptive_enabled   = true    # kill-switch (false = solo minmove_max legacy)
+minmove_cap_baseline_factor    = 0.8     # k UNIVERSALE (<1): rapporto dead-band/RMS raggiungibile → scale-indipendente
+minmove_imaging_ceiling_arcsec = 2.0     # tetto imaging per-setup (stub N5); default generoso. RC8 0.5"/px più stringente
+baseline_filter_tau_minutes    = 18.0    # costante di tempo dell'EMA sulla baseline §44 (~decine di minuti)
+
 # Range armonizzati RA/DEC (§24): i due blocchi sono identici.
+# §43b: aggr_max 90 -> 100 (tetto pieno di reattività; osservazione di campo a guida
+# stabile). È solo un TETTO: CASO3 / satisfaction-gate §30 / rilevatore OVERCORRECTION
+# governano il valore reale. NB: minmove_max NON è una % (è una distanza px/arcsec):
+# resta 0.85 — 100 disattiverebbe di fatto la guida.
 [limits.ra]
 aggr_min       = 35
-aggr_max       = 90
+aggr_max       = 100
 aggr_step_down = 5
 aggr_step_up   = 2
 minmove_min    = 0.15
@@ -72,7 +93,7 @@ minmove_step   = 0.05
 
 [limits.dec]
 aggr_min       = 35
-aggr_max       = 90
+aggr_max       = 100
 aggr_step_down = 5
 aggr_step_up   = 2
 minmove_min    = 0.15
@@ -131,13 +152,20 @@ rms_low_min_arcsec            = 0.25
 # Esempi: RC8 reject > 1,53"; Tecnosky > 3,09"; Askar > 4,74".
 baseline_reject_factor        = 3.0
 baseline_reject_min_arcsec    = 1.50
-# --- Refresh ciclico baseline (§25) ---
-# La baseline si ri-misura ogni refresh_interval_seconds; la nuova sostituisce
-# la corrente SOLO se piu' stretta ("tightest-wins"). L'Agente non concede mai
-# terreno al peggioramento del cielo, ma si adatta quando il cielo migliora.
+# --- Refresh ciclico baseline (§25, modalità LEGACY) ---
+# Usato SOLO con baseline_track_bidirectional=false: la baseline si ri-misura ogni
+# refresh_interval_seconds e sostituisce la corrente solo se più stretta ("tightest-wins").
 refresh_enabled               = true
 refresh_interval_seconds      = 1800.0     # 30 minuti
 refresh_only_if_tighter       = true
+# --- §44: baseline a rinnovo CONTINUO e BIDIREZIONALE (shipped ON) ---
+# true: la baseline si aggiorna in continuo su finestra mobile (best-fraction, liscia) e
+# può SALIRE col peggiorare del seeing (un RMS alto-ma-stabile per la notte resta NOMINAL,
+# niente softening leve spurio) o stringersi col migliorare → soglie sulla scala REALE
+# della serata. Sostituisce l'attesa refresh_interval + tightest-wins §25.
+# false = legacy §25 (refresh ciclico 1800s, solo-se-più-stretta).
+# Il CAP §24 (tetto rms_high) e il gate di rifiuto §23 restano attivi in entrambi i casi.
+baseline_track_bidirectional  = true
 # --- §33: la baseline si forma SEMPRE, anche a guida degradata (fix notti brutte RC8) ---
 baseline_always_form            = true   # ATTIVO: forma la baseline anche fuori NOMINAL (no piu' None)
 baseline_fallback_frames        = 180    # se 60 frame NOMINAL non arrivano entro questi -> fallback
@@ -170,15 +198,32 @@ target_factor  = 1.0
 minmove_recovery_enabled      = true   # ATTIVO: MinMove risale quando rms entra nella banda morta
 minmove_recovery_factor       = 1.0    # recupera finche' rms > mediana baseline * questo
 recovery_no_progress_k        = 3      # anti-windup: stop dopo K recuperi senza calo RMS
+# --- §53: recupero SIMMETRICO guidato dall'esito (banda morta BIDIREZIONALE) ---
+# Chiude l'asimmetria allargamento/recupero. Nella banda morta, se le leve sono più MORBIDE
+# dello standard §50 e la guida è STABILE, il motore prova a IRRIGIDIRE verso lo standard
+# (aggr SU / MinMove GIÙ), misura l'esito e TIENE se l'RMS regge/migliora; ammorbidisce (§32)
+# solo se l'esito prova che serviva (seeing vero). Àncora = valori standard §50; cap §51 =
+# tetto in salita. false = comportamento §32 attuale (solo-MinMove verso il morbido, ratchet).
+symmetric_recovery_enabled        = true   # born-operative (metodologia live)
+recovery_stiffen_aggression       = true   # estende il recupero all'aggressività (oggi senza recupero)
+recovery_outcome_window_frames    = 6      # frame su cui giudicare l'esito di un irrigidimento (tarabile)
+recovery_outcome_tolerance_factor = 1.05   # rms <= anchor×questo -> "regge" (continua); oltre -> STOP
 
 [diagnostic_engine]
 # §31 (Agente v2.4) — Seeing Diagnostic Engine. Diagnosi causale del regime
 # (SEEING / OVERCORRECTION / DRIFT / NOMINAL) da jitter + lag-1 + RMS + HFD + trend.
 enabled                   = true    # ATTIVO di default in GUARDIAN (richiesta Alessandro). false = v2.3 puro
-# "jitter"   = controllo causale completo: il motore e' UNICA AUTORITA' su Aggr/MinMove (CASO 1/2/3 sospesi) — ricerca
-# "guardian" = assistito: la v2.3 pilota; il motore conferma/attenua/blocca le mosse v2.3 e fa
-#              micro-correzioni proprie ad ampiezza ridotta solo quando la v2.3 e' ferma — distribuibile
+# "guardian" = MODALITÀ UFFICIALE: la v2.3 pilota; il motore conferma/attenua/blocca le mosse
+#              v2.3 e fa micro-correzioni proprie ad ampiezza ridotta solo quando la v2.3 è ferma.
+# "jitter"   = DEPRECATA/sperimentale (§54): il motore diventa UNICA AUTORITÀ su Aggr/MinMove
+#              (CASO 1/2/3 sospesi) → scavalca tutto il controllore outcome-first validato
+#              (§44/§50/§51/§53). Mai validata sul campo. Ricade su GUARDIAN se
+#              allow_experimental_jitter=false (vedi sotto).
 mode                      = "guardian"
+# §54 — sblocca la modalità JITTER deprecata/sperimentale. false (default) = jitter ignorata
+# (dashboard o config legacy) e coerciata a GUARDIAN con WARNING. Metterlo a true SOLO per una
+# validazione live deliberata e controllata del ramo jitter (che resta dormiente ma funzionante).
+allow_experimental_jitter = false
 # --- soglie diagnosi (relative alle reference EMA, robuste multi-setup) ---
 min_frames                = 30
 jitter_high_factor        = 1.6
@@ -218,3 +263,57 @@ guardian_action_factor    = 0.4     # ampiezza delle micro-correzioni proprie di
 # false (flotta) = la dashboard puo' solo spegnere (OFF -> v2.3 puro); true (setup di Alessandro) =
 # la dashboard puo' anche attivare/commutare jitter/guardian (con conferma).
 allow_dashboard_mode_switch = true
+# --- §46 N8: fusione confidence con la trasparenza NINA (SOLO diagnosi SEEING) ---
+# NINA non comanda le leve: MODULA la fiducia del motore nel SEEING con una penalita'
+# PROPORZIONALE al calo % di trasparenza (N1). Effetto solo "astieniti" (abbassa la
+# confidence sotto il gate guardian -> a volte una micro-correzione in meno); mai piu'
+# aggressivita'. Penalita' = 0 sul rumore (dead-band) e cresce fino a nina_max_penalty;
+# scatta solo se il calo e' confermato su >= nina_persist_subs pose (anti frame anomalo).
+confidence_use_nina = true     # born-operative; false = confidence PHD2-only (pre-N8)
+nina_deadband       = 0.10     # calo % sotto cui penalita' ~0 (rumore frame-to-frame)
+nina_full_deficit   = 0.45     # calo % a cui la penalita' e' massima
+nina_max_penalty    = 40       # punti di confidence sottratti al deficit pieno
+nina_persist_subs   = 2        # pose consecutive di conferma prima di penalizzare
+# --- §47: ESPERIMENTO outcome-first — ramo oscillazioni disattivo (reversibile) ---
+# false (default, proposta Alessandro 2026-06-21): il motore NON emette azioni leva su
+# OVERCORRECTION/lag-1 (stato solo informativo) e il CASO2 v2.3 "oscillazione=trend" e'
+# disattivato. Tesi: una vera oscillazione patologica si manifesta comunque come
+# peggioramento di RMS/outcome (SEEING-softening, §32, Guardian, §44 restano gli attori).
+# La dashboard mostra il breakdown delle sorgenti di softening + quante volte il ramo
+# AVREBBE agito (shadow). true = comportamento legacy (ramo oscillazioni attivo).
+# Codice dormiente dietro il flag: reversibile, nessuna cancellazione.
+oscillation_branch_enabled = false
+
+[nina_telemetry]
+# §41 (Step 0) — canale in ingresso per le metriche per-posa di NINA (HFR, conteggio
+# stelle, SNR, fondo cielo, eccentricità) inoltrate dal plugin via POST /nina/telemetry.
+# OPZIONALE e GRACEFUL: senza POST l'Agente si comporta IDENTICO a oggi. Nessun
+# consumatore agisce ancora sui dati (context-gating/trasparenza/safety/confidence =
+# N1–N8, feature successive). Lo store è solo esposto in /status.nina per la dashboard.
+enabled            = true     # ATTIVO (born-operative, ma inerte senza dati in arrivo).
+                              # false = kill-switch: l'endpoint risponde
+                              # 200 {"accepted":false,"reason":"disabled"} e non memorizza.
+staleness_seconds  = 180.0    # PAVIMENTO della finestra di freschezza (connected=false oltre)
+history_frames     = 60       # storico in memoria per future baseline per-campo
+log_arrivals       = false    # se true, logga ogni arrivo di telemetria (debug)
+# §43a — freschezza ADATTIVA alla posa: effective_window =
+# max(staleness_seconds, staleness_exposure_factor × exposure_s ultima posa). Le pose
+# sono lunghe (es. 300s) e la telemetria arriva una volta per posa: senza adattività il
+# blocco nina andrebbe "disconnesso" per metà di ogni ciclo pur essendo tutto ok.
+# 0 = disattiva l'adattività (solo staleness_seconds).
+staleness_exposure_factor = 1.5
+
+[nina_indices]
+# §45 (N1) — Transparency Index: segnale di trasparenza del cielo ORTOGONALE a PHD2,
+# dal conteggio stelle + fondo cielo della camera di RIPRESA. Riferimento SEMPRE
+# RELATIVO al campo+filtro corrente (rolling-high su finestra mobile), MAI soglie
+# assolute: un campo povero ma STABILE resta CLEAR; un calo % RAPIDO (velature/nubi)
+# fa scendere l'indice -> HAZE/CLOUD. NIENTE HFR (domini separati). Graceful: senza
+# telemetria l'indice è None e nulla cambia. Consumato da N8 (§46).
+enabled               = true     # operativo; false = kill-switch (indice non calcolato)
+baseline_window_subs  = 12       # finestra mobile (sotto-pose) del riferimento per-filtro
+base_best_fraction    = 0.5      # quota "alta" della finestra = cielo più limpido recente
+clear_above           = 0.8      # TI >= -> CLEAR
+cloud_below           = 0.5      # TI <  -> CLOUD (in mezzo: HAZE)
+hysteresis            = 0.05     # margine anti-flicker sulle soglie di stato
+deadband_deficit      = 0.10     # calo % sotto cui è rumore (non conta per confirmed_subs)

@@ -52,6 +52,11 @@ _CSV_FIELDS = [
     "rms_low_active",
     "diag_state",
     "diag_confidence",
+    # §45/§46 — Layer-2 NINA: indice di trasparenza + stato + penalità N8 applicata al
+    # confidence del SEEING (per replay cap-on/off e validazione live).
+    "transparency_index",
+    "transparency_state",
+    "nina_penalty",
     "evaluated",        # §34: True = frame valutato (tick), False = riga di solo log fuori-tick
     "reset_cause",      # §39: causa del reset del motore in questo frame (vuota se nessun reset)
     "actions_count",
@@ -144,6 +149,22 @@ class SessionLogger:
         # loggato dopo un reset, vuota altrove. Rende i replay futuri fedeli.
         reset_cause = eng.consume_reset_cause() if eng is not None else ""
 
+        # §45/§46 — trasparenza NINA (Layer-2) + penalità N8. Vuoti se non disponibili.
+        transparency_index = ""
+        transparency_state = ""
+        nina_penalty = 0
+        tracker = getattr(ctrl, "transparency_tracker", None) if ctrl is not None else None
+        if tracker is not None:
+            try:
+                tb = tracker.status_block()
+                if tb.get("index") is not None:
+                    transparency_index = round(tb["index"], 3)
+                transparency_state = tb.get("state") or ""
+            except Exception:
+                pass
+        if eng is not None and getattr(eng, "_last", None) is not None:
+            nina_penalty = eng._last.metrics.get("nina_penalty", 0)
+
         row = {
             "timestamp_iso": datetime.fromtimestamp(snapshot.timestamp).isoformat(timespec="seconds"),
             "ts": round(snapshot.timestamp, 2),
@@ -173,6 +194,9 @@ class SessionLogger:
             "rms_low_active": rms_low_active,
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
+            "transparency_index": transparency_index,   # §45
+            "transparency_state": transparency_state,   # §45
+            "nina_penalty": nina_penalty,               # §46
             "evaluated": bool(getattr(snapshot, "evaluated", False)),   # §34
             "reset_cause": reset_cause,   # §39
             "actions_count": len(actions),
@@ -202,7 +226,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 4,   # §34: `evaluated`; §36: RMS/jitter in ARCSEC; §39: colonna `reset_cause`
+            "schema_version": 5,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

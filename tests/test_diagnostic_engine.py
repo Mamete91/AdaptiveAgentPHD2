@@ -126,7 +126,8 @@ class TestClassifySeeing(unittest.TestCase):
 class TestClassifyOvercorrection(unittest.TestCase):
 
     def test_overcorrection(self):
-        eng = _engine()
+        # §47: la proposta OVERCORRECTION è il ramo oscillazioni (ora opt-in) -> True.
+        eng = _engine(oscillation_branch_enabled=True)
         _build_refs(eng, jitter=0.1, hfd=2.0)
         r = eng.classify(_snap(rms_total=0.6, jitter_rms=0.1, hfd_avg=2.0,
                                lag1_ra=-0.9, lag1_dec=-0.9))
@@ -284,7 +285,7 @@ class TestMicroProposal(unittest.TestCase):
         self.assertEqual(eng.micro_proposal(), LeverProposal(aggr=-1, minmove=+1))
 
     def test_overcorrection_micro(self):
-        eng = _engine()
+        eng = _engine(oscillation_branch_enabled=True)   # §47: ramo oscillazioni opt-in
         _build_refs(eng)
         eng.classify(_snap(rms_total=0.6, lag1_ra=-0.9, lag1_dec=-0.9))
         self.assertEqual(eng.micro_proposal(), LeverProposal(aggr=-1, minmove=0))
@@ -487,7 +488,9 @@ class TestGuardianFailSafeController(unittest.TestCase):
 class TestGuardianMicroController(unittest.TestCase):
 
     def test_micro_when_v23_idle(self):
-        ctrl = _make_controller(mode="guardian", guardian_action_factor=0.4)
+        # §47: micro su OVERCORRECTION = ramo oscillazioni (ora opt-in) -> True.
+        ctrl = _make_controller(mode="guardian", guardian_action_factor=0.4,
+                                oscillation_branch_enabled=True)
         _warm_refs(ctrl)
         # rms neutro -> nessun CASO scatta -> v2.3 ferma; OVERCORRECTION confidente
         ctrl.evaluate(_csnap(0.6, jit=0.1, hfd=2.0, lag=-0.9))
@@ -529,6 +532,9 @@ class TestSetDiagnosticMode(unittest.TestCase):
 
     def test_activation_gated(self):
         ctrl = _make_controller(mode="guardian", allow=False)
+        # §54: jitter è gated anche da allow_experimental_jitter; qui lo sblocchiamo per
+        # esercitare il gate allow_dashboard_mode_switch usando jitter come modalità di prova.
+        ctrl.cfg.diagnostic_engine.allow_experimental_jitter = True
         ctrl.set_diagnostic_mode("off")
         # rifiutata con allow=false
         self.assertEqual(ctrl.set_diagnostic_mode("jitter").get("error"), "not_allowed")
@@ -809,7 +815,7 @@ class TestResetDiscipline(unittest.TestCase):
             lg.log_snapshot(snap, [])   # primo frame post-reset
             lg.log_snapshot(snap, [])   # secondo frame
             summary = lg.close()
-            self.assertEqual(summary["schema_version"], 4)
+            self.assertEqual(summary["schema_version"], 5)   # §45/§46: colonne trasparenza + nina_penalty
             rows = list(_csv.DictReader(open(lg._csv_path, encoding="utf-8")))
         self.assertEqual(rows[0]["reset_cause"], "dither")
         self.assertEqual(rows[1]["reset_cause"], "")

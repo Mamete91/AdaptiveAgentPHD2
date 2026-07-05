@@ -487,6 +487,9 @@ class TestRefreshTrigger(unittest.TestCase):
         """Con refresh_enabled=True e timer scaduto, _maybe_start_refresh riapre la raccolta."""
         cfg = _make_config(window=5)
         cfg.auto_calibration.refresh_interval_seconds = 1.0
+        # §44: il refresh ciclico §25 è la modalità LEGACY (opt-in); va disattivato il
+        # tracker continuo bidirezionale per esercitarlo.
+        cfg.auto_calibration.baseline_track_bidirectional = False
         ctrl = _make_controller(cfg=cfg)
         _finalize_with(ctrl, scale=0.51, baseline=0.5)
         ctrl._baseline_finalize_time = time.monotonic() - 5.0   # 5s fa, oltre soglia 1s
@@ -539,6 +542,8 @@ class TestRefreshStatus(unittest.TestCase):
     def test_status_fields_during_refresh(self):
         """Durante refresh, refresh_in_progress True e refresh_progress popolato."""
         cfg = _make_config(window=10)
+        # §44: refresh ciclico §25 = modalità legacy (opt-in).
+        cfg.auto_calibration.baseline_track_bidirectional = False
         ctrl = _make_controller(cfg=cfg)
         _finalize_with(ctrl, scale=0.51, baseline=0.5, n=10)
         # Forza l'inizio di un refresh manualmente
@@ -551,6 +556,81 @@ class TestRefreshStatus(unittest.TestCase):
         self.assertTrue(ac["refresh_in_progress"])
         self.assertEqual(ac["refresh_progress"], "3/10")
         self.assertIsNone(ac["refresh_seconds_to_next"])   # None mentre in corso
+
+
+class TestBaselineContinuousBidirectional(unittest.TestCase):
+    """§44 — baseline a rinnovo continuo e bidirezionale (CAP §24 mantenuto)."""
+
+    @staticmethod
+    def _snap(rms: float, snr: float = 20.0) -> AnalysisSnapshot:
+        s = AnalysisSnapshot()
+        s.rms_total = rms
+        s.snr_avg = snr
+        s.condition = SeeingCondition.NOMINAL
+        return s
+
+    def test_worsening_raises_baseline_under_cap(self):
+        # Default bidirezionale ON. Baseline iniziale 0.50 -> rms_high 0.65 (1.3x, sotto cap 1.00).
+        cfg = _make_config(window=5)   # scale 0.51 -> cap efficace = 1.00
+        ctrl = _make_controller(cfg=cfg)
+        self.assertTrue(ctrl.cfg.auto_calibration.baseline_track_bidirectional)
+        _finalize_with(ctrl, scale=0.51, baseline=0.50, n=5)
+        high0 = ctrl.cfg.thresholds.rms_high
+        self.assertAlmostEqual(high0, 0.65, places=3)
+        self.assertFalse(ctrl._rms_high_cap_active)
+        # Seeing peggiora: feed di 5 frame a RMS 0.65 (sotto il cap) via il percorso reale.
+        for _ in range(5):
+            ctrl._update_rms_baseline(self._snap(0.65))
+        # La baseline è SALITA -> rms_high sale (1.3 x 0.65 = 0.845), cap non attivo.
+        self.assertGreater(ctrl.cfg.thresholds.rms_high, high0)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.65, places=3)
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 0.845, places=3)
+        self.assertFalse(ctrl._rms_high_cap_active)
+
+    def test_improving_tightens_baseline(self):
+        cfg = _make_config(window=5)
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.65, n=5)
+        high0 = ctrl.cfg.thresholds.rms_high          # 0.845
+        ctrl._rms_rolling.extend([0.40] * 5)
+        ctrl._continuous_track_baseline()
+        self.assertLess(ctrl.cfg.thresholds.rms_high, high0)
+        self.assertAlmostEqual(ctrl._rms_baseline_value, 0.40, places=3)
+
+    def test_cap_still_effective_in_continuous(self):
+        # §44 NON tocca il CAP §24: con baseline alta il tetto morde ancora.
+        cfg = _make_config(window=5)
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.50, n=5)   # cap efficace 1.00
+        ctrl._rms_rolling.extend([0.90] * 5)                   # 1.3x0.90 = 1.17 > 1.00
+        ctrl._continuous_track_baseline()
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, 1.00, places=3)
+        self.assertTrue(ctrl._rms_high_cap_active)
+
+    def test_reject_gate_backstop_in_continuous(self):
+        # Baseline assurda oltre §23 (reject = max(1.5, 3x0.51=1.53)) -> nessun update.
+        cfg = _make_config(window=5)
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.50, n=5)
+        high0 = ctrl.cfg.thresholds.rms_high
+        base0 = ctrl._rms_baseline_value
+        ctrl._rms_rolling.extend([1.60] * 5)                   # 1.60 > 1.53 -> rifiutata
+        ctrl._continuous_track_baseline()
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, high0)   # soglie correnti mantenute
+        self.assertAlmostEqual(ctrl._rms_baseline_value, base0)
+
+    def test_killswitch_off_restores_legacy(self):
+        # baseline_track_bidirectional=false -> il tracker continuo NON gira: dopo la
+        # formazione, feed di frame peggiori non muove le soglie (comportamento legacy §25).
+        cfg = _make_config(window=5)
+        cfg.auto_calibration.baseline_track_bidirectional = False
+        ctrl = _make_controller(cfg=cfg)
+        _finalize_with(ctrl, scale=0.51, baseline=0.50, n=5)
+        high0 = ctrl.cfg.thresholds.rms_high
+        for _ in range(10):
+            ctrl._update_rms_baseline(self._snap(0.90))
+        self.assertAlmostEqual(ctrl.cfg.thresholds.rms_high, high0)   # invariato
+        self.assertEqual(len(ctrl._rms_rolling), 0)                   # rolling non alimentato
 
 
 if __name__ == "__main__":

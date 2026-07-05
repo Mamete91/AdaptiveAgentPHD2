@@ -17,13 +17,13 @@ from __future__ import annotations
 __project_name__: str = "Adaptive Agent for PHD2"
 __short_name__:   str = "Adaptive Agent"
 __author__:       str = "Alessandro Curci"
-__version__:      str = "2.6"
-__version_tuple__: tuple[int, int, int, int] = (2, 6, 0, 0)  # major, minor, patch, build
+__version__:      str = "2.7"
+__version_tuple__: tuple[int, int, int, int] = (2, 7, 0, 0)  # major, minor, patch, build
 
 # --- Licenza / copyright ----------------------------------------------------
 
 __copyright__: str = "Copyright © 2026 Alessandro Curci"
-__license__:   str = "All rights reserved"
+__license__:   str = "BSD-3-Clause"
 
 # --- Canale di contatto unico (community Telegram) --------------------------
 

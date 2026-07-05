@@ -50,6 +50,9 @@ def _make_config(recovery_enabled=True, recovery_factor=1.0, no_progress_k=3,
         minmove_recovery_enabled=recovery_enabled,
         minmove_recovery_factor=recovery_factor,
         recovery_no_progress_k=no_progress_k,
+        # §53: questi test coprono il ramo LEGACY §32 (soften/anti-windup), ora fallback.
+        # Il recupero simmetrico bidirezionale ha i suoi test in test_recovery_symmetric.py.
+        symmetric_recovery_enabled=False,
     )
     return cfg
 
