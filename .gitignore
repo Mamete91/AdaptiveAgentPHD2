@@ -49,3 +49,9 @@ phd2-adaptive-agent-feature-prompt.skill
 PHD2_User_Guide 2.6.14.pdf
 # - duplicato del manuale (si tengono .md e .pdf)
 doc/Manuale_Utente_Agent .txt
+
+# Documenti di lavoro interni in corso (playbook contatto NINA, prompt, spec):
+# restano locali finché non maturano in docs/development/
+PRIMO_CONTATTO_NINA_MAINTAINERS.md
+PROMPT_REVIEW_READINESS_NINA.md
+SPEC_FASE3_PACKAGING_E_INGRESSO_NINA.md
