@@ -144,6 +144,27 @@
         </div>
       </div>
 
+      <!-- §57 — card Recovery: hint SNR-guida (S2, solo osservazione) + storico sonde (S1/S2) -->
+      <div class="condition-card" id="recovery-card" style="display:none"
+           title="§57 — recovery da UNSAFE-nubi. L'hint (SNR guida sostenuta) può solo ANTICIPARE la posa-sonda: la verità resta la camera di imaging (N1). Le sonde le scatta il sequencer (template S1).">
+        <div class="condition-label">Recovery (§57)</div>
+        <div class="condition-icon" id="recovery-icon">⏳</div>
+        <div class="condition-name" id="recovery-state">—</div>
+        <div class="condition-desc" id="recovery-reason"></div>
+        <div class="separator"></div>
+        <div class="mini-stats">
+          <div class="mini-stat" title="SNR guida corrente / riferimento pre-nube (catturato in CLEAR)">
+            <span class="mini-label">SNR / rif</span>
+            <span class="mini-val" id="recovery-snr">—</span>
+          </div>
+          <div class="mini-stat" title="Accumulatore leaky (simmetrico al CLOUD di N6): sale coi frame buoni, latch ad accumulo pieno">
+            <span class="mini-label">Accumulo</span>
+            <span class="mini-val" id="recovery-acc">—</span>
+          </div>
+          <div class="mini-stat" title="Ultima posa-sonda osservata: trigger (S1 timeout / S2 hint) → esito N1">
+            <span class="mini-label">Ultima sonda</span>
+            <span class="mini-val" id="recovery-probe">—</span>
+          </div>
         </div>
       </div>
     </section>

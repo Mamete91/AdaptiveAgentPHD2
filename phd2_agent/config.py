@@ -409,6 +409,34 @@ class NinaIndicesConfig:
 
 
 @dataclass
+class RecoveryProbeConfig:
+    """§57 S1 — posa-sonda fail-safe durante UNSAFE. La sonda la scatta il SEQUENCER
+    (template builtin: TriggerOnUnsafe/LoopWhileUnsafe + TakeExposure); qui vivono i
+    parametri di riferimento documentati nel template e usati dalla telemetria."""
+    enabled: bool = True
+    probe_timeout_min: float = 12.0        # cadenza fail-safe della sonda mentre UNSAFE
+    probe_min_interval_min: float = 5.0    # paletto 3 — intervallo minimo assoluto tra sonde
+    match_sub: bool = True                 # paletto 2 — sonda = stesso filtro/esposizione del sub
+
+
+@dataclass
+class RecoveryHintConfig:
+    """§57 S2 — hint "il cielo sta tornando" dalla SNR della stella guida (fluisce
+    per-frame anche mentre NINA è in attesa UNSAFE e i light sono fermi).
+
+    NESSUNA autorità di safety (paletto 1): il tracker osserva ed espone /status;
+    può solo ANTICIPARE la posa-sonda S1 (via l'istruzione plugin), mai dichiarare
+    SAFE. Dinamica (§57-bis, Gate): accumulatore leaky IN SECONDI DI TEMPO REALE —
+    indipendente dal frame-rate di guida (0.5–4 s a seconda del setup) e fisicamente
+    coerente con l'evoluzione del cielo. VALORI PROVVISORI da tarare sul campo."""
+    enabled: bool = True
+    snr_recover_frac: float = 0.8      # PROVVISORIO — buono se snr >= frac × snr_ref (pre-nube)
+    snr_recover_floor: float = 25.0    # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
+    sustained_seconds: float = 60.0    # PROVVISORIO — secondi di segnale buono per active=true
+    drain_factor: float = 2.0          # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
+
+
+@dataclass
 class AgentConfig:
     setup: SetupConfig = field(default_factory=SetupConfig)
     phd2: PHD2Config = field(default_factory=PHD2Config)
@@ -428,6 +456,8 @@ class AgentConfig:
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     nina_telemetry: NinaTelemetryConfig = field(default_factory=NinaTelemetryConfig)
     nina_indices: NinaIndicesConfig = field(default_factory=NinaIndicesConfig)
+    recovery_probe: RecoveryProbeConfig = field(default_factory=RecoveryProbeConfig)   # §57 S1
+    recovery_hint: RecoveryHintConfig = field(default_factory=RecoveryHintConfig)      # §57 S2
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -681,6 +711,26 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             cloud_below=float(ni.get("cloud_below", 0.5)),
             hysteresis=float(ni.get("hysteresis", 0.05)),
             deadband_deficit=float(ni.get("deadband_deficit", 0.10)),
+        )
+
+    # §57 — recovery auto-starting: S1 (sonda fail-safe, parametri di riferimento del
+    # template) + S2 (hint SNR-guida). Retrocompat: sezioni assenti -> default.
+    if "recovery_probe" in raw:
+        rp = raw["recovery_probe"]
+        cfg.recovery_probe = RecoveryProbeConfig(
+            enabled=bool(rp.get("enabled", True)),
+            probe_timeout_min=float(rp.get("probe_timeout_min", 12.0)),
+            probe_min_interval_min=float(rp.get("probe_min_interval_min", 5.0)),
+            match_sub=bool(rp.get("match_sub", True)),
+        )
+    if "recovery_hint" in raw:
+        rh = raw["recovery_hint"]
+        cfg.recovery_hint = RecoveryHintConfig(
+            enabled=bool(rh.get("enabled", True)),
+            snr_recover_frac=float(rh.get("snr_recover_frac", 0.8)),
+            snr_recover_floor=float(rh.get("snr_recover_floor", 25.0)),
+            sustained_seconds=float(rh.get("sustained_seconds", 60.0)),
+            drain_factor=float(rh.get("drain_factor", 2.0)),
         )
 
     return cfg

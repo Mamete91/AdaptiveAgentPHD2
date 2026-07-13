@@ -33,6 +33,7 @@ from phd2_agent.logger import SessionLogger
 from phd2_agent.config import load_config
 from phd2_agent.nina_telemetry import NinaTelemetryStore
 from phd2_agent.nina_indices import TransparencyTracker
+from phd2_agent.recovery_hint import RecoveryHintTracker
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -157,15 +158,28 @@ def main():
     controller.nina_store = nina_store
     controller.transparency_tracker = transparency_tracker
 
+    # §57 S2 — RecoveryHintTracker: fratello di N1 (SOLO osservazione, autorità safety
+    # ZERO). Legge lo stato N1 via provider read-only; alimentato per-frame con snr_avg
+    # nel loop eventi (la SNR guida fluisce anche mentre NINA è in attesa UNSAFE).
+    def _n1_state() -> tuple:
+        try:
+            b = transparency_tracker.status_block()
+            return (b.get("state"), b.get("index"))
+        except Exception:
+            return (None, None)
+
+    recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state)
+
     # --- Dashboard ---
 
     if not args.no_dashboard:
         try:
             from server import (start_server, set_global_state, set_nina_store,
-                                 set_transparency_tracker)
+                                 set_transparency_tracker, set_recovery_hint_tracker)
             set_global_state(controller, analyzer, session_logger)
             set_nina_store(nina_store)
             set_transparency_tracker(transparency_tracker)
+            set_recovery_hint_tracker(recovery_hint_tracker)
             dash_thread = threading.Thread(
                 target=start_server,
                 kwargs={"host": cfg.dashboard.host, "port": cfg.dashboard.port},
@@ -330,6 +344,9 @@ def _event_loop(
                 # (no-op se per_frame_baseline è off). La VALUTAZIONE (classify + leve)
                 # resta gated sul tick interval_seconds.
                 controller.ingest_frame(snapshot)
+                # §57 S2 — hint di recupero: integra la SNR guida per-frame (no-op se
+                # disabilitato o stato N1 non degradato). Solo osservazione.
+                recovery_hint_tracker.update(snapshot.snr_avg)
                 if now - last_eval >= eval_interval:
                     actions = controller.evaluate(snapshot)
                     last_eval = now

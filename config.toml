@@ -322,3 +322,26 @@ clear_above           = 0.8      # TI >= -> CLEAR
 cloud_below           = 0.5      # TI <  -> CLOUD (in mezzo: HAZE)
 hysteresis            = 0.05     # margine anti-flicker sulle soglie di stato
 deadband_deficit      = 0.10     # calo % sotto cui è rumore (non conta per confirmed_subs)
+
+[recovery_probe]
+# §57 S1 — posa-sonda FAIL-SAFE durante UNSAFE-nubi. La sonda la scatta il SEQUENCER
+# di NINA (template builtin: Trigger On Unsafe + Loop While Unsafe + Take Exposure —
+# vedi docs/development/TEMPLATE_SEQUENZA_RECOVERY_S1.md): qui vivono i parametri di
+# riferimento del template, documentati e usati dalla telemetria di validazione.
+enabled                = true
+probe_timeout_min      = 12      # cadenza fail-safe della sonda mentre UNSAFE (Wait del template)
+probe_min_interval_min = 5       # paletto 3 — intervallo minimo ASSOLUTO tra due sonde
+match_sub              = true    # paletto 2 — sonda = stesso filtro/esposizione del sub, NON guidata
+
+[recovery_hint]
+# §57 S2 — hint "il cielo sta tornando" dalla SNR della stella guida (fluisce anche
+# mentre NINA è in attesa UNSAFE). AUTORITÀ SAFETY ZERO: può solo ANTICIPARE la sonda
+# S1 (istruzione plugin "Recovery probe"), mai dichiarare SAFE — la verità resta la
+# camera di imaging (N1). §57-bis: accumulatore leaky IN SECONDI DI TEMPO REALE
+# (indipendente dal frame-rate di guida del setup, fisicamente coerente col cielo).
+# VALORI PROVVISORI da tarare sul campo.
+enabled            = true
+snr_recover_frac   = 0.8         # PROVVISORIO — frame "buono" se snr >= frac × snr_ref (pre-nube)
+snr_recover_floor  = 25.0        # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
+sustained_seconds  = 60.0        # PROVVISORIO — secondi di segnale buono per active=true
+drain_factor       = 2.0         # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi

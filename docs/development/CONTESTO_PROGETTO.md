@@ -35,7 +35,58 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-07-02 (§54 deprecazione modalità JITTER)
+## Stato attuale — aggiornato al 2026-07-13 (§57 recovery auto-starting da unsafe-nubi)
+
+### Recovery auto-starting (S1 sonda-timeout + S2 hint SNR-guida) — IMPLEMENTATO (2026-07-13)
+Chiude il deadlock provato il 12/7 (indice N1 congelato 0.115 per 28 min durante l'attesa
+UNSAFE: NINA non salva light → N1 fermo → N6 non può tornare SAFE). Architettura distribuita,
+N1/N6/forwarder INTATTI: **S1** = template di sequenza 100% builtin (ricognizione decisiva:
+`Trigger On Unsafe` è core NINA 3.3; `Loop While Unsafe` esiste già anche in 3.2 e il
+watchdog taglia il Wait al ritorno del SAFE) — sonda LIGHT match-sub non guidata ogni 12 min
+→ N1 fresco → drain §55 → SAFE da solo. **S2** = `RecoveryHintTracker` (agente, fratello di
+N1): SNR guida integrata con accumulatore leaky simmetrico a N6, gated su CLOUD/HAZE, espone
+`/status.recovery_hint` + card dashboard; accumulatore **in secondi di tempo reale**
+(§57-bis: indipendente dal frame-rate di guida). **Rev. §57-bis** (vincolo GUI scoperto in
+validazione: i container del Trigger On Unsafe rifiutano le istruzioni Camera): l'istruzione
+plugin è ora **`RecoveryProbe`** AUTOCONTENUTA (v1.6.0.0) — gate temporale (hint OR timeout,
+mai sotto min-interval) + posa-sonda interna che replica il light interrotto (parametri da
+`LastLightMemory`, filtro già in posizione, fallback configurabile), salvata nel pipeline
+standard → forwarder → N1. Nessuna cattura autonoma (solo dentro Execute() del sequencer);
+niente safety nell'istruzione. Telemetria per-sonda con attribuzione S1/S2 ed esito
+(paletto 8). Config `[recovery_probe]`+`[recovery_hint]` (soglie provvisorie). Test: agente
+291 verdi, plugin 19 verdi. Template operativo: `TEMPLATE_SEQUENZA_RECOVERY_S1.md` (rev).
+Da validare a banco (pannello Gemini) e sul cielo. Dettaglio: NOTE_CLAUDE §57 + §57-bis.
+
+## Stato precedente — aggiornato al 2026-07-12 (§56 fix re-init self-orphan)
+
+### Fix re-init self-orphan + leve preservate tra ripartenze — IMPLEMENTATO (2026-07-12)
+L'orphan-recovery della baseline e l'INIT §50 girano ora solo al primo avvio del
+processo (`_process_initialized`); le ripartenze guida (autofocus/filtro/ricentraggio)
+fanno un ri-aggancio leggero che preserva le leve convergenti (ri-lette da PHD2 reale).
+Sparisce il falso WARNING "orfana" a ogni "Guiding Begins" (prova: log 02:42:05 del
+2026-07-12). Recovery vera dopo crash invariata (guard setup/età/versione intatti).
+Kill-switch `[control] full_reinit_on_restart` (default false = nuovo comportamento).
+Log agente ora persistito su `logs/agent.log` (RotatingFileHandler 5MB×5) + versione
+PHD2 loggata alla connessione (evento Version). Test: `tests/test_reinit_orphan.py`
+(8 verdi), suite 278. Dettaglio in NOTE_CLAUDE §56.
+
+## Stato precedente — aggiornato al 2026-07-10 (§55 fix di sicurezza N6 post-validazione)
+
+### §55 — FIX di sicurezza N6: stantio→UNSAFE, persistenza sull'indice, agent-lost≠safe (fatto, 2026-07-10)
+Dalla validazione 2026-07-09/10 (Borno, RC8): **N1 perfetto** (indice fino a 0.08 coerente col cielo) ma il **Safety
+Monitor è rimasto SAFE sotto nube piena per ~17 min** — 3 bug concatenati nel plugin, tutti nella stessa direzione
+sbagliata: quando N6 smette di vedere (flicker HAZE che azzera lo streak; telemetria stantia che spegne il blocco nubi;
+agente irraggiungibile → disconnect→SAFE) si dichiarava sicuro. Fix (plugin **v1.5.0.0**): persistenza CLOUD calcolata
+sull'**indice** con accumulatore leaky (HAZE neutra, non azzera; soglie 0.5/0.8 allineate a N1); **stantio oltre la
+finestra §43 + sessione attiva + contesto degradato → UNSAFE** (`StaleTelemetry`); **agente perso a sessione attiva →
+UNSAFE** (`AgentLost`, mai più disconnect-to-SAFE); eccezioni cross-thread isolate per-stadio (un subscriber che lancia
+non salta più la valutazione); timeout HTTP 3→5s (robustezza). Osservabilità §3: log Debug per tick con tutti gli input,
+`age_s`+`window_s` esposti dall'agente in `/status.nina.transparency`, card dashboard "Telemetria FRESH/STANTIA".
+Kill-switch per ciascuna feature (legacy bit-identica testata). **Primo progetto di test del repo plugin: 12 verdi**;
+agente 270 verdi; build 0 warning. UI plugin ora completamente in inglese. **Da validare alla prossima notte con nubi.**
+Dettagli: NOTE_CLAUDE §55.
+
+## Stato precedente — aggiornato al 2026-07-02 (§54 deprecazione modalità JITTER)
 
 ### §54 — Modalità JITTER deprecata; GUARDIAN ufficiale (fatto, 2026-07-02)
 La modalità di guida **ufficiale è GUARDIAN** (con **OFF** come A/B legittimo). La modalità **JITTER** (motore §31 unica

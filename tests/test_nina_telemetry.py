@@ -304,13 +304,16 @@ class TestGracefulAbsent(unittest.TestCase):
         self.assertIsNone(nina["last_age_s"])
 
     def test_status_shape_diff_only_nina(self):
-        # Lo /status post-§41 deve avere solo la chiave `nina` in più rispetto
-        # alla forma pre-§41 {timestamp, controller, analyzer}.
+        # Lo /status post-§41 aggiunge `nina`; §57 aggiunge `recovery_hint` (blocco
+        # di sola osservazione, graceful {"enabled": false} se il tracker è assente).
         server.set_nina_store(NinaTelemetryStore(enabled=True))
         server.set_global_state(None, None, None)
         body = _client().get("/status").json()
-        self.assertEqual(set(body.keys()), {"timestamp", "controller", "analyzer", "nina"})
+        self.assertEqual(set(body.keys()),
+                         {"timestamp", "controller", "analyzer", "nina", "recovery_hint"})
+        self.assertFalse(body["recovery_hint"]["enabled"])   # tracker non registrato
         body.pop("nina")
+        body.pop("recovery_hint")
         self.assertEqual(set(body.keys()), {"timestamp", "controller", "analyzer"})
 
 

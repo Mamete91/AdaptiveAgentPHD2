@@ -46,6 +46,8 @@ _session_logger = None
 _nina_store = None
 # §45 — tracker Layer-2 (Transparency Index). None => blocco transparency assente.
 _transparency_tracker = None
+# §57 S2 — hint di recupero dalla SNR guida. None => blocco recovery_hint assente.
+_recovery_hint_tracker = None
 
 # Broadcast buffer per WebSocket
 _ws_queue: asyncio.Queue = None
@@ -71,6 +73,14 @@ def set_transparency_tracker(tracker) -> None:
     ed esposto in /status.nina.transparency."""
     global _transparency_tracker
     _transparency_tracker = tracker
+
+
+def set_recovery_hint_tracker(tracker) -> None:
+    """§57 S2 — registra il RecoveryHintTracker (fratello di N1, SOLO osservazione:
+    nessuna autorità safety). Esposto in /status.recovery_hint; osserva le sonde
+    (paletto 8) accanto all'ingest N1."""
+    global _recovery_hint_tracker
+    _recovery_hint_tracker = tracker
 
 
 # Forma di default del blocco `nina` in /status quando lo store non è registrato
@@ -225,12 +235,21 @@ async def get_status():
                                        "index": None, "state": None, "fresh": False,
                                        "age_s": None, "window_s": None}
 
+    # §57 S2 — blocco recovery_hint (solo osservazione; graceful se assente/spento).
+    try:
+        recovery_hint = (_recovery_hint_tracker.status_block()
+                         if _recovery_hint_tracker is not None
+                         else {"enabled": False, "active": False})
+    except Exception:
+        logger.exception("Errore leggendo RecoveryHintTracker in /status")
+        recovery_hint = {"enabled": False, "active": False}
 
     return JSONResponse({
         "timestamp": time.time(),
         "controller": ctrl_status,
         "analyzer": analyzer_status,
         "nina": nina_status,
+        "recovery_hint": recovery_hint,
     })
 
 
@@ -336,6 +355,14 @@ async def ingest_nina_telemetry(payload: NinaTelemetryPayload):
         # §45 — alimenta il tracker Layer-2 (derivato da Layer-1, non sporca lo store).
         if _transparency_tracker is not None:
             _transparency_tracker.ingest(dumped)
+            # §57 — telemetria sonde (paletto 8): un light arrivato a contesto degradato
+            # è la firma di una posa-sonda; registra trigger presunto + esito post-ingest.
+            # SOLO osservazione (N1 già aggiornato sopra; N6 non c'entra).
+            if _recovery_hint_tracker is not None:
+                try:
+                    _recovery_hint_tracker.observe_probe(_transparency_tracker.status_block())
+                except Exception:
+                    logger.exception("Errore in RecoveryHintTracker.observe_probe (ignorato)")
     except Exception:
         # Difesa in profondità: un bug nello store non deve mai propagarsi.
         logger.exception("Errore aggiornando NinaTelemetryStore (telemetria scartata)")

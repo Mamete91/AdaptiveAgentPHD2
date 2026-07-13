@@ -2857,3 +2857,81 @@ esplicito disponibile via `reinitialize()`). Validazione campo: (1) ripartenze g
 (2) shutdown pulito senza orphan al riavvio; (3) kill da task manager → orphan-recovery una sola volta; (4) agent.log
 popolato. Niente commit/push senza gate.
 
+## 57. Recovery AUTO-STARTING da UNSAFE-nubi: S1 sonda-timeout (template builtin) + S2 hint SNR-guida — Agente v2.7 + Plugin v1.6.0.0 (2026-07-13)
+
+**Motivazione (deadlock provato, notte 12/7).** §55 ferma correttamente su nubi, ma il ritorno a SAFE richiede dati
+freschi da N1, che si aggiorna SOLO sui light salvati — e il `Wait Until Safe` di NINA non scatta pose (verificato sul
+sorgente: puro poll 5s). Prova: indice congelato a 0.115 per 28 min (00:41→01:09) mentre la SNR guida oscillava 30↔63
+(il cielo variava, nessuno lo misurava). Mancava il "come ripartire".
+
+**Ricognizione builtin-first (decisiva, ha cambiato l'architettura).** (1) Il "Trigger On Unsafe" visto da Alessandro
+è CORE NINA 3.3 (Before/After Waiting For Safety; assente dall'SDK 3.2). (2) `LoopWhileUnsafe` esiste GIÀ nel core
+(anche SDK 3.2): condizione inversa di "Loop while safe", e il ConditionWatchdog taglia il container ANCHE a metà di un
+Wait → un loop sonda che esce da solo, all'istante, al ritorno del SAFE. ⇒ **S1 è esprimibile al 100% builtin**:
+l'`ISequenceItem WaitForSafeWithProbe` prevista dal prompt è stata ELIMINATA (gate intermedio approvato).
+
+**Architettura (distribuita, N1/N6/forwarder INTATTI — diff vuoto):**
+- **S1 (fail-safe, zero codice)** — template di sequenza: `Trigger On Unsafe → Before = Container[Loop While Unsafe]:
+  Wait 12min → Take Exposure (LIGHT, stessa esposizione del sub, filtro già in posizione, NON guidata — in nube fitta
+  la stella guida sparisce: 13/7 guida mai ripartita dalle 03:20)`. Sonda salvata → forwarder (già senza filtro tipo
+  immagine) → N1 fresco → drain §55 → SAFE → il watchdog esce dal loop → la sequenza riprende.
+  Doc completo: `TEMPLATE_SEQUENZA_RECOVERY_S1.md` (ordine, container, parametri, motivazioni, limitazioni).
+- **S2 (acceleratore, autorità ZERO)** — agente: nuovo `phd2_agent/recovery_hint.py` (`RecoveryHintTracker`, fratello
+  di N1): integra la SNR guida per-frame (fluisce durante l'attesa) con accumulatore leaky SIMMETRICO al CLOUD di N6
+  (+1 se snr ≥ max(floor, frac×snr_ref), −drain altrimenti; latch a sustained, rilascio a 0), gated su ultimo stato N1
+  CLOUD/HAZE (a CLEAR è inerte e cattura snr_ref in EMA). Espone `/status.recovery_hint` (active/snr/ref/accumulatore/
+  reason/probes) + card dashboard "Recovery (§57)". `observe_probe()` (hook 1-riga in server.py accanto all'ingest):
+  registra ogni sonda con attribuzione by-construction (hint attivo ⇒ `hint_S2`, altrimenti `timeout_S1`) + esito
+  (index/state post) — paletto 8. NESSUN percorso verso N6/IsSafe (test strutturale).
+- **Plugin v1.6.0.0** — micro-istruzione `WaitForRecoveryHint` ("Wait for recovery hint (Adaptive Agent)"):
+  puro GATE TEMPORALE dentro il loop (al posto del Wait fisso): ritorna a `hint.active OR timeout`, MAI prima di
+  `min_interval` (floor assoluto, anche per il timeout — paletto 3), logica pura in `RecoveryProbeGate` (testabile).
+  Non legge/imposta safety (l'uscita a SAFE è del LoopWhileUnsafe via CancellationToken), non cattura immagini
+  (niente IImagingMediator — test strutturale), agente offline ⇒ puro S1. Config: `[recovery_probe]` (timeout 12min,
+  min_interval 5min, match_sub) + `[recovery_hint]` (frac 0.8, floor 25, sustained 20 frame ≈60s, cap 20, drain 2 —
+  PROVVISORI; nota: i "poll" sono guide-frame ~3s, non i poll 15s del plugin: 8 frame sarebbero ~24s, troppo nervosi).
+
+**Paletti (8/8):** S1 autonomo (hint spento ⇒ Wait fisso) · sonda match-sub non guidata · min-interval floor ·
+osservabilità totale (log agente+NINA+card) · soglie provvisorie in TOML · accumulatore/isteresi (no flag nudo) ·
+3 kill-switch a strati (template rimovibile / `recovery_hint.enabled` / istruzione sostituibile col Wait) · telemetria
+per-sonda completa. **Test**: agente `test_recovery_hint.py` (12: picco singolo no, isteresi, gating CLEAR/ignoto,
+soglia relativa+floor, strutturale no-safety, kill-switch, attribuzione S1/S2, light normale non registrato) — suite
+**290 verdi**; plugin `RecoveryProbeGateTests` (6: S1 standalone, floor con hint, floor sul timeout, hint mai
+soppressivo, reason S1/S2, no-imaging strutturale) — **18 verdi** totali. Build plugin **0 warning**.
+
+**Limiti/validazione.** Sonde = light veri nella cartella target (se il cielo era tornato sono sub buoni). Template
+richiede NINA 3.3 (variante 3.2 documentata: blocchi alternati Loop While Safe/Unsafe). Prova a banco col pannello
+Gemini (chiudi→UNSAFE→sonde S1→riapri→hint→sonda S2→SAFE, cronometrare l'anticipo). Taratura `[recovery_hint]` dai
+record di 2-3 notti. §58 (park su unsafe prolungato) mappato: stesso trigger, `Before = [LoopWhileUnsafe: Wait X →
+Park]` (il watchdog salta il Park se il safe torna presto) — prompt separato. Niente commit/push (gate).
+
+### §57-bis — Revisione post-GUI: RecoveryProbe autocontenuta + hint a tempo reale (2026-07-13)
+
+**Trigger della revisione (prova pratica di Alessandro sulla GUI, NINA 3.3.0.1048):** i container del Trigger On
+Unsafe ACCETTANO le istruzioni del plugin ma RIFIUTANO le istruzioni di categoria Camera (Take Exposure & co.) → il
+template v1 (gate `WaitForRecoveryHint` + TakeExposure esterno) non era montabile. Verifica sorgente: il trigger usa
+`SequentialContainer` senza restrizioni nel proprio codice → il filtro è nel layer GUI/drop (coerente: la nostra
+istruzione ha categoria propria). Gate §57-bis approvato con due decisioni:
+
+1. **Sonda DENTRO l'istruzione** (proposta di Alessandro, paletto v1 ritirato con motivazione): il divieto di
+   `IImagingMediator` nasceva contro le catture AUTONOME (monitor/timer); un'ISequenceItem che cattura nel proprio
+   `Execute()` è il sequencer stesso che fa imaging — identico al TakeExposure core. `WaitForRecoveryHint` →
+   **`RecoveryProbe`** ("Recovery probe (Adaptive Agent)"): gate invariato (S1 timeout / S2 hint / floor min-interval,
+   logica pura in `RecoveryProbeGate`) POI cattura interna: `CaptureSequence` LIGHT che **replica il light interrotto**
+   — esposizione/gain/offset/binning da **`LastLightMemory`** (nuovo subscriber `LastLightTracker` su ImageSaved, il
+   forwarder §42 resta INVARIATO), filtro = ruota già in posizione (zero comandi), fallback exposure configurabile solo
+   se nessun light visto in sessione. Flusso canonico: CaptureImage → ToImageData → PrepareImage(detectStars) →
+   `IImageSaveMediator.Enqueue` → ImageSaved → forwarder → N1. IValidatable (warning se camera non connessa).
+   Cancellazione: il watchdog del Loop While Unsafe taglia anche a metà posa (SAFE può arrivare solo da una sonda
+   precedente → abort corretto). Paletto riformulato: "l'imaging avviene solo dentro istruzioni eseguite dal sequencer".
+2. **Criterio a TEMPO REALE per l'hint** (riflessione di Alessandro sul criterio campioni-vs-tempo): l'accumulatore S2
+   contava guide-frame, ma il frame-rate varia col setup (0.5–4 s) → stesso valore, comportamenti diversi. Ora
+   l'accumulatore è **in secondi** (`acc += dt` sui frame buoni, `acc −= drain_factor×dt` sui cattivi, dt clampato a
+   5 s contro i buchi: stella persa non accredita tempo fantasma), latch a `sustained_seconds=60`, rilascio a 0.
+   Config: `sustained_seconds`/`drain_factor` sostituiscono `sustained_polls`/`accumulator_cap`/`drain_rate`.
+   NB: la paura "8 sonde × 300 s = 40 min" NON si applica al rientro: dopo UNA sonda serena l'indice resta fresco per
+   max(180, 1.5×exp) e il drain N6 va a poll fissi 15 s → SAFE in ~1 min. N6 §55 e N1 restano invariati (per mandato).
+
+**Test/build**: agente **291 verdi** (nuovo caso gap-clamp; test hint riscritti con clock iniettato); plugin **19
+verdi** (test strutturale aggiornato: niente cattura AUTONOMA — no timer; LastLightTracker senza imaging mediator —
++ test LastLightMemory); build **0 warning**. Template riscritto (rev. §57-bis) con la limitazione GUI documentata.

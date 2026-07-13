@@ -289,6 +289,7 @@ function applyFullStatus(data) {
 
   // §45 — Transparency Index (NINA, Layer-2)
   updateTransparency(data.nina);
+  updateRecoveryHint(data.recovery_hint);
 
   // §51 — Adaptive MinMove (cap adattivo)
   updateMinMoveCap(ctrl.minmove_cap);
@@ -617,6 +618,44 @@ function updateTransparency(nina) {
   }
 }
 
+// §57 — card Recovery: hint SNR-guida (S2, sola osservazione) + ultima sonda (S1/S2).
+// Graceful: nascosta se il tracker è spento o non c'è mai stato contesto degradato.
+function updateRecoveryHint(rh) {
+  const card = el('recovery-card');
+  if (!card) { return; }
+  const hasContext = rh && rh.enabled
+    && (rh.snr != null || (rh.probes && rh.probes.length > 0) || rh.active);
+  if (!hasContext) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  const stateEl = el('recovery-state');
+  if (rh.active) {
+    el('recovery-icon').textContent = '🌤️';
+    stateEl.textContent = 'CIELO IN RECUPERO?';
+    stateEl.style.color = '#34d399';
+  } else {
+    el('recovery-icon').textContent = '⏳';
+    stateEl.textContent = 'IN OSSERVAZIONE';
+    stateEl.style.color = '#9ca3af';
+  }
+  el('recovery-reason').textContent = rh.reason || '';
+  el('recovery-snr').textContent =
+    (rh.snr != null ? rh.snr.toFixed(1) : '—') + ' / ' +
+    (rh.snr_ref != null ? rh.snr_ref.toFixed(1) : '—');
+  el('recovery-acc').textContent =
+    `${rh.accumulator_s != null ? rh.accumulator_s : '—'}s/${rh.sustained_target_s != null ? rh.sustained_target_s : '—'}s`;
+  const probes = rh.probes || [];
+  if (probes.length > 0) {
+    const p = probes[probes.length - 1];
+    const ago = Math.max(0, Math.round((Date.now() / 1000 - p.ts) / 60));
+    const trig = p.trigger === 'hint_S2' ? 'S2' : 'S1';
+    const idx = p.outcome_index != null ? p.outcome_index.toFixed(2) : '—';
+    el('recovery-probe').textContent = `${trig} → ${p.outcome_state || '—'} (${idx}) · ${ago}m fa`;
+  } else {
+    el('recovery-probe').textContent = '—';
+  }
 }
 
 // §51 — card "Adaptive MinMove": badge ACTIVE/IDLE (da clamping_active), cap, baseline
