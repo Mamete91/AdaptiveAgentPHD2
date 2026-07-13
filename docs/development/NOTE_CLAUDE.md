@@ -2761,3 +2761,51 @@ jitter onorata con flag on (`_engine_owns_levers()` True); off/guardian invariat
 con flag→jitter; default guardian. Test esistente `test_activation_gated` aggiornato (usa `allow_experimental_jitter=true`
 per esercitare il gate allow_dashboard con jitter). Suite **270 verdi** (264 + 6). Coerente col principio dashboard
 (§51/§52): la vista mostra solo logica operativa e validata. Niente commit/push.
+
+## 55. FIX di sicurezza N6: stantio→UNSAFE, persistenza CLOUD sull'indice, agent-lost≠safe + osservabilità — Plugin v1.5.0.0 + Agente (2026-07-10)
+
+**Contesto.** Validazione live 2026-07-09/10 (Borno, RC8): N1 ha seguito il cielo perfettamente (indice fino a 0.08,
+stelle >150→5) ma il Safety Monitor è rimasto SAFE per ~17 min di nube piena e non ha mai fermato la sequenza. Dai log
+NINA (v3.3.0.1048): zero UNSAFE-nube in tutta la notte (3 UNSAFE, tutte STAR_LOST), 3 episodi "Agente offline →
+monitor disconnesso → **Safe**", 2 eccezioni cross-thread nel health-checker. Tre bug concatenati, tutti con lo stesso
+difetto di direzione: **quando N6 smette di vedere bene, si dichiarava al sicuro invece di fermarsi.**
+
+**Root cause (verificate sul codice al pre-flight):**
+- **Bug A** (`SafetyDecisionEngine.cs`): `isClearish = CLEAR||HAZE` azzerava lo streak nubi → col flicker
+  CLOUD↔HAZE di N1 gli 8 poll consecutivi erano irraggiungibili.
+- **Bug B**: blocco CLOUD gated da `TransparencyFresh`; il ramo `else` azzerava gli streak → telemetria stantia =
+  sicurezza-nubi silenziosamente SPENTA (più nubi → meno pose → più stantio → meno sicurezza: fail-dangerous).
+- **Bug C** (`AdaptiveAgentSafetyMonitor`): agente irraggiungibile → `Disconnect()` → `IsSafe=true` (+ mai riconnesso;
+  timeout HTTP 3s → bastava un tick lento). Alle 03:17 il flip a Safe è avvenuto con un WaitUntilSafe attivo.
+- **Bug C-bis**: eccezione cross-thread di un subscriber in `OnTick` → catch unico → `Evaluate` SALTATO per quel tick.
+
+**Fix (plugin v1.5.0.0, tutta la decisione nel `SafetyDecisionEngine`, unit-testabile via `ISafetySettings`):**
+- **§2 indice leaky** (`UseIndexCloudLogic=true`, kill-switch→legacy): degrado +1/poll se `index<0.5` (=cloud_below N1),
+  −2/poll se `index≥0.8` (=clear_above N1; rate=CloudUnsafePolls/ClearSafePolls), zona HAZE **neutra** (non azzera).
+  UNSAFE a degrado≥8 (2 min), SAFE a 0. Fallback su stato discreto se indice assente (HAZE comunque neutra).
+- **§1 stale→UNSAFE** (`StaleUnsafeEnabled=true`, `StaleUnsafePolls=8`): fresh=false (già = oltre finestra adattiva §43,
+  quindi il gap normale tra sub NON scatta) + sessione attiva + ultimo contesto degradato (index<0.5 o stato≠CLEAR) →
+  UNSAFE causa `StaleTelemetry`. Lo stantio NON azzera più il degrado accumulato.
+- **§5 agent-lost≠safe** (`AgentLostUnsafeEnabled=true`, `AgentLostUnsafePolls=4`): eliminato l'auto-Disconnect; il
+  monitor resta connesso, il checker passa `AgentReachable=false` a ogni tick → a sessione attiva UNSAFE causa
+  `AgentLost` (~1 min). A guida INACTIVE: neutro (fine sessione = normale). `Disconnect()` esplicito non imposta più
+  IsSafe=true. Latch preservati durante l'irraggiungibilità; il rientro NON è gratis (degrado saturato → servono
+  ClearSafePolls di evidenza CLEAR; senza trasparenza: guida NORMAL per ResumeTicks).
+- **Bug C-bis**: `OnTick` con try/catch per-stadio (un subscriber che lancia non salta più Evaluate, loggato Warning);
+  `Notification.Show*` marshallate sul dispatcher (`ShowToast`). Timeout HTTP 3s→5s (robustezza, NON il fix).
+- **§3 osservabilità**: `Logger.Debug` per tick (`N6 tick: reachable/guiding/transp/idx/fresh/age | degr/stale/lost |
+  latch → SAFE/UNSAFE`), `Logger.Info` su ogni transizione con causa; agente espone `age_s`+`window_s` in
+  `/status.nina.transparency` (server.py, dallo store §43); card dashboard: "Telemetria FRESH·42s / STANTIA·età>finestra".
+
+**Settings nuove** (persisted DTO nullable, born-operative): `UseIndexCloudLogic`, `CloudIndexAccumulateBelow=0.5`,
+`CloudIndexDrainAbove=0.8`, `StaleUnsafeEnabled`, `StaleUnsafePolls=8`, `AgentLostUnsafeEnabled`, `AgentLostUnsafePolls=4`.
+UI settings completamente in inglese (chiusura item pendente) + righe nuove; badge/fallback/launcher EN.
+
+**Test**: NUOVO progetto `tests/AdaptiveAgentForPHD2.NinaPlugin.Tests` (MSTest, primo del repo plugin): **12 verdi** —
+gli 8 casi del prompt (flicker→UNSAFE; stale+degradato→UNSAFE; contesto CLEAR stantio→nessun falso allarme; 0.08
+sostenuto→UNSAFE in 8 poll; recupero con isteresi; kill-switch=legacy bit-identico incl. Bug A riprodotto;
+agent-lost→UNSAFE e mai SAFE; INACTIVE+offline→neutro) + latch preservato, rientro con evidenza, regressioni STAR_LOST
+e payload invalido. Agente: suite **270 verdi** (contratto `age_s`/`window_s` in test_nina_telemetry). Build plugin
+Release **0 warning / 0 errori**. Pacchetto agente ricompilato. **Validazione live alla prossima notte con nubi**
+(o simulando stantio) osservando card Telemetria + log N6. Niente commit/push (gate).
+

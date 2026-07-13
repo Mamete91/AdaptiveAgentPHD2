@@ -578,6 +578,11 @@ class TestTransparencyFreshContract(unittest.TestCase):
         self.assertEqual(t["state"], "CLEAR")
         self.assertIsNotNone(t["index"])       # continuo
         self.assertIn("background", t)          # alias contratto N6
+        # §55 (fix N6) — età telemetria + finestra adattiva esposte accanto a fresh:
+        # il plugin le logga a ogni tick (osservabilità: "stantio" provato, non dedotto).
+        self.assertIsNotNone(t["age_s"])
+        self.assertLess(t["age_s"], 60.0)
+        self.assertAlmostEqual(t["window_s"], 450.0)   # max(180, 1.5×300s)
 
     def test_fresh_false_when_stale(self):
         c, store = self._client()
@@ -585,7 +590,9 @@ class TestTransparencyFreshContract(unittest.TestCase):
                 "image": {"star_count": 150, "median_adu": 900, "filter": "L", "exposure_s": 300}})
         store._last_monotonic -= 10000.0        # forza staleness
         t = c.get("/status").json()["nina"]["transparency"]
-        self.assertFalse(t["fresh"])            # N6 -> fail-safe (nubi neutre)
+        self.assertFalse(t["fresh"])            # N6 -> il plugin escala (fix §55), non ignora
+        # §55 — l'età rende lo stantio auto-evidente: >> finestra adattiva.
+        self.assertGreater(t["age_s"], t["window_s"])
 
     def test_fresh_false_when_no_tracker(self):
         server.set_nina_store(None)
@@ -593,6 +600,8 @@ class TestTransparencyFreshContract(unittest.TestCase):
         server.set_global_state(None, None, None)
         t = _client().get("/status").json()["nina"]["transparency"]
         self.assertFalse(t["fresh"])
+        self.assertIsNone(t["age_s"])           # §55 — mai ricevuto: età assente, non 0
+        self.assertIsNone(t["window_s"])
 
 
 if __name__ == "__main__":

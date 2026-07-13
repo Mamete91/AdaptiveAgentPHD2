@@ -206,7 +206,9 @@ async def get_status():
 
     # §45/§48 — sotto-blocco transparency (Layer-2, unico riconoscitore N1). Graceful:
     # assente -> available:false. `fresh` (§48) è la freschezza single-source dello store
-    # §43: N6 (plugin) lo usa come FAIL-SAFE (nubi neutre se la telemetria è stantia).
+    # §43. §55 (fix N6): accanto a `fresh` esponiamo anche `age_s` (età telemetria) e
+    # `window_s` (finestra adattiva §43) — il plugin li logga a ogni tick, così "stantio"
+    # diventa PROVATO nei log, non dedotto (lezione della notte 2026-07-10).
     try:
         transp = (_transparency_tracker.status_block() if _transparency_tracker is not None
                   else {"enabled": False, "available": False, "index": None, "state": None})
@@ -214,11 +216,15 @@ async def get_status():
             transp["fresh"] = bool(_nina_store.is_fresh) if _nina_store is not None else False
         except Exception:
             transp["fresh"] = False
+        transp["age_s"] = nina_status.get("last_age_s")
+        transp["window_s"] = nina_status.get("effective_staleness_s")
         nina_status["transparency"] = transp
     except Exception:
         logger.exception("Errore leggendo TransparencyTracker in /status")
         nina_status["transparency"] = {"enabled": False, "available": False,
-                                       "index": None, "state": None, "fresh": False}
+                                       "index": None, "state": None, "fresh": False,
+                                       "age_s": None, "window_s": None}
+
 
     return JSONResponse({
         "timestamp": time.time(),

@@ -598,6 +598,25 @@ function updateTransparency(nina) {
     ? `${Math.round(t.star_count)}/${Math.round(t.base_stars)}` : '—';
   el('transp-index').textContent = t.index != null ? t.index.toFixed(2) : '—';
   el('transp-filter').textContent = t.filter || '—';
+
+  // §55 (fix N6) — freschezza esplicita: FRESH (verde, età) o STANTIA (rossa,
+  // età vs finestra §43). Con telemetria stantia l'indice è CONGELATO all'ultimo
+  // valore: renderlo evidente evita di fidarsi di un cielo che non stiamo più vedendo.
+  const freshEl = el('transp-fresh');
+  if (freshEl) {
+    const age = (t.age_s != null) ? Math.round(t.age_s) : null;
+    if (t.fresh) {
+      freshEl.textContent = age != null ? `FRESH · ${age}s` : 'FRESH';
+      freshEl.style.color = '#34d399';
+    } else {
+      const win = (t.window_s != null) ? Math.round(t.window_s) : null;
+      freshEl.textContent = (age != null && win != null)
+        ? `STANTIA · ${age}s > ${win}s` : 'STANTIA';
+      freshEl.style.color = '#f87171';
+    }
+  }
+}
+
 }
 
 // §51 — card "Adaptive MinMove": badge ACTIVE/IDLE (da clamping_active), cap, baseline
