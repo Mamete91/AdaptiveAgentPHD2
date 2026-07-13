@@ -55,3 +55,9 @@ doc/Manuale_Utente_Agent .txt
 PRIMO_CONTATTO_NINA_MAINTAINERS.md
 PROMPT_REVIEW_READINESS_NINA.md
 SPEC_FASE3_PACKAGING_E_INGRESSO_NINA.md
+
+# Prompt e appunti di lavoro a livello root: restano locali (la storia matura
+# vive in docs/development/). Il pattern copre solo la ROOT, non docs/.
+/PROMPT_*.md
+/MENTE_DEL_MAINTAINER.md
+/RISPOSTA_DALE_GHENT.md

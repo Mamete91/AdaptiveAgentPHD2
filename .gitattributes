@@ -1,0 +1,14 @@
+# Normalizzazione fine-riga (§57 igiene): il contenuto del repo è SEMPRE LF;
+# git converte al checkout secondo la piattaforma. Blocca lo stato verificato
+# (index 100% LF) e rende il comportamento indipendente da core.autocrlf locale.
+* text=auto
+
+# Script Windows: CRLF al checkout (eseguiti da cmd/PowerShell)
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binari: mai normalizzare
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
