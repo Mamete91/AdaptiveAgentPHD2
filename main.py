@@ -37,8 +37,19 @@ from phd2_agent.nina_indices import TransparencyTracker
 
 def setup_logging(level: str = "INFO") -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    # §56 — persistenza del log su file (rotazione): senza, i crash notturni non
+    # lasciano traceback (la console si chiude col processo). Fallback graceful:
+    # se logs/ non e' scrivibile resta la sola console.
+    try:
+        from logging.handlers import RotatingFileHandler
+        Path("logs").mkdir(exist_ok=True)
+        handlers.append(RotatingFileHandler(
+            "logs/agent.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"))
+    except Exception:
+        pass
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO),
-                        format=fmt)
+                        format=fmt, handlers=handlers)
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
@@ -416,6 +427,14 @@ def _event_loop(
                         pass
                 if not controller.is_initialized():
                     controller.initialize()
+
+        elif event_name == "Version":
+            # §56 — header di versione nel log: PHD2 invia questo evento alla connessione.
+            # (La versione dell'agente e' gia' nel banner; plugin/NINA non si annunciano
+            # all'agente, quindi non sono conoscibili qui.)
+            log.info("PHD2 v%s (subver=%s, MsgVersion=%s)",
+                     event.get("PHDVersion", "?"), event.get("PHDSubver", ""),
+                     event.get("MsgVersion", ""))
 
         elif event_name == "Alert":
             log.warning("PHD2 Alert: %s", event.get("Msg", ""))

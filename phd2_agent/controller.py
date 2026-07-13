@@ -202,6 +202,11 @@ class AdaptiveController:
         self._dec = AxisState("dec")
 
         self._initialized = False
+        # §56 — flag di PROCESSO: True dopo il primo initialize() riuscito, mai resettato
+        # da mark_uninitialized() (che governa solo la sessione-guida). Distingue il primo
+        # avvio del processo (orphan-check + save_baseline + INIT §50) dai ri-init di
+        # ripartenza guida (ri-aggancio leggero, leve preservate).
+        self._process_initialized = False
 
         # Riferimento all'analyzer per reset post-cambio esposizione
         self.analyzer: Optional[StatisticsAnalyzer] = analyzer
@@ -330,10 +335,24 @@ class AdaptiveController:
         """
         Legge i parametri attuali da PHD2 e scopre i nomi parametro
         dell'algoritmo. Da chiamare dopo connessione e quando PHD2 e' Guiding.
+
+        §56 — due modalita':
+        - PRIMO init del processo (o kill-switch full_reinit_on_restart): init PIENO —
+          orphan-check (recovery da crash di un processo precedente), save_baseline
+          (cattura dei valori utente) e INIT §50 ai valori standard.
+        - Ri-init di sessione (ripartenza guida: autofocus/filtro/ricentraggio):
+          ri-aggancio LEGGERO — ri-legge params/esposizioni/pixel-scale (l'agente resta
+          veritiero rispetto a PHD2) ma NON tocca le leve ne' la baseline: la convergenza
+          costruita nella corsa precedente e' preservata.
         """
+        first_init = not self._process_initialized
+        full = first_init or self.cfg.control.full_reinit_on_restart
         try:
-            # Step 1: orphan baseline check (sessione precedente crashata)
-            self._check_orphan_baseline()
+            # Step 1: orphan baseline check (SOLO primo init del processo: una
+            # baseline.json preesistente e' di un processo precedente crashato.
+            # Sui ri-init il file esiste perche' l'abbiamo scritto NOI -> non e' orfano).
+            if full:
+                self._check_orphan_baseline()
 
             self._valid_exposures = self.client.get_exposure_durations()
             self.base_exposure_ms = self.client.get_exposure()
@@ -380,14 +399,26 @@ class AdaptiveController:
             # Spento (default) => self.diagnostic_engine resta None => v2.3 pura.
             self._init_diagnostic_engine()
 
-            # Step 2: salva baseline DOPO aver letto i parametri puliti
-            self.save_baseline()
+            # Step 2 + §50: SOLO al primo init del processo (o kill-switch §56).
+            # Sui ri-init di sessione le leve correnti (convergenza della corsa
+            # precedente) restano intatte e la baseline utente non viene sovrascritta.
+            if full:
+                # salva baseline DOPO aver letto i parametri puliti
+                self.save_baseline()
 
-            # §50 — INIT ai valori standard PHD2 (stato iniziale NOTO): DOPO la calibrazione
-            # (params letti) e save_baseline (valori utente salvati per il restore), PRIMA
-            # della formazione baseline. Su reconnect il Baseline Guardian ha già ripristinato
-            # i valori utente (orphan restore) prima di questo punto → non si perde nulla.
-            self._init_to_phd2_standard()
+                # §50 — INIT ai valori standard PHD2 (stato iniziale NOTO): DOPO la
+                # calibrazione (params letti) e save_baseline (valori utente salvati per il
+                # restore), PRIMA della formazione baseline. Al primo init di un nuovo
+                # processo il Baseline Guardian ha già ripristinato i valori utente
+                # (orphan restore) prima di questo punto → non si perde nulla.
+                self._init_to_phd2_standard()
+            else:
+                logger.info(
+                    "Ri-aggancio guida (ripartenza sessione) — leve preservate: "
+                    "RA aggr=%.1f minmove=%.3f | DEC aggr=%.1f minmove=%.3f",
+                    self._ra.current_aggr, self._ra.current_minmove,
+                    self._dec.current_aggr, self._dec.current_minmove,
+                )
 
             logger.info(
                 "Setup: profile=%s, guide_pixel_scale=%.2f arcsec/px "
@@ -405,6 +436,7 @@ class AdaptiveController:
                 self._ra.current_aggr, self._ra.current_minmove,
                 self._dec.current_aggr, self._dec.current_minmove,
             )
+            self._process_initialized = True   # §56 — primo init del processo completato
             return True
         except Exception as e:
             logger.error("Impossibile inizializzare il controller: %s", e)
@@ -477,8 +509,11 @@ class AdaptiveController:
                         std_aggr * axis_state.aggr_native_scale, std_mm)
 
     def reinitialize(self) -> None:
-        """Ri-legge i parametri da PHD2 (es. dopo cambio profilo utente)."""
+        """Re-bootstrap COMPLETO esplicito (es. dopo cambio profilo utente): a differenza
+        dei ri-init di sessione (§56, leggeri), qui si ripete l'init pieno — restore dei
+        valori utente dalla baseline, ri-cattura della baseline, INIT §50."""
         self._initialized = False
+        self._process_initialized = False   # §56 — forza il percorso primo-init
         self.initialize()
 
     # ------------------------------------------------------------------ #

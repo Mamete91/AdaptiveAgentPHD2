@@ -74,6 +74,12 @@ class ControlConfig:
     # I valori utente sono salvati dal Baseline Guardian e ripristinati allo shutdown pulito.
     # false = eredita i valori PHD2 correnti come oggi.
     init_to_phd2_standard: bool = True
+    # §56 — kill-switch del fix re-init: true = comportamento legacy (orphan-check +
+    # save_baseline + INIT §50 a OGNI initialize(), anche sulle ripartenze guida della
+    # stessa sessione). Default false = init pesante SOLO al primo avvio del processo;
+    # le ripartenze (autofocus/cambio filtro/ricentraggio) fanno un ri-aggancio leggero
+    # che preserva le leve convergenti. La recovery vera post-crash resta invariata.
+    full_reinit_on_restart: bool = False
 
 
 @dataclass
@@ -471,6 +477,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             "per_frame_baseline", cfg.control.per_frame_baseline))
         cfg.control.init_to_phd2_standard = bool(ctrl.get(
             "init_to_phd2_standard", cfg.control.init_to_phd2_standard))
+        # §56 — chiave assente (config pre-fix) => default False = nuovo comportamento.
+        cfg.control.full_reinit_on_restart = bool(ctrl.get(
+            "full_reinit_on_restart", cfg.control.full_reinit_on_restart))
 
     # Thresholds
     th_dict = raw.get("thresholds", {})

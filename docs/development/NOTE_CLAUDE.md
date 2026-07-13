@@ -2809,3 +2809,51 @@ e payload invalido. Agente: suite **270 verdi** (contratto `age_s`/`window_s` in
 Release **0 warning / 0 errori**. Pacchetto agente ricompilato. **Validazione live alla prossima notte con nubi**
 (o simulando stantio) osservando card Telemetria + log N6. Niente commit/push (gate).
 
+## 56. Fix re-init "self-orphan" + leve preservate tra ripartenze + log su file — Agente v2.7 (2026-07-12)
+
+**Motivazione (prova sul campo).** Log del 2026-07-12: il WARNING `Trovata baseline.json orfana — sessione precedente
+non chiusa correttamente` delle 02:42:05 coincide AL SECONDO con "Guiding Begins at 02:42:05" nel PHD2 GuideLog; la
+guida è ripartita ~9 volte tra 02:20 e 03:52 → ~9 falsi orphan. Causa (verificata al pre-flight): `initialize()` è
+ri-eseguita a OGNI ripartenza guida (`GuidingStopped → mark_uninitialized()`, poi StartGuiding/AppState→Guiding) ed
+eseguiva SEMPRE l'init pieno: (1) `_check_orphan_baseline()` trovava la baseline scritta da NOI al primo init (mai
+cancellata fino allo shutdown) → falso "orfana" + `restore_baseline` ai valori UTENTE; (2) subito dopo §50
+`_init_to_phd2_standard()` → valori STANDARD. Doppio reset: la convergenza costruita nella corsa precedente veniva
+scartata a ogni autofocus/cambio filtro/ricentraggio.
+
+**Architettura del fix (`controller.py`).** Nuovo flag di PROCESSO `_process_initialized` (accanto a `_initialized`
+di sessione), settato una sola volta al primo `initialize()` riuscito e MAI resettato da `mark_uninitialized()`.
+In `initialize()`: `full = first_init or cfg.control.full_reinit_on_restart` — orphan-check, `save_baseline()` e §50
+girano solo se `full`; sui ri-init di sessione resta il ri-aggancio leggero (esposizioni, `probe_algo_params`/
+`_setup_axis` — che RI-LEGGE le leve reali da PHD2, quindi l'agente resta veritiero —, pixel scale, diagnostic engine)
+con `INFO "Ri-aggancio guida (ripartenza sessione) — leve preservate: …"` (niente WARNING). `reinitialize()` (API senza
+chiamanti, "dopo cambio profilo utente") ora resetta anche `_process_initialized` = re-bootstrap completo esplicito.
+La recovery VERA resta garantita: un nuovo processo nasce con flag False → orphan-check al primo init, guard esistenti
+intatti (setup_id uguale, età<24h, versione≥2). Niente token di processo nel baseline.json (deciso al Gate): col gating
+il self-orphan è strutturalmente impossibile; il token avrebbe richiesto baseline v4 + migrazioni per un percorso morto.
+
+**Kill-switch**: `[control] full_reinit_on_restart = false` (default = nuovo comportamento; `true` = legacy identico,
+init pieno a ogni ripartenza). Parsing TOML retrocompatibile (chiave assente → false).
+
+**§B — log su file** (`main.py setup_logging()`): `RotatingFileHandler` su `logs/agent.log` (5 MB × 5, UTF-8, fallback
+console-only se non scrivibile) — i crash notturni (es. hang 02:48 / offline 03:59 del 2026-07-12) ora lasciano
+traceback. Header di versione: il banner (versione agente) finisce nel file; nuovo branch evento `Version` di PHD2 in
+main.py → `INFO "PHD2 vX.Y.Z (subver, MsgVersion)"` alla connessione. Versioni plugin/NINA NON conoscibili lato agente
+(la telemetria §41 ha `source="nina-plugin"` senza versione): estenderle = micro-feature separata, non fatta qui.
+
+**Comportamento atteso.** Ripartenze guida nella stessa sessione: nessun WARNING "orfana", leve ai valori convergenti
+(visibile in dashboard/decisions_*.jsonl). Shutdown pulito: baseline rimossa, riavvio senza orphan. Crash (kill del
+processo): al riavvio orphan-recovery vera UNA volta. `logs/agent.log` popolato.
+
+**File modificati**: `phd2_agent/controller.py` (flag + gating + reinitialize), `phd2_agent/config.py` +
+`config.toml` (kill-switch), `main.py` (RotatingFileHandler + evento Version). **Test**: nuovo
+`tests/test_reinit_orphan.py` (8): orphan reale al primo init (restore+§50); ri-init leggero (niente orphan/save/§50,
+leve preservate = stato reale PHD2, no WARNING); crash→nuovo processo (recovery vera); kill-switch legacy; guard
+setup/età; reinitialize=full; smoke `logs/agent.log`. Suite **278 verdi** (270+8), zero regressioni (nessun test
+esistente chiamava davvero initialize/save/restore — verificato al pre-flight). Pacchetto ricompilato.
+
+**Limiti / validazione raccomandata.** Su riavvio di PHD2 a metà sessione (profilo ricaricato) il ri-init leggero
+adotta i valori del profilo utente senza ri-applicare §50 (comportamento pre-§50: sicuro; eventuale re-bootstrap
+esplicito disponibile via `reinitialize()`). Validazione campo: (1) ripartenze guida senza WARNING e leve stabili;
+(2) shutdown pulito senza orphan al riavvio; (3) kill da task manager → orphan-recovery una sola volta; (4) agent.log
+popolato. Niente commit/push senza gate.
+

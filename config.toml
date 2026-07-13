@@ -43,6 +43,11 @@ per_frame_baseline = true
 # I valori utente sono salvati dal Baseline Guardian e ripristinati allo shutdown pulito.
 # false = eredita i valori PHD2 correnti come oggi.
 init_to_phd2_standard = true
+# §56 — kill-switch del fix re-init. false (default) = orphan-recovery + save_baseline +
+# INIT §50 girano SOLO al primo avvio del processo: le ripartenze guida (autofocus, cambio
+# filtro, ricentraggio) fanno un ri-aggancio leggero che PRESERVA le leve convergenti.
+# true = comportamento legacy (init pesante a ogni ripartenza, leve resettate ogni volta).
+full_reinit_on_restart = false
 
 [analyzer]
 # §36 — FIX UNITÀ: le distanze di guida di PHD2 (RADistanceRaw/DECDistanceRaw) sono in
