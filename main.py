@@ -38,10 +38,14 @@ from phd2_agent.recovery_hint import RecoveryHintTracker
 
 def setup_logging(level: str = "INFO") -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    handlers: list[logging.Handler] = []
+    # §58 — build windowed (PyInstaller console=False): sys.stderr e' None/inutilizzabile
+    # -> niente StreamHandler (il log vive su file). Da sorgente/console resta anche stdout.
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
     # §56 — persistenza del log su file (rotazione): senza, i crash notturni non
-    # lasciano traceback (la console si chiude col processo). Fallback graceful:
-    # se logs/ non e' scrivibile resta la sola console.
+    # lasciano traceback. In background (§58) e' il canale di log PRIMARIO
+    # (viewer: Mostra_Log.bat). Fallback graceful se logs/ non e' scrivibile.
     try:
         from logging.handlers import RotatingFileHandler
         Path("logs").mkdir(exist_ok=True)
@@ -50,7 +54,7 @@ def setup_logging(level: str = "INFO") -> None:
     except Exception:
         pass
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO),
-                        format=fmt, handlers=handlers)
+                        format=fmt, handlers=handlers, force=True)
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
@@ -201,6 +205,17 @@ def main():
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
+
+    # §58 — spegnimento graceful via HTTP (plugin NINA alla chiusura): POST /shutdown
+    # percorre la stessa strada dei segnali. Registrato qui (dopo la definizione di
+    # _stop_event); no-op se la dashboard non è attiva (endpoint non servito).
+    if not args.no_dashboard:
+        try:
+            from server import set_shutdown_callback
+            set_shutdown_callback(lambda: (log.info("Shutdown richiesto via POST /shutdown"),
+                                           _stop_event.set()))
+        except ImportError:
+            pass
 
     # --- Loop principale ---
 

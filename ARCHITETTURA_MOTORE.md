@@ -116,7 +116,7 @@ GuideStep(PHD2) ─▶ Analyzer ─▶ Controllore (propone una mossa)
 | `nina_indices.py` | **Layer 3** — N1 `TransparencyTracker` (§45): indice/stato di trasparenza + freschezza; unico riconoscitore delle nubi. |
 | `star_finder.py` | AI Star Finder per emergenze StarLost (riselezione stella). |
 | `config.py` | Caricamento/validazione di **`config.toml` unico** (§22); tutti i kill-switch. |
-| `server.py` | Backend FastAPI (porta 8080): `/status`, `/history`, `/config/dry_run`, `/config/ai_find`, `/config/diagnostic_mode`, `/nina/telemetry`, WebSocket `/ws`. |
+| `server.py` | Backend FastAPI (porta 8080): `/status` (incl. `recovery_hint` §57), `/history`, `/config/dry_run`, `/config/ai_find`, `/config/diagnostic_mode`, `/nina/telemetry`, `POST /shutdown` (spegnimento graceful con restore baseline + watchdog di auto-terminazione, §58/§59), WebSocket `/ws`. |
 | `logger.py` | Logging strutturato di sessione (`session_*.csv`, `decisions_*.jsonl`, `experimental_*.jsonl`). |
 | Plugin NINA (C#, repo separato) | Invia la telemetria per-posa all'Agente; ospita **N6** (SafetyDecisionEngine). Build su **SDK NINA 3.2** (minimo comune); campi 3.3 (eccentricità/FWHM) letti via reflection. |
 

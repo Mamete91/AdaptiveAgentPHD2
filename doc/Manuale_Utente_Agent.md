@@ -122,6 +122,11 @@ Il workflow è in tre passi:
 2. Avvia la guida su una stella in PHD2.
 3. Doppio clic su `Avvia.bat` e apri il browser su `http://localhost:8080`.
 
+L'Agente gira **in background, senza finestra**: la conferma che è vivo è la dashboard stessa (o il badge verde nel plugin NINA). Nel pacchetto trovi altri due file di comodo:
+
+* **`Arresta.bat`** — spegne l'Agente **in modo pulito**: prima di uscire ripristina i parametri PHD2 originali (baseline). È il modo corretto di chiuderlo a fine serata se non usi il plugin NINA.
+* **`Mostra_Log.bat`** — apre una finestra che mostra il log in diretta (utile per curiosare o per il supporto); puoi chiuderla quando vuoi, l'Agente non se ne accorge nemmeno. Lo stesso log resta comunque su disco in `logs/agent.log`.
+
 Niente più "versione ridotta" del .bat: se monti il riduttore di focale, basta che il profilo PHD2 abbia la focale ridotta inserita (puoi avere due profili distinti, uno a focale piena e uno ridotta, e scegliere quello giusto a PHD2). L'Agente legge la scala reale da PHD2 e si adatta da sé, senza che tu cambi un solo file.
 
 ---
@@ -166,7 +171,19 @@ Se usi **NINA** come suite di acquisizione, esiste un plugin C# separato — **A
 
 **Novità v1.1: pulsante Avvia e badge stato.** Da v1.1 il pannello mostra in alto un badge che indica a colpo d'occhio se l'Agente è raggiungibile — "Agente online vX.Y" (verde) o "Agente offline" (grigio), aggiornato automaticamente ogni 15 secondi — e un pulsante **"Avvia Adaptive Agent"** che lancia `Avvia.bat` con un click, senza aprire Esplora Risorse. Per usarlo, imposta una sola volta il percorso del `.bat` in *Options → Plugins → Adaptive Agent for PHD2 — Dashboard* (pulsante "Sfoglia..."). Quando l'Agente è già online il pulsante si disabilita: resta una pura comodità, la dashboard funziona comunque.
 
-**Novità v1.2: Safety Monitor virtuale (opzionale).** Il plugin v1.2 espone anche un Safety Monitor virtuale che NINA può usare come driver di sicurezza accanto al pannello dockable. Il driver appare nella tendina *Equipment → Safety Monitor* di NINA sotto la categoria **N.I.N.A.** col nome "Adaptive Agent for PHD2 — Guide Safety". Selezionandolo e cliccando *Connect*, NINA inizia a riflettere lo stato della guida dell'Agente come flag safe/unsafe: il driver dichiara **unsafe** quando `STAR_LOST` persiste oltre il timeout configurato (default 5 minuti), e torna **safe** quando la guida resta stabile per ~45 secondi consecutivi. Se l'Agente smette di rispondere mentre il driver è connesso, il driver si auto-disconnette: NINA tratta la perdita di comunicazione come "safety scollegato" e applica la policy che hai impostato per quel caso; quando l'Agente torna disponibile, riconnetti manualmente il driver dalla tendina Safety Monitor. La feature è opt-in: chi vuole solo il pannello dashboard (v1.0) o il pulsante Avvia + badge (v1.1) non è toccato.
+**Safety Monitor virtuale (dalla v1.2, potenziato nella v1.5).** Il plugin espone anche un Safety Monitor virtuale che NINA può usare come driver di sicurezza accanto al pannello dockable. Il driver appare nella tendina *Equipment → Safety Monitor* di NINA sotto la categoria **N.I.N.A.** col nome "Adaptive Agent for PHD2 — Guide Safety". Selezionandolo e cliccando *Connect*, NINA riflette lo stato del cielo e della guida come flag safe/unsafe. Il driver dichiara **unsafe** in quattro casi: `STAR_LOST` persistente oltre il timeout configurato (default 5 minuti); **trasparenza degradata persistente** (nubi, misurate sulle pose di NINA con una logica ad accumulo che non si fa ingannare dalle schiarite brevi); **telemetria diventata stantia con l'ultimo cielo noto degradato**; **Agente irraggiungibile durante una sessione attiva**. Il principio (dalla v1.5, dopo una notte di validazione sul campo): *perdere l'osservazione affidabile non è mai "sicuro"* — il driver **resta connesso** anche se l'Agente sparisce, ed escala verso unsafe invece di disconnettersi in silenzio. Torna **safe** solo con evidenza positiva (cielo sereno / guida di nuovo stabile). La feature è opt-in: chi vuole solo il pannello dashboard non è toccato.
+
+**Recovery probe (dalla v1.6/1.7): la sessione riparte da sola dopo le nubi.** Insieme al Safety Monitor, il plugin aggiunge al *sequencer avanzato* di NINA l'istruzione **"Recovery probe (Adaptive Agent)"**. La monti una volta sola così:
+
+```
+Trigger On Unsafe
+ └ Before Waiting For Safety
+    └ Recovery probe (Adaptive Agent)
+```
+
+Quando il Safety Monitor dichiara unsafe (nubi), quell'unica istruzione è l'intero ciclo di recupero: a cadenza configurabile (o prima, se la SNR della stella di guida suggerisce che il cielo sta tornando) scatta **una posa di verifica non guidata** che replica il tuo ultimo light; se le stelle sono tornate, l'indice di trasparenza si rinfresca, il monitor torna safe e la sequenza riprende — **senza il tuo intervento, anche alle 3 di notte**. Se il cielo resta chiuso, la posa fallisce il test e si riprova al giro successivo.
+
+**Ciclo di vita automatico (dalla v1.7, attivo di default).** Il plugin **avvia da solo l'Agente quando apri NINA** (una volta impostato il percorso di `Avvia.bat` nelle opzioni) e **lo spegne in modo pulito quando chiudi NINA**, ripristino baseline incluso — la chiusura di NINA è istantanea, del resto si occupa l'Agente. Entrambi i comportamenti si possono disattivare nelle opzioni del plugin. L'interfaccia del plugin, infine, è **in inglese o in italiano** a scelta (*Options → Plugin language*, default: segue la lingua di NINA).
 
 > [!IMPORTANT]
 > Il driver Safety **non decide** cosa fare al verificarsi dell'unsafe — **segnala soltanto**. Le reazioni concrete (pausa sequenza, parking, warm-up camera, ecc.) si configurano dentro NINA, in *Options → Safety* (policy globale) oppure nell'*Advanced Sequencer* (istruzione `Wait until safe` e Global Trigger `Trigger On Unsafe`). Per uso domestico con supervisione attiva la configurazione consigliata è abilitare "Pause sequence on unsafe" + "Resume on safe", senza azioni custom aggressive (parking, warm-up). Per uso remoto non sorvegliato, conviene aggiungere un `Trigger On Unsafe` con una sequenza custom di "safe shutdown".
@@ -174,13 +191,13 @@ Se usi **NINA** come suite di acquisizione, esiste un plugin C# separato — **A
 > [!IMPORTANT]
 > Il plugin è **opzionale**: l'Agente funziona perfettamente senza. La dashboard web su `http://localhost:8080` resta sempre il canale primario, ed è obbligatoria per chi vuole accedere da **tablet, secondo monitor o PC remoto** sulla stessa rete. Il plugin NINA non sostituisce il browser, lo affianca.
 
-**Sequenza di avvio consigliata se usi anche il plugin NINA**:
+**Sequenza di avvio se usi anche il plugin NINA** (dalla v1.7 è quasi tutta automatica):
 
 1. Apri PHD2 e seleziona il profilo del telescopio.
-2. Lancia `Avvia.bat` (l'Agente parte in background e serve la dashboard).
-3. Apri NINA: il pannello "Adaptive Agent for PHD2" si carica e mostra la dashboard automaticamente.
+2. Apri NINA: il plugin **avvia l'Agente da solo** (se hai impostato il percorso di `Avvia.bat` nelle opzioni) e il pannello "Adaptive Agent for PHD2" mostra la dashboard non appena l'Agente risponde.
+3. A fine serata chiudi NINA e basta: il plugin spegne l'Agente in modo pulito, baseline ripristinata.
 
-Se NINA era già aperto prima dell'Agente, il pannello mostrerà inizialmente il messaggio "Agente non raggiungibile" con il pulsante **Riprova**: basta premerlo dopo che `Avvia.bat` è partito e la dashboard appare. È la stessa logica di fallback del browser: niente di rotto, solo l'ordine di avvio sbagliato.
+Se preferisci gestire l'Agente a mano, disattiva l'avvio automatico nelle opzioni del plugin e usa il pulsante **"Avvia Adaptive Agent"** (o `Avvia.bat`). Se il pannello mostra "Agente non raggiungibile" con il pulsante **Riprova**, è solo questione di ordine di avvio: premi Riprova dopo che l'Agente è partito.
 
 **Installazione del plugin** (una sola volta): la DLL del plugin va copiata in `%LOCALAPPDATA%\NINA\Plugins\3.0.0\AdaptiveAgentForPHD2.NinaPlugin\` e NINA va riavviato. Il pannello compare poi nel menu dockable di NINA. Per il dettaglio tecnico di build/install vedi il repository del plugin (progetto separato, distribuito sul gruppo Telegram della community insieme al pacchetto Agente).
 

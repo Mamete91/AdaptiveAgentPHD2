@@ -180,6 +180,31 @@ class TestReinitializeFullBootstrap(unittest.TestCase):
 class TestFileLogging(unittest.TestCase):
     """6. (§B) setup_logging crea logs/agent.log e vi scrive (smoke test)."""
 
+    def test_setup_logging_windowed_no_stderr(self):
+        """§58 — build windowed (PyInstaller console=False): sys.stderr è None →
+        nessun StreamHandler (niente crash), il file handler resta il canale primario."""
+        import main as agent_main
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_stderr = agent_main.sys.stderr
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                os.chdir(d)
+                root.handlers = []
+                agent_main.sys.stderr = None          # come nella build windowed
+                agent_main.setup_logging("INFO")
+                kinds = [type(h).__name__ for h in logging.getLogger().handlers]
+                self.assertNotIn("StreamHandler", kinds)
+                self.assertIn("RotatingFileHandler", kinds)
+            finally:
+                agent_main.sys.stderr = saved_stderr
+                for h in root.handlers[:]:
+                    if isinstance(h, logging.FileHandler):
+                        h.close()
+                os.chdir(cwd)
+                root.handlers = saved_handlers
+
     def test_setup_logging_writes_agent_log(self):
         import main as agent_main
         root = logging.getLogger()

@@ -8,6 +8,48 @@ behind a kill-switch and promoted only after real autoguiding sessions.
 
 ---
 
+## [2.8] — Recovery & lifecycle infrastructure (engine core frozen)
+
+Infrastructure-only milestone: the adaptive guiding engine validated in the field is
+**untouched**. Everything below concerns observability, cloud recovery, process lifecycle
+and the companion N.I.N.A. plugin (v1.5.0.0 → v1.7.0.0).
+
+### Safety & observability
+- **§55 — Telemetry freshness on `/status`.** `age_s` and `window_s` (adaptive freshness
+  window) exposed under `nina.transparency` + a FRESH/STALE badge on the dashboard.
+  Companion plugin v1.5.0.0 fixes three fail-dangerous Safety Monitor bugs found in the
+  field (index-based leaky cloud persistence, stale telemetry → unsafe, Agent loss →
+  unsafe — the monitor never "fails toward safe" anymore).
+- **§56 — No more re-init on guiding restarts.** Orphan-recovery check, baseline save and
+  §50 lever INIT run only on the **first** initialization of the process; subsequent
+  reconnects re-attach without resetting the levers (kill-switch
+  `[control] full_reinit_on_restart`). Agent log persisted to `logs/agent.log`
+  (rotating), PHD2 version logged on connect.
+
+### Cloud recovery (S1/S2)
+- **§57 — Recovery hint.** `phd2_agent/recovery_hint.py`: a time-based leaky accumulator
+  on guide-star SNR that raises `/status.recovery_hint` when, under a CLOUD/HAZE context,
+  the SNR stays above a threshold anchored to its clear-sky reference (EMA) — the "sky
+  may be recovering" signal (S2) consumed by the plugin's **Recovery probe** sequencer
+  instruction. Probe outcomes are observed back (`observe_probe`) with S1/S2 attribution.
+  Config: `[recovery_hint]`, `[recovery_probe]` — all kill-switchable.
+
+### Process lifecycle
+- **§58 — Graceful remote shutdown.** `POST /shutdown` triggers the same path as the
+  signal handlers (stop event → controller shutdown → **baseline restore**), responding
+  200 before shutting down; idempotent. The N.I.N.A. plugin (v1.7.0.0) owns the Agent
+  lifecycle: auto-launch on N.I.N.A. start and graceful stop on close.
+- **§58-bis — Background agent.** The packaged `PHD2_Agent.exe` runs **without a console
+  window** (GUI subsystem); `Avvia.bat` starts it detached, `Arresta.bat` requests a
+  graceful shutdown via `POST /shutdown`, `Mostra_Log.bat` tails `logs/agent.log` live.
+- **§59 — Termination contract.** Accepting `/shutdown` arms a **daemon self-kill
+  watchdog** (25 s): if the graceful path stalls, the process force-exits and the §56
+  orphan recovery restores the baseline at the next start. The 200 response is therefore
+  a real contract — N.I.N.A. can close instantly, delegating to the Agent.
+
+Test suite: **297 tests** (from 270). Companion plugin: 35 tests, UI fully localized
+(English/Italiano, live-switchable) as of v1.7.0.0.
+
 ## [2.7] — "Outcome-First" milestone + N.I.N.A. integration line
 
 Consolidation of the adaptive guiding engine around the **Outcome-First** principle: the

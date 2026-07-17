@@ -66,9 +66,12 @@ def main():
     # Copia config unico
     shutil.copy("config.toml", final_output / "config.toml")
 
-    # Copia file .bat (config unico: un solo Avvia.bat + sblocco firewall)
+    # Copia file .bat (config unico). §58: agente in background -> Avvia (start
+    # detached), Arresta (POST /shutdown graceful), Mostra_Log (viewer sicuro).
     bat_files = [
         "Avvia.bat",
+        "Arresta.bat",
+        "Mostra_Log.bat",
         "Sblocca_Firewall_8080.bat",
     ]
     for bat_file in bat_files:
@@ -100,7 +103,12 @@ PASSI:
    la pixel scale che l'agente legge automaticamente.
 2. In PHD2 vai in Strumenti -> Abilita Server, poi avvia la guida.
 3. (Opzionale) Esegui 'Diagnostica_Connessione.exe' per il test connessione.
-4. Esegui 'Avvia.bat' (unico) per avviare l'agente.
+4. Esegui 'Avvia.bat' per avviare l'agente. NOVITA': l'agente lavora in
+   BACKGROUND, senza finestra DOS. Per vedere cosa sta facendo:
+   'Mostra_Log.bat' (finestra di sola lettura: CHIUDERLA E' SEMPRE SICURO)
+   oppure la dashboard. Per fermarlo in modo pulito: 'Arresta.bat'
+   (ripristina i parametri PHD2). Col plugin NINA v1.7+ avvio e arresto
+   sono AUTOMATICI (opzione 'Auto-launch' nelle impostazioni del plugin).
 5. Apri la dashboard live (DUE MODI - scegli quello che preferisci):
    a) Browser web: http://localhost:8080 (sempre disponibile, anche da
       tablet/secondo monitor/PC remoto sulla stessa rete).

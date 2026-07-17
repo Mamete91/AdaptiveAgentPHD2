@@ -48,6 +48,10 @@ _nina_store = None
 _transparency_tracker = None
 # §57 S2 — hint di recupero dalla SNR guida. None => blocco recovery_hint assente.
 _recovery_hint_tracker = None
+# §58 — callback di spegnimento graceful (registrata da main.py: setta _stop_event).
+# None => POST /shutdown risponde 503 (es. server usato in contesti senza main loop).
+_shutdown_callback = None
+_shutdown_requested = False
 
 # Broadcast buffer per WebSocket
 _ws_queue: asyncio.Queue = None
@@ -81,6 +85,14 @@ def set_recovery_hint_tracker(tracker) -> None:
     (paletto 8) accanto all'ingest N1."""
     global _recovery_hint_tracker
     _recovery_hint_tracker = tracker
+
+
+def set_shutdown_callback(callback) -> None:
+    """§58 — registra il callback di spegnimento graceful (main.py: _stop_event.set).
+    POST /shutdown lo invoca: il main loop esce e percorre lo shutdown già esistente
+    (riconnessione a PHD2 se serve → controller.shutdown() → restore baseline)."""
+    global _shutdown_callback
+    _shutdown_callback = callback
 
 
 # Forma di default del blocco `nina` in /status quando lo store non è registrato
@@ -370,6 +382,72 @@ async def ingest_nina_telemetry(payload: NinaTelemetryPayload):
     return JSONResponse({"accepted": True, "schema_version": payload.schema_version})
 
 
+# §59 — watchdog di auto-terminazione: dopo aver accettato /shutdown, l'agente
+# GARANTISCE di terminare. Se lo shutdown graceful non completa entro questa grazia
+# (main loop piantato: l'evento non verrebbe mai consumato), il processo esce
+# forzatamente — il §56 (orphan recovery) ripulisce al riavvio. Rende il 200 OK un
+# contratto vero: il plugin può delegare e lasciar chiudere NINA all'istante.
+SHUTDOWN_SELFKILL_GRACE_S = 25.0
+
+
+def _force_exit() -> None:   # pragma: no cover (termina il processo)
+    logger.error("Shutdown graceful NON completato entro %.0fs — uscita FORZATA "
+                 "(il restore baseline avverrà via orphan recovery §56 al prossimo avvio)",
+                 SHUTDOWN_SELFKILL_GRACE_S)
+    for h in logging.getLogger().handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+    import os
+    os._exit(1)
+
+
+@app.post("/shutdown")
+async def shutdown_agent():
+    """§58 — spegnimento GRACEFUL richiesto dal plugin NINA (o da un client locale).
+
+    Percorre la STESSA strada dei signal handler: il callback registrato da main.py
+    setta _stop_event → il main loop esce → shutdown già esistente (riconnessione a
+    PHD2 se serve → controller.shutdown() → restore baseline → uscita). Su Windows i
+    segnali POSIX verso un python wrappato da .bat sono inaffidabili: HTTP è il canale
+    che il plugin già usa, robusto e testabile.
+
+    Risponde PRIMA di innescare lo spegnimento (il callback parte con ~0.3 s di
+    ritardo su un thread separato, così la risposta viene consegnata). Idempotente:
+    chiamate successive rispondono 200 senza effetti aggiuntivi.
+
+    §59 — CONTRATTO del 200: l'agente TERMINERÀ comunque. Insieme al callback viene
+    armato un watchdog daemon (SHUTDOWN_SELFKILL_GRACE_S) che forza l'uscita se il
+    graceful non completa (es. main loop piantato). Essendo daemon, muore con il
+    processo nel percorso felice senza mai scattare.
+    """
+    global _shutdown_requested
+    if _shutdown_callback is None:
+        return JSONResponse({"shutting_down": False, "reason": "unsupported"},
+                            status_code=503)
+    if _shutdown_requested:
+        return JSONResponse({"shutting_down": True, "already_requested": True})
+    _shutdown_requested = True
+    logger.info("POST /shutdown ricevuto — avvio spegnimento graceful (restore baseline); "
+                "watchdog di auto-terminazione: %.0fs", SHUTDOWN_SELFKILL_GRACE_S)
+
+    import threading
+    threading.Timer(0.3, _safe_shutdown_callback).start()
+    watchdog = threading.Timer(SHUTDOWN_SELFKILL_GRACE_S, _force_exit)
+    watchdog.daemon = True   # nel percorso felice muore col processo, mai scattato
+    watchdog.start()
+    return JSONResponse({"shutting_down": True,
+                         "selfkill_grace_s": SHUTDOWN_SELFKILL_GRACE_S})
+
+
+def _safe_shutdown_callback() -> None:
+    try:
+        _shutdown_callback()
+    except Exception:
+        logger.exception("Errore nel callback di shutdown (ignorato)")
+
+
 # ------------------------------------------------------------------ #
 #  WebSocket                                                          #
 # ------------------------------------------------------------------ #
@@ -410,4 +488,7 @@ async def get_status_dict() -> dict:
 
 def start_server(host: str = "0.0.0.0", port: int = 8080):
     """Avvia il server uvicorn (bloccante — eseguire in un thread separato)."""
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    # §58 — log_config=None: uvicorn NON installa i suoi StreamHandler su stderr
+    # (inutilizzabile nella build windowed) e i suoi record propagano ai handler di
+    # root (file logs/agent.log §56 + console quando disponibile).
+    uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)

@@ -1,14 +1,11 @@
 @echo off
+rem ============================================================
+rem  Adaptive Agent for PHD2 — avvio in BACKGROUND (§58)
+rem  L'agente NON apre finestre: lavora come processo di sfondo.
+rem   - Log live:   Mostra_Log.bat  (si puo' chiudere senza rischi)
+rem   - Dashboard:  http://localhost:8080
+rem   - Stop pulito: Arresta.bat  (ripristina i parametri PHD2)
+rem  Con il plugin NINA (v1.7+) avvio e stop sono automatici.
+rem ============================================================
 cd /d "%~dp0"
-echo ============================================================
-echo  Adaptive Agent for PHD2 v2.2
-echo  by Alessandro Curci
-echo  Copyright (c) 2026 Alessandro Curci
-echo  Community Telegram: https://t.me/+eewRNpvElSs5OWY8
-echo ============================================================
-echo.
-echo Avvio agente. Profilo attivo deciso dentro PHD2.
-echo Dashboard: http://localhost:8080
-echo.
-PHD2_Agent.exe --config config.toml
-pause
+start "" "PHD2_Agent.exe" --config config.toml

@@ -35,7 +35,26 @@ eseguibile Windows.
 4. Patch validate: sintassi OK, test funzionali su FITS sintetici OK,
    test integrazione controller (init/baseline/shutdown/saturation) OK
 
-## Stato attuale — aggiornato al 2026-07-13 (§57 recovery auto-starting da unsafe-nubi)
+## Stato attuale — aggiornato al 2026-07-13 (§58 auto-gestione ciclo di vita + §57 recovery)
+
+### Auto-gestione ciclo di vita Agente dal Plugin + agente in BACKGROUND — IMPLEMENTATO (2026-07-13)
+Il plugin (v1.7.0.0) è proprietario del ciclo di vita dell'Agente: all'avvio di NINA lo
+avvia da solo (opt-in `AutoLaunchEnabled`, default OFF; probe "già in esecuzione" prima di
+lanciare) e alla chiusura lo spegne con grazia — nuovo `POST /shutdown` sull'Agente che
+percorre lo stesso `_stop_event` dei segnali → `controller.shutdown()` → restore baseline
+PHD2 — con fallback kill-ALBERO (`Kill(entireProcessTree)`: l'handle del .bat è cmd.exe,
+il python è figlio) solo oltre `ShutdownTimeoutSeconds` (15 s). Politica A di default (si
+spegne solo ciò che il plugin ha avviato — auto-avvio O pulsante, stesso launcher);
+politica B opt-in (`ManageExternalAgent`) per adottare un agente esterno — con garanzia
+più debole sull'esterno piantato (niente handle → resta il §56 al riavvio). Elimina alla
+radice gli hard-kill degli utenti (uscita sporca → baseline orfana). **§58-bis**: l'agente
+gira in BACKGROUND (exe windowed, console=False — la finestra DOS era la prima causa di
+assistenza: chiusa per errore = kill dell'agente); log primario su `logs/agent.log`,
+viewer sicuro `Mostra_Log.bat`, stop manuale pulito `Arresta.bat` (POST /shutdown); il
+plugin lancia l'exe direttamente (handle = processo agente, ownership perfetta). Test:
+agente 297, plugin 26, build 0 warning. §59: chiusura NINA istantanea (delega dopo il 200; watchdog di auto-terminazione 25s nell agente rende il 200 un contratto). §60: plugin localizzato via resx embedded (Follow N.I.N.A./EN/IT, cambio live, 80 chiavi incl. 6 tooltip parametri N6, log sempre EN) — chiusura certificata da audit (0 residui non classificati) e lifecycle (auto-launch + manage external) ON di default con kill-switch. §57-ter: 2ª limitazione GUI (il trigger rifiuta anche le condizioni di ciclo) → il ciclo di recovery è INTERNO alla Recovery probe: setup = la sola istruzione nel Before. Dettaglio: NOTE_CLAUDE §57-ter + §58 + §58-bis.
+
+## Stato precedente — aggiornato al 2026-07-13 (§57 recovery auto-starting da unsafe-nubi)
 
 ### Recovery auto-starting (S1 sonda-timeout + S2 hint SNR-guida) — IMPLEMENTATO (2026-07-13)
 Chiude il deadlock provato il 12/7 (indice N1 congelato 0.115 per 28 min durante l'attesa

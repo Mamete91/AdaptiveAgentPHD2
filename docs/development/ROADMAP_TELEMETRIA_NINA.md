@@ -1,7 +1,7 @@
 # Roadmap — Telemetria da NINA (camera di acquisizione) → miglioramenti dell'Agente
 
-**Stato:** item di design futuri. Sbloccati dal recupero del **sorgente C# del plugin NINA** (repo separato). Tutti valutati contro **P1** (`PRINCIPIO_CONVERGENZA_PRESTAZIONE.md`).
-**Origine:** Alessandro Curci, 2026-06-12.
+**Stato:** documento di design (conservato come storia). Avanzamento reale: **Step 0 ✅** (2026-06-18) · **N1 ✅ realizzato** (indice di trasparenza, §41-42, layer 2 in `nina_indices.py`) · **N6 ✅ realizzato** (Safety Monitor su nubi, §49, indurito fail-toward-unsafe in §55) · **recovery automatico post-nubi ✅** (§57/§57-bis/ter: hint S2 lato agente + istruzione `Recovery probe` autocontenuta nel plugin — di fatto copre la parte "riprendi quando risale" di N6). Gli altri item (N2, N4, N7, N8...) restano futuri. Dettagli in `NOTE_CLAUDE.md`.
+**Origine:** Alessandro Curci, 2026-06-12. Tutti valutati contro **P1** (`PRINCIPIO_CONVERGENZA_PRESTAZIONE.md`).
 
 ## Step 0 — Ponte di ingresso telemetria NINA→Agente (prerequisito, gatea N1–N8) — ✅ COMPLETO (2026-06-18)
 

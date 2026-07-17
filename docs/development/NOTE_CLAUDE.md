@@ -2935,3 +2935,247 @@ istruzione ha categoria propria). Gate §57-bis approvato con due decisioni:
 **Test/build**: agente **291 verdi** (nuovo caso gap-clamp; test hint riscritti con clock iniettato); plugin **19
 verdi** (test strutturale aggiornato: niente cattura AUTONOMA — no timer; LastLightTracker senza imaging mediator —
 + test LastLightMemory); build **0 warning**. Template riscritto (rev. §57-bis) con la limitazione GUI documentata.
+
+## 58. Auto-gestione del ciclo di vita dell'Agente dal Plugin: avvio automatico + spegnimento graceful — Plugin v1.7.0.0 + Agente (2026-07-13)
+
+**Motivazione.** Coerenza con l'ecosistema NINA (installa → configura una volta → automatico) + eliminazione alla
+radice degli hard-kill: molti utenti chiudono l'Agente brutalmente → uscita sporca → baseline orfana (§56) + PHD2
+lasciato con le leve sintonizzate. Se start e stop li gestisce il plugin, il comportamento scorretto sparisce
+(il §56 resta il backstop per crash di NINA/plugin/OS).
+
+**Meccanismo /shutdown — perché HTTP e non segnali.** Su Windows i segnali POSIX verso un python wrappato da
+`Avvia.bat` sono inaffidabili (console group del cmd). Nuovo `POST /shutdown` sull'Agente (server.py): risponde
+`200 {"shutting_down": true}` PRIMA di innescare (callback con ~0.3 s di ritardo su thread separato, così la risposta
+viene consegnata), idempotente (seconda chiamata → `already_requested`), 503 se il callback non è registrato.
+Il callback (registrato da main.py accanto ai signal handler) setta lo STESSO `_stop_event` dei segnali → il main
+loop esce → percorso di shutdown già esistente (riconnessione a PHD2 se serve → `controller.shutdown()` → restore
+baseline → uscita). Zero logica nuova di spegnimento: si riusa quella validata.
+
+**Architettura plugin (v1.7.0.0).**
+- `Lifecycle/LifecycleGate` (decisioni PURE, stile RecoveryProbeGate): ShouldAutoLaunch (opt-in + path + probe
+  "già in esecuzione") e ShouldRequestShutdown (politica A/B).
+- `Lifecycle/AgentLifecycleCoordinator`: Initialize → auto-avvio FIRE-AND-FORGET (Task.Run: NINA mai bloccata,
+  eccezioni confinate, toast marshallata su fallimento — lezione §55); Teardown (chiamato da ApplicationVM.Closing,
+  verificato sul sorgente NINA) → spegnimento a DUE STADI: `POST /shutdown` + poll di conferma su /about (1 s) fino a
+  ShutdownTimeoutSeconds, poi fallback `Process.Kill(entireProcessTree: true)` sull'handle.
+- **Gotcha albero di processi**: lanciando `Avvia.bat` l'handle è cmd.exe e il python è un FIGLIO → il fallback
+  DEVE uccidere l'albero, mai il solo handle (agenti orfani vivi altrimenti). `AgentLauncher.LastStartedProcess`
+  ora conservato.
+- **Proprietà (paletto 1)**: `OwnsAgent` = auto-avvio §58 O avvio dal pulsante manuale (stesso AgentLauncher
+  condiviso) — il pulsante È il plugin. Un agente avviato fuori dal plugin non è mai owned (politica A).
+- **Caso "raggiungibile-ma-piantato"** (02:48 del 12/7): uvicorn su thread daemon risponde a /about anche col main
+  loop bloccato → il pulsante grigio resta corretto (un secondo processo = conflitto di porta); l'evento di /shutdown
+  non verrebbe consumato → è proprio il fallback kill-albero a risolvere il piantato (poi §56 al riavvio).
+- Settings (§58, upgrade-safe): `AutoLaunchEnabled=false` (opt-in — trasparenza per il Registry, nessuna sorpresa
+  per chi aggiorna; si spunta una volta accanto al path), `ManageExternalAgent=false` (politica B opt-in),
+  `ShutdownTimeoutSeconds=15` (clamp 5–60; il restore può passare da una riconnessione a PHD2).
+- Pulsante dashboard: già corretto (grigio quando raggiungibile) — nessuna modifica alla VM.
+
+**Limiti (espliciti).**
+1. **Politica B su agente esterno PIANTATO = garanzia più debole**: senza handle di processo non c'è fallback
+   kill-albero → se l'esterno non consuma /shutdown resta vivo; ripulisce il §56 al riavvio successivo. (La politica
+   A col pulsante/auto-avvio ha sempre l'handle → garanzia piena.)
+2. Crash di NINA/OS: Teardown non gira → agente resta vivo → §56 al riavvio (by design).
+3. `POST /shutdown` è servito solo con dashboard attiva (`--no-dashboard` → 503; il plugin degrada al fallback).
+
+**Test.** Agente: `test_shutdown_endpoint.py` (4: 503 senza callback; 200 prima dell'innesco; idempotente con
+callback UNA volta; eccezione nel callback ingoiata) — suite **295 verdi**. Plugin: `LifecycleGateTests` (7: skip se
+raggiungibile; run se opt-in+path+non raggiungibile; skip senza path; opt-in OFF = comportamento attuale; politica A
+solo owned; politica B adotta esterno; owned fermato anche se irraggiungibile → fallback) — **26 verdi** totali,
+build **0 warning**. Invarianti: N1/N6/forwarder/§55/§56/§57 diff vuoto (Safety Monitor toccato SOLO per le stringhe
+di versione 1.7.0.0). Validazione campo: avvio NINA con opt-in ON → agente parte da solo; chiusura NINA → restore
+baseline + nessun processo orfano; avvio manuale poi NINA → nessun doppio avvio; path errato → NINA parte, toast.
+
+### §58-bis — Agente in BACKGROUND: via la finestra DOS (2026-07-13)
+
+**Motivazione (beta tester, conclusione naturale del §58):** la console del processo Python era diventata la prima
+causa di assistenza — gli utenti non capiscono cosa sia, la chiudono per errore (= kill dell'agente, plugin "morto"
+senza spiegazione), nessun plugin del Registry apre una finestra DOS permanente. Col plugin proprietario del ciclo di
+vita, la console non ha più alcuna funzione che il log su file (§56) e la dashboard non coprano già.
+
+**Scelta tecnica: fix alla radice — exe WINDOWED** (`PHD2_Agent.spec: console=False`, PE subsystem GUI): la console
+sparisce per OGNI percorso di lancio (auto-avvio plugin, pulsante, doppio-click), non solo per quello del plugin.
+Adattamenti: `setup_logging` aggiunge lo StreamHandler solo se `sys.stderr` esiste (nella build windowed è None; il
+file `logs/agent.log` è il canale primario); `uvicorn.run(log_config=None)` (niente handler propri su stderr, i
+record propagano ai handler di root). Da sorgente (`python main.py`) la console resta come sempre.
+
+**Il "terminale" diventa un viewer richiudibile senza rischi** (la cura del problema n.2): `Mostra_Log.bat`
+(PowerShell `Get-Content -Wait` su agent.log — chiuderlo non tocca l'agente). `Avvia.bat` riscritto: `start`
+detached, la finestra lampeggia e sparisce. Nuovo `Arresta.bat`: stop pulito manuale via `curl POST /shutdown`
+(ripristino baseline) — l'utente non ha più NESSUN motivo di uccidere un processo. `build_dist` pacchettizza i
+3 bat + LEGGIMI aggiornato.
+
+**Plugin (launcher §58 rifinito):** lancio DIRETTO di `PHD2_Agent.exe` se esiste accanto al .bat configurato →
+l'handle è il PROCESSO AGENTE VERO (proprietà §58 perfetta, il fallback kill non dipende dal wrapper); fallback
+`cmd /c` NASCOSTO del .bat per i setup custom (sorgente/venv). `CreateNoWindow` ovunque.
+
+**Test/verifiche:** suite agente **296 verdi** (nuovo: setup_logging con stderr=None → niente StreamHandler, file
+handler presente); build plugin **0 warning**; verifica PE subsystem==GUI sul pacchetto rigenerato. Limite: in
+background un crash PRIMA del setup del logging non lascia traccia visibile (finestra inesistente) — mitigato dal
+fatto che setup_logging è la prima cosa che main() fa.
+
+### §58-ter — Description del Safety Monitor = mini-manuale (2026-07-14)
+
+Dal campo: la Description spiegava COSA fa il monitor ma non COME si monta la sequenza — e lo screenshot di
+validazione di Alessandro mostrava proprio l'errore che ne deriva: Recovery probe messa DIRETTAMENTE nel Before,
+senza il container `Loop While Unsafe` → UNA sola sonda per episodio unsafe, poi attesa muta (il deadlock §57
+rientrerebbe se la prima sonda non basta). Interventi (zero comportamento): (1) `Description` del driver riscritta
+in due parti — funzionamento (le 4 condizioni UNSAFE + principio "perdita di osservabilità = rischio") e SETUP
+della sequenza (albero poi semplificato dal §57-ter: la sola Recovery probe nel Before) e il divieto di istruzioni
+Camera nel container; (2) stessa mini-guida nella pagina Options del plugin (dove l'utente configura). Valutazione GUI:
+`ISafetyMonitor.Description` è una `string` del contratto SDK → NINA la rende come TESTO (niente immagini; \n e
+caratteri unicode di albero supportati); la superficie nostra dove un'immagine è possibile è la pagina Options /
+README (screenshot in arrivo col resto). Build 0 warning, 26 test verdi.
+
+### §57-ter — Il ciclo diventa INTERNO alla Recovery probe (2026-07-15)
+
+**Seconda evidenza sperimentale della GUI (screenshot di Alessandro, 14/7):** i container del Trigger On Unsafe
+rifiutano anche le CONDIZIONI/container di ciclo — `Loop While Unsafe` esiste nella libreria ("Condizione di Ciclo")
+ma il drag&drop nel Before viene rifiutato, esattamente come per le istruzioni Camera (§57-bis). Il design a loop
+esterno era quindi non montabile: senza loop, UNA sola sonda per episodio unsafe e poi attesa muta (deadlock di
+ritorno se la prima sonda non basta).
+
+**Soluzione A adottata (proposta di Alessandro, condivisa):** il ciclo è INTERNO all'istruzione. `RecoveryProbe` ora
+è l'intero recovery: `while (monitor UNSAFE): attesa gate (S1/S2, floor min-interval) → sonda → ripeti`, con lo stato
+del monitor riletto ogni 5 s (esce da sola anche a metà attesa, come faceva il watchdog del loop esterno) e uscita per
+cancellazione (sequenza annullata/chiusura NINA). Setup utente ridotto al minimo assoluto: `Trigger On Unsafe →
+Before → Recovery probe` — nessun container, nessuna condizione. Scartata la Soluzione B (nostro container-loop
+custom): duplicava un pezzo core con lo stesso rischio di rifiuto GUI e più superficie di manutenzione.
+
+**Confine di safety — precisazione del paletto:** l'istruzione ora LEGGE lo stato del Safety Monitor
+(`ISafetyMonitorMediator.GetInfo()`, presente nell'SDK 3.2 — è lo stesso identico meccanismo del `Wait Until Safe`
+core) ma SOLO per sapere quando fermarsi: consumo, non giudizio. Il paletto resta: mai IMPOSTARE la safety, mai
+influenzarla — SAFE arriva esclusivamente da sonda → N1 → drain §55 → N6. `Validate()` ora segnala anche il Safety
+Monitor non connesso (senza, il loop non saprebbe quando finire). Telemetria: log per-sonda numerate
+("probe #N") + esito del loop ("SAFE — recovery loop ends (N probe(s) attempted)").
+
+**Hardening (verifica pre-commit di Alessandro):** la sola `TakeProbeAsync` è in try/catch dentro il loop — un guasto
+di cattura (camera/USB/driver/ruota) NON termina più il ciclo (prima: istruzione FAILED → Before completato → attesa
+muta con monitor UNSAFE = deadlock di ritorno nello scenario peggiore). Su eccezione: Warning nel log + toast
+marshallata (SOLO al primo fallimento, poi solo log — niente spam ogni gate) + retry al gate successivo; il loop resta
+reattivo a SAFE e alla cancellazione (OperationCanceledException rilanciata, mai ingoiata). Confermati al contempo:
+Waiting For Safety del trigger è un'istruzione core (WaitUntilSafe, poll 5 s) che NON può contenere nulla — vuoto by
+construction; SAFE a metà posa completa la posa (light utilizzabile) ed esce subito dopo; ~1 min di isteresi drain §55
+tra sonda serena e SAFE.
+
+**Doc allineata** (Description del driver, mini-guida Options, template rev. §57-ter con la 2ª limitazione GUI
+documentata, CONTESTO). Build **0 warning**, **26 test verdi** (gate/LifecycleGate invariati — la logica di gate
+per-iterazione non è cambiata). Resta v1.7.0.0 (mai rilasciata).
+
+## 59. Chiusura di NINA istantanea: delega dello shutdown dopo il 200 + watchdog di auto-terminazione — Agente + Plugin v1.7.0.0 (2026-07-15)
+
+**Osservazione dal campo (v1.7 in prova):** alla chiusura di NINA il plugin attendeva la scomparsa dell'agente
+(poll /about fino a 15 s) → NINA restava aperta per secondi. FASE 0: l'attesa NON serviva al percorso felice (l'agente
+sano completa da solo dopo il 200) — serviva SOLO al caso piantato: uvicorn (thread daemon) risponde 200 anche col
+main loop bloccato, quindi il 200 provava la ricezione, non la presa in carico; solo l'attesa+timeout distingueva
+"accettato ma non muore" e faceva scattare il kill-albero. Fire-and-forget puro = regressione sul piantato.
+
+**Soluzione: rendere il 200 un CONTRATTO.** La garanzia si sposta DENTRO l'agente — `POST /shutdown` ora arma anche un
+**watchdog daemon di auto-terminazione** (`SHUTDOWN_SELFKILL_GRACE_S = 25 s`, server.py): se lo shutdown graceful non
+completa (main loop piantato: l'evento non verrebbe mai consumato), `os._exit(1)` con log flushato — il §56 ripulisce
+al riavvio. Nel percorso felice il timer daemon muore col processo senza mai scattare. Il 200 ora significa
+"TERMINERÒ comunque: con grazia se posso, forzatamente altrimenti" → il plugin può legittimamente delegare:
+`StopAgentIfOwnedAsync` esce subito dopo il 200 (niente più `WaitUntilGoneAsync`, rimossa; `ShutdownTimeoutSeconds`
+rimossa da settings/DTO/XAML — v1.7 mai rilasciata, nessuna migrazione). NINA si chiude all'istante. In più: uscita
+immediata senza alcun probe HTTP quando né owned né ManageExternalAgent (Teardown ~0 ms per chi non usa la gestione).
+
+**Il watchdog MIGLIORA i casi che il timeout lato plugin non copriva:** agente piantato a metà notte con Arresta.bat
+(prima: restava piantato) e agente ESTERNO piantato in policy B (prima: nessun handle, nessun rimedio) ora si
+auto-risolvono. Il fallback kill-albero resta per "HTTP morto ma processo owned vivo" (POST fallito). Invarianti §58
+intatti: policy A/B invariate, restore baseline invariato, nessuna perdita del graceful.
+
+**Limite documentato:** dopo la chiusura di NINA l'agente può sopravviverle di qualche secondo (3-8 s felice, 25 s
+worst) mentre completa il restore — un riavvio IMMEDIATO di NINA può trovare l'agente morente: l'auto-launch lo vede
+vivo e non rilancia; al successivo probe/pulsante si rilancia (caso raro, accettato). Test: agente **297 verdi**
+(nuovo: watchdog scatta a grazia scaduta con graceful in stallo, `_force_exit` spiato, grazia accorciata); plugin
+**26 verdi**, build **0 warning**; pacchetto rigenerato (subsystem GUI riconfermato). Niente commit/push (gate).
+
+## 60. Internationalization & UX del plugin: lingua selezionabile via Resource (.resx) — Plugin v1.7.0.0 (2026-07-16)
+
+**Obiettivo (milestone di sola UX, motore intoccato):** il plugin visualizzabile in una lingua scelta dall'utente
+(Follow N.I.N.A. / English / Italiano) SENZA toccare la lingua di N.I.N.A., con tutte le stringhe UI nelle Resource
+.NET invece che hard-coded.
+
+**Architettura.** Deviazione deliberata dai satellite assemblies: entrambe le lingue vivono come **resx neutri
+EMBEDDED nella DLL principale** (`Localization/Strings_en.resx` + `Strings_it.resx`, underscore per non innescare i
+satellite) — motivo: il plugin si distribuisce come SINGOLA DLL (install-plugin.ps1 oggi, ARCHIVE domani) e una
+cartella `it\` dimenticata = italiano silenziosamente rotto. `Loc` (BaseINPC, singleton) sceglie il ResourceManager e
+espone l'**indexer bindabile** in puro pattern NINA: `{Binding [Chiave], Source={x:Static loc:Loc.Instance}}` +
+`RaisePropertyChanged("Item[]")` al cambio → **la UI si aggiorna LIVE, senza riavvio**. Fallback a cascata:
+IT→EN→chiave (mai stringhe vuote). Nuova lingua domani = 1 resx + 1 voce nel combo, zero codice.
+
+**Copertura (70 chiavi ×2):** pagina impostazioni completa (con nuovo selettore "Plugin language" in testa),
+pannello dashboard (badge/pulsante/tooltip/fallback), toast (lifecycle, Safety Monitor, Recovery probe), esiti del
+launcher, etichette della riga Recovery probe nel sequencer, Description del Safety Monitor. Setting persistita:
+`PluginLanguage` ("" = Follow N.I.N.A. via CurrentUICulture, "en", "it"), upgrade-safe.
+
+**Limiti documentati (SDK):** gli `ExportMetadata` dell'istruzione sequencer (nome/descrizione nella sidebar) sono
+costanti compile-time → restano in inglese (standard per i plugin); il `Name` del device Safety Monitor resta in
+inglese di proposito (riconoscibilità in profili/support); i **LOG restano SEMPRE in inglese** (sono per il
+supporto/Discord, non per l'utente — decisione esplicita).
+
+**Test:** plugin **31 verdi** (+5 `LocTests`: EN/IT risolte dalle resource embedded; **completezza EN↔IT simmetrica**
+— una chiave dimenticata in una lingua fa fallire la build dei test; fallback alla chiave; Follow-N.I.N.A. segue
+CurrentUICulture; i placeholder {0} sopravvivono alla traduzione). Build **0 warning**. Invarianti: zero file di
+logica toccati (engine/gate/forwarder/health/memory) — solo presentazione. Resta v1.7.0.0 (mai rilasciata).
+
+### §60 — chiusura certificata (2026-07-17)
+
+**Audit di completezza (richiesto da Alessandro prima del commit).** Sweep globale con script dedicato su 3 XAML +
+21 .cs (attributi WPF visibili, testo inline, literal C# multi-parola fuori dalle righe Logger, superfici
+Notification/ApplicationStatus/FileDialog), con classificazione machine-checkable di ogni residuo contro una
+whitelist motivata. Inventario: **73 stringhe localizzabili pre-migrazione, 67 migrate al primo giro, 6 residue**
+trovate dall'audit — di cui **2 ancora in ITALIANO** (Title+Filter dell'OpenFileDialog in
+`PluginSettingsView.xaml.cs`, code-behind sfuggito alla migrazione batch) e 4 in EN (2 messaggi `Validate()` della
+Recovery probe → triangolo giallo del sequencer; 2 `ApplicationStatus` → barra di stato). L'audit ha scovato anche
+2 contenuti STANTII: footer dashboard fermo a "v1.5" e LongDescription del Plugin Manager che citava ancora la
+defunta "Wait for recovery hint (v1.6)".
+
+**Fix applicati:** file-picker e Validate() migrati (**74 chiavi ×2**, simmetria garantita dal test);
+`ApplicationStatus` lasciati **EN-by-design** (decisione condivisa: le reason arrivano preformattate da
+`RecoveryProbeGate` — file di logica che §60 si vieta di toccare — e localizzare solo la cornice darebbe testo
+misto; sono telemetria transiente coerente con la sidebar EN); footer ora **derivato dall'assembly**
+(`FooterText` nel VM: mai più stantio); LongDescription riscritta sulla Recovery probe autocontenuta §57-ter +
+menzione della UI bilingue; `Debug.WriteLine` residuo tradotto in EN. Verdetto finale audit: **0 residui non
+classificati** (77 literal restanti, tutti deliberati e motivati: manifest/ExportMetadata compile-time,
+identità/brand, endonimi, albero-sequenza, log multilinea, reason di gate, canale Debug).
+
+**Lifecycle ON di default (ultima rifinitura §60, richiesta esplicita).** `DefaultAutoLaunchEnabled` e
+`DefaultManageExternalAgent` ribaltati a **true**: col ciclo di vita maturo (§56 orphan recovery, §58 graceful,
+§59 watchdog) l'opt-in di §58 non proteggeva più nulla e faceva sembrare il plugin inerte alla prima
+installazione ("installa e funziona", non "installa e configura"). Motore NON toccato: è solo il default di due
+setting; entrambe restano disattivabili (kill-switch) e l'help `Settings_ManageExt_Help` riscritto in ENTRAMBE le
+lingue spiega il nuovo default + il caso standalone (chi vuole che l'Agente sopravviva a NINA la spegne).
+Auto-launch resta inerte senza path configurato (LifecycleGate). **Upgrade-safety (DTO nullable):** chiave assente
+(ogni utente reale: v1.7 mai rilasciata) → ON; un `false` salvato esplicitamente resta false — ⚠ i settings.json
+delle macchine di test interne hanno il false esplicito di §58: per provare il nuovo default serve toggle manuale
+o file rimosso. Verifica: 3 test nuovi (`PluginSettingsDefaultsTests`, il costruttore fresco È l'installazione
+nuova perché `Load()` senza file lo restituisce identico). Suite plugin: **34 verdi** (26+5 Loc+3 defaults), build
+`--no-incremental` 0/0.
+
+### §60 — tooltip localizzati sui parametri numerici del Safety Monitor (2026-07-17)
+
+Rifinitura UX approvata dopo analisi (nessun motore toccato): **6 tooltip** (`Settings_Tip_*`, 80 chiavi totali ×2)
+su Degradato→unsafe, Sereno→safe, Accumula/Scarica indice, Stantia→unsafe, Agente perso→unsafe — su etichetta E
+casella di ogni campo. Principio: il tooltip insegna il **modello mentale corretto del parametro** nel punto di
+decisione, non ripete l'help. Tre regole applicate: (1) niente "poll consecutivi" — l'accumulatore §55 è leaky
+(il sereno scarica, l'HAZE è neutro), e il tooltip lo dice; (2) i due watchdog citano i **gate di attivazione**
+(stantia: sicurezza nubi attiva + sessione attiva + ultimo cielo noto degradato; agente perso: sessione attiva)
+per evitare interpretazioni errate sul campo; (3) ogni testo chiude con l'**effetto pratico** ("più alto = più
+tollerante alle velature brevi") + unità (1 poll = intervallo di controllo, default 15 s; indice 0–1 allineato
+alle soglie N1 0.5/0.8). Implementazione WPF: contenuto tooltip = `TextBlock` con `TextWrapping` e `MaxWidth=360`
+espliciti — NIENTE style implicito locale su `ToolTip`, che scavalcherebbe (non estenderebbe) il tema di NINA.
+Test: +1 in LocTests (`TooltipKeys_ResolveNonEmptyAndTranslated`: esistenza, lunghezza minima, EN≠IT) oltre alla
+simmetria generale che copre le nuove chiavi da sola. Suite **35 verdi**, build 0/0, audit ri-certificato
+(**80/80 chiavi, 0 dead, 0 residui non classificati**).
+
+Analisi architetturale contestuale (STAR_LOST vs sicurezza nubi, su domanda di Alessandro): canali
+**complementari, non ridondanti** — sensori diversi (camera di guida in tempo reale vs statistica di campo della
+camera principale a cadenza per-sub), tempi diversi (fronte rapido → STAR_LOST prima; degrado lento → trasparenza
+prima o da sola), scenari esclusivi in entrambe le direzioni (velatura con stella guida brillante → solo nubi;
+raffica/cavo/rugiada a cielo sereno → solo STAR_LOST). Quattro latch indipendenti in OR con causa diagnostica;
+stale/agent-lost sono watchdog dell'osservazione, non terzi rilevatori. Il consolidamento lungo di STAR_LOST è
+voluto: lascia al GUARDIAN dell'agente il tempo di recuperare (il monitor è ultima istanza). **Semplificazione
+futura candidata:** rimozione della logica CLOUD legacy (`UseIndexCloudLogic` + `EvaluateCloudLegacy` + 2
+setting) quando la logica a indice sarà validata sul campo — NON la fusione dei canali; cross-informing valutato
+e sconsigliato (accoppiamento).

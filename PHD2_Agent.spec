@@ -35,7 +35,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    # §58 — agente in BACKGROUND (exe GUI-subsystem, nessuna console DOS): la finestra
+    # veniva chiusa per errore dai beta tester (= kill dell'agente). Log completo su
+    # logs/agent.log (§56); viewer sicuro: Mostra_Log.bat; stop pulito: Arresta.bat.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

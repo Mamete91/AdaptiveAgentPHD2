@@ -21,31 +21,31 @@ Richiede: **NINA 3.3** (il `Trigger On Unsafe` è core dalla 3.3) + plugin Adapt
 
 ## 1. Struttura del template
 
-Nel target/area imaging della Advanced Sequence, aggiungi il trigger:
+Nel target/area imaging della Advanced Sequence, aggiungi il trigger — **una sola
+istruzione, direttamente nel Before, senza container né condizioni** (rev. §57-ter):
 
 ```
 Trigger On Unsafe
 │
-├── Before Waiting For Safety:            ← eseguito UNA volta all'UNSAFE
-│   │
-│   └── Istruzioni sequenziali  [Condizione: Loop While Unsafe]   ← IL cuore del recovery
-│         └── Recovery probe (Adaptive Agent)                     ← TUTTO QUI (plugin v1.6)
-│               Probe timeout (min):    12    ← cadenza fail-safe S1
-│               Min interval (min):     5     ← floor assoluto tra sonde
-│               Fallback exposure (s):  60    ← usata SOLO se nessun light visto in sessione
+├── Before Waiting For Safety:            ← eseguito all'UNSAFE
+│   └── Recovery probe (Adaptive Agent)   ← TUTTO QUI: è l'INTERO ciclo di recovery
+│         Probe timeout (min):    12      ← cadenza fail-safe S1
+│         Min interval (min):     5       ← floor assoluto tra sonde
+│         Fallback exposure (s):  60      ← usata SOLO se nessun light visto in sessione
 │
-├── (attesa interna Wait Until Safe — passa subito: il loop sopra esce solo quando è SAFE)
+├── (attesa interna Wait Until Safe — passa subito: l'istruzione ritorna solo a SAFE)
 │
 └── After Waiting For Safety:             ← eseguito UNA volta al ritorno SAFE
-      (per ora vuoto; qui andrà il §58: unpark, autofocus, ri-centraggio…)
+      (per ora vuoto; qui andrà il park su unsafe prolungato: unpark, autofocus…)
 ```
 
-**Cosa fa la Recovery probe, da sola:** attende finché scade il timeout (S1) **oppure**
-l'agente segnala `recovery_hint.active` (S2) — mai prima del min-interval — poi scatta
-**una** posa LIGHT **replicando l'ultimo light salvato** (esposizione, gain, offset,
-binning; il filtro è già in posizione: nessun comando alla ruota) e la salva nel pipeline
-standard → `ImageSaved` → forwarder → N1 fresco → drain §55 → SAFE → il `Loop While
-Unsafe` esce all'istante (il watchdog taglia anche a metà attesa/posa).
+**Cosa fa la Recovery probe, da sola (ciclo completo interno):** finché il Safety Monitor
+riporta UNSAFE ripete: attesa gate (timeout S1 **oppure** `recovery_hint.active` S2, mai
+prima del min-interval) → **una** posa LIGHT **replica dell'ultimo light salvato**
+(esposizione/gain/offset/binning; filtro già in posizione, nessun comando alla ruota) →
+pipeline standard → `ImageSaved` → forwarder → N1 fresco → drain §55. Lo stato del monitor
+viene riletto ogni 5 s: **appena torna SAFE l'istruzione esce da sola** (anche a metà
+attesa) e la sequenza riprende. L'annullamento della sequenza interrompe tutto.
 
 ## 2. Parametri consigliati (allineati a `config.toml [recovery_probe]`)
 
@@ -58,10 +58,12 @@ Unsafe` esce all'istante (il watchdog taglia anche a metà attesa/posa).
 
 ## 3. Perché è fatto così (motivazioni tecniche)
 
-- **`Loop While Unsafe` come condizione del container** — esiste nel core (SDK 3.2 e 3.3)
-  come inversa di "Loop while safe"; il **ConditionWatchdog taglia il container appena la
-  condizione diventa falsa, anche a metà di un Wait o di una posa**. Appena la sonda buona
-  fa tornare SAFE N6, il recovery esce all'istante: niente sonde sprecate, niente overshoot.
+- **Il ciclo vive DENTRO l'istruzione (§57-ter)** — la GUI del trigger rifiuta anche
+  container/condizioni (`Loop While Unsafe` incluso: seconda evidenza sperimentale, vedi
+  §4.3), quindi la ripetizione è interna: l'istruzione rilegge lo stato del Safety Monitor
+  ogni 5 s (`ISafetyMonitorMediator.GetInfo()`, **sola lettura** — lo stesso meccanismo del
+  `Wait Until Safe` core) ed esce da sola appena torna SAFE, anche a metà attesa. Leggere
+  lo stato per fermarsi è consumo, non giudizio: il SAFE lo decide sempre e solo N6.
 - **La sonda vive DENTRO un'istruzione eseguita dal sequencer** — è lo stesso meccanismo
   del `Take Exposure` core (che internamente usa gli stessi mediator). Il principio
   "l'imaging resta al sequencer" è rispettato: nessuna cattura autonoma, si scatta solo
@@ -86,9 +88,13 @@ Unsafe` esce all'istante (il watchdog taglia anche a metà attesa/posa).
    restrizioni — il filtro è nel layer GUI/drop (probabile protezione contro esposizioni
    doppie nei trigger). Le istruzioni del plugin (categoria propria) sono accettate:
    da qui la sonda autocontenuta.
-3. **Il container *Before* gira UNA volta per episodio unsafe**: il `Loop While Unsafe`
-   è ciò che dà la ripetizione. Se torna unsafe durante l'*After*, il trigger riparte
-   da capo (Before → attesa → After): corretto per noi.
+3. **I container del trigger rifiutano ANCHE container e condizioni di ciclo**
+   (`Loop While Unsafe` incluso — seconda evidenza sperimentale sulla GUI, 14/7):
+   l'istruzione esiste nella libreria ma il drag&drop nel *Before* viene rifiutato,
+   esattamente come per le istruzioni Camera. Per questo il ciclo è INTERNO alla
+   Recovery probe (§57-ter): il *Before* gira una volta, ma l'istruzione non ritorna
+   finché il monitor non è SAFE (o la sequenza viene annullata). Se torna unsafe
+   durante l'*After*, il trigger riparte da capo: corretto per noi.
 4. **`Trigger On Unsafe` è solo 3.3+** — su NINA 3.2 la stessa logica si costruisce con
    blocchi alternati in container normali (`Loop While Safe [imaging]` → `Loop While
    Unsafe [recovery]`), dove le istruzioni Camera SONO ammesse: lì funziona anche il

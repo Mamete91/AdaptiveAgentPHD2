@@ -2,7 +2,7 @@
 
 **Adaptive tuning for PHD2 autoguiding, driven by measured outcomes.**
 
-Version 2.7 · License **BSD-3-Clause** · Windows · Python 3.11+
+Version 2.8 · License **BSD-3-Clause** · Windows · Python 3.11+
 
 ---
 
@@ -47,7 +47,7 @@ Key elements of the adaptive guiding engine:
 
 ## N.I.N.A. integration (optional)
 
-A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/): a dockable dashboard panel, per-exposure **N.I.N.A. telemetry** (HFR, star count, image statistics) that the Agent uses to recognize **sky transparency**, and a **Safety Monitor** device that reports unsafe on persistent clouds or a lost guide star. The Agent is fully functional without it.
+A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/): a dockable dashboard panel, per-exposure **N.I.N.A. telemetry** (HFR, star count, image statistics) that the Agent uses to recognize **sky transparency**, a **Safety Monitor** device that reports unsafe on persistent clouds, a lost guide star, stale telemetry or Agent loss (it never fails *toward* safe), and a self-contained **Recovery probe** sequencer instruction that lets a clouded-out session resume on its own. Since plugin v1.7.0.0 it also **manages the Agent's lifecycle**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes — via the Agent's `POST /shutdown` endpoint backed by a self-kill watchdog. The Agent is fully functional without it.
 
 ## Quick start
 
@@ -56,8 +56,10 @@ A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.
 ### Packaged build (recommended)
 
 1. Open PHD2, select your telescope profile, enable the server and start guiding.
-2. Run **`Avvia.bat`** from the distribution package.
+2. Run **`Avvia.bat`** from the distribution package — the Agent starts **in the background** (no console window).
 3. Open the dashboard at `http://localhost:8080`.
+
+To stop the Agent gracefully (with PHD2 baseline restore) run **`Arresta.bat`**; to watch the live log run **`Mostra_Log.bat`** (the same log persists in `logs/agent.log`). If you use the N.I.N.A. plugin, start/stop is automatic.
 
 Switching telescopes = switching PHD2 profiles: the Agent reads the guide pixel scale from PHD2 and derives its RMS thresholds from a measured baseline. **No per-setup configuration files.**
 
@@ -77,11 +79,11 @@ python main.py --config config.toml    # live control
 ## Observability
 
 - **Dashboard** (`http://localhost:8080`): live chart, RMS gauges, engine state, decision log, transparency and MinMove-cap panels.
-- **Session logs** in `logs/`: per-frame CSV, per-decision JSONL, session summary JSON — every decision can be audited offline.
+- **Session logs** in `logs/`: per-frame CSV, per-decision JSONL, session summary JSON, plus the rotating `agent.log` — every decision can be audited offline.
 
 ## Validation philosophy
 
-The project is validated **primarily in real astrophotography sessions**, not only synthetic tests. New engine features ship behind kill-switches and are promoted only after field nights; the unit-test suite (270 tests) guards regressions. The first night on a new setup always runs in DRY_RUN.
+The project is validated **primarily in real astrophotography sessions**, not only synthetic tests. New engine features ship behind kill-switches and are promoted only after field nights; the unit-test suite (297 tests) guards regressions. The first night on a new setup always runs in DRY_RUN.
 
 ## Documentation
 
