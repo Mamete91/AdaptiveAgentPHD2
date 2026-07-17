@@ -15,7 +15,16 @@
 > il gate e scatta internamente la sonda, replicando il light interrotto.
 
 Richiede: **NINA 3.3** (il `Trigger On Unsafe` è core dalla 3.3) + plugin Adaptive Agent
-**v1.6.0.0** (istruzione "*Recovery probe (Adaptive Agent)*"). Niente Sequencer Powerups.
+**v1.7.0.0** (istruzione "*Recovery probe (Adaptive Agent)*"). Niente Sequencer Powerups.
+
+> **Inquadramento architetturale (§61).** Il componente centrale del plugin è il **Safety
+> Monitor**: un device che fornisce in continuo un unico verdetto SAFE/UNSAFE sulla qualità
+> dell'acquisizione (guida, trasparenza N1, freschezza telemetria, stato Agente). Il
+> **Sequence Engine di NINA resta sempre l'unico proprietario della sequenza**. La Recovery
+> probe qui descritta è **uno** dei workflow possibili su quel segnale — quello consigliato
+> per il recupero automatico — non l'unico: il flag safe/unsafe resta consumabile da
+> qualsiasi costrutto NINA (policy di safety, `Wait until safe`, condizioni `Loop while
+> safe/unsafe`, workflow personalizzati nel `Trigger On Unsafe`).
 
 ---
 
@@ -125,3 +134,16 @@ attesa) e la sequenza riprende. L'annullamento della sequenza interrompe tutto.
 3. Riapri il pannello: la SNR guida risale → hint ACTIVE (~60 s sostenuti) → sonda
    anticipata S2 → indice risale → drain §55 → SAFE → il loop esce e la sequenza riprende.
    Cronometra: atteso ≤ ~2-3 min dal ritorno del sereno (vs 12 min max del solo S1).
+
+---
+
+## FAQ — E se la sequenza finisce MENTRE il recovery è in corso?
+
+Il ciclo della Recovery probe gira interamente **sotto la catena di cancellazione del Sequence Engine** (§61,
+verificato sui sorgenti NINA): i trigger vengono eseguiti col token del container in esecuzione, e le condizioni
+di fine (Ripeti fino a una specifica ora, altitudine sole/luna, ecc.) hanno una watchdog che allo scadere
+interrompe il set di istruzioni corrente (log NINA: *"Time limit exceeded - Interrupting current Instruction
+Set"*). Risultato: la probe viene **cancellata immediatamente, anche a metà posa**, e la sequenza chiude nei
+tempi decisi da te. Un ritorno del SAFE a sequenza già conclusa **non riavvia nulla**: il plugin non possiede
+alcuna API di controllo del sequencer — il Safety Monitor protegge una sequenza attiva, non ne è mai un secondo
+orchestratore.

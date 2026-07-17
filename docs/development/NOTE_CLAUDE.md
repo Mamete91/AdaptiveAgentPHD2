@@ -3179,3 +3179,43 @@ voluto: lascia al GUARDIAN dell'agente il tempo di recuperare (il monitor è ult
 futura candidata:** rimozione della logica CLOUD legacy (`UseIndexCloudLogic` + `EvaluateCloudLegacy` + 2
 setting) quando la logica a indice sarà validata sul campo — NON la fusione dei canali; cross-informing valutato
 e sconsigliato (accoppiamento).
+
+## 61. Proprietà architetturale VERIFICATA: il Sequence Engine di NINA è l'unica autorità sul ciclo di vita della sequenza (2026-07-17)
+
+**Domanda di Alessandro (post v1.7.0.0):** se un criterio di fine sequenza (ora impostata, alba, altitudine,
+n° pose, stop) matura MENTRE la Recovery probe è nel suo ciclo, la probe viene cancellata? E un ritorno del SAFE
+a sequenza conclusa può riavviare qualcosa? Verifica di sola lettura su ENTRAMBI i lati, sorgenti alla mano.
+
+**Lato NINA (sorgente `isbeorn/nina`, ramo develop = linea 3.3):** (1) `SequenceContainer.Execute` crea
+`localCTS = CreateLinkedTokenSource(token)` e la strategia gira con `localCTS.Token`; (2) `SequentialStrategy`
+esegue i trigger — ANCHE quelli ereditati dai container padri, via risalita ricorsiva `RunTriggers(container.Parent,…)`
+— **con lo stesso token della strategia**, cioè dentro la catena di cancellazione del container in esecuzione;
+(3) le condizioni a tempo/astronomiche usano `ConditionWatchdog` (TimeCondition: 1 s) che allo scadere, a container
+RUNNING, chiama **`Parent.Interrupt()`** (log NINA: "Time limit exceeded - Interrupting current Instruction Set");
+(4) `Interrupt()` = `localCTS.Cancel()` → la cancellazione raggiunge tutto ciò che gira sotto, trigger inclusi;
+(5) `TriggerOnUnsafe.Execute` esegue BeforeWaitForSafe (la nostra probe) → WaitUntilSafe → AfterWaitForSafe col
+token ricevuto (l'unico CTS interno, la guardia dell'AfterWaitForSafe, resta linked al padre).
+
+**Lato plugin (fatti provati a grep/lettura):** (a) `RecoveryProbe.Execute` onora il token a OGNI attesa
+(ThrowIfCancellationRequested in testa a entrambi i loop, `Task.Delay(…, token)`, token in tutta la catena di
+cattura CaptureImage→ToImageData→PrepareImage→Enqueue) e l'hardening §57-ter **rilancia** OperationCanceledException
+(catturiamo solo i guasti di cattura non-cancellazione); (b) **zero fire-and-forget**: Execute è interamente
+awaited dal motore — finché la probe gira, la sequenza è PER COSTRUZIONE ancora viva; non esiste lo stato
+"sequenza finita ma probe in esecuzione"; (c) **il plugin non referenzia alcuna API di controllo sequenza**
+(nessun ISequenceMediator in tutto src/ — è dichiarato come regola nel header del monitor); il Safety Monitor è
+un device ISafetyMonitor passivo: espone flag che NINA legge in polling, non comanda mai.
+
+**Risposte:** (1) SÌ — tre classi di terminatori: stop/chiusura NINA → token radice → probe cancellata subito;
+criteri watchdog (ora/sole/luna/altitudine) → `Parent.Interrupt()` entro ~1 s → cancellazione lungo la catena
+linked → probe cancellata **anche a metà posa-sonda**; criteri a conteggio → non maturano durante la probe (si
+valutano ai confini degli item): al ritorno SAFE la condizione viene rivalutata e la sequenza chiude senza altri
+light. (2) NO — a sequenza conclusa i trigger sono smontati (teardown della strategia) e il SAFE che torna cambia
+solo il flag del device: nessuno lo consuma, e il plugin non ha comunque alcuna API per riavviare. (3) SÌ, per
+costruzione: il flusso è a senso unico (NINA legge noi; noi non comandiamo NINA). Il Safety Monitor protegge una
+sequenza attiva; non è mai un secondo orchestratore.
+
+**Esito:** conforme — NESSUNA modifica necessaria. Documentato come proprietà architetturale in: README plugin
+("Design guarantee"), TEMPLATE recovery (FAQ fine-sequenza), CONTESTO. Verifica a banco suggerita (2 min): Ripeti
+fino a un'ora vicina + pannello coperto → nel log NINA compare "Time limit exceeded - Interrupting…" e la probe
+si ferma. Rifinitura opzionale futura (non richiesta): log esplicito di uscita-per-cancellazione nella probe per
+rendere la proprietà osservabile anche nel NOSTRO log.
