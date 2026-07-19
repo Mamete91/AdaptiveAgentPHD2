@@ -3272,3 +3272,98 @@ actions_total, last_action) + riga "**Ciclo motore**" nella card diagnostica del
 ambra "In raccolta dati — nessuna valutazione ancora" (eval_count=0), verde "ATTIVO — valuta e non interviene
 (N valutazioni · ultima hh:mm:ss)", blu "ATTIVO — ultimo intervento hh:mm:ss: RA aggression 70→65". Un motore
 sano ma quieto ora si DISTINGUE da un motore fermo.
+
+## 64. Cadenza della Recovery probe: da parametro a GRANDEZZA DERIVATA (plugin, 2026-07-19)
+
+**Origine.** Dall'analisi §63-bis è emerso che il timeout della sonda non è una preferenza ma una
+**conseguenza della fisica del sistema**: la sonda esiste per tenere vivo l'occhio di N1, quindi il ciclo
+(attesa + posa) deve chiudersi DENTRO la finestra di freschezza adattiva §43. Se è più lungo, tra due sonde la
+telemetria diventa stantia: N6 perde l'evidenza viva, il latch STALE può scattare e al ritorno dei dati
+**risatura l'accumulatore nubi**, allungando proprio il recupero che la sonda doveva accelerare. Alessandro
+aveva già scelto empiricamente 3 min al posto di 12: i conti dicono che aveva ragione (con posa 60 s, 12 min
+lasciano ~10 min di stantio per ciclo, 3 min ne lasciano 60 s — sotto i 120 s che fanno latchare).
+
+**Criterio.** `timeout = clamp(finestra_§43 − posa_sonda, 1 min, 15 min)`, in `RecoveryProbeGate.AdaptiveTimeout`
+(funzione PURA, come tutta la logica testabile del progetto). Due scelte di progetto:
+- la finestra si **legge dall'agente** (`/status.nina.transparency.window_s`, esposta in §55) invece di
+  duplicare la formula: se l'utente ritara `[nina_telemetry]`, la cadenza lo segue da sola;
+- la posa è quella che la sonda **replica davvero** (`LastLightMemory` → altrimenti fallback), quindi la
+  cadenza si adatta al sub del momento (60 s → attesa 2 min; 300 s → attesa 2.5 min; 600 s → attesa 5 min).
+Fallback graceful: agente offline/N1 spento → stessa formula §43 con i default noti (180 s / 1.5×). Ricalcolata
+a OGNI poll del gate: un cambio filtro/target la aggiorna senza riavviare nulla.
+
+**Parametro manuale: NON eliminato, retrocesso.** `AutoTimeout` (default **true**) è il comportamento; il campo
+minuti resta come escape hatch, **editabile solo a Auto spento** (`ManualTimeoutEnabled`). Motivo: la dottrina
+del progetto è "kill-switch ovunque" e la logica adattiva è ancora in validazione sul campo — se a mezzanotte
+si comportasse male, l'utente deve poter tornare a un numero fisso senza reinstallare. Nell'uso normale la UI è
+comunque **più semplice di prima** (il numero è spento e ignorabile).
+
+**Verificata l'indipendenza dal tema aperto `controller.guiding_state` ↔ Diagnostic Engine** (richiesta
+esplicita prima di implementare): latch diversi (STAR_LOST vs CLOUD), codebase diverse (agente vs plugin), e
+durante un unsafe da STAR_LOST le sonde **non influenzano** il rientro (che avviene via `ResumeTicks`, 45 s di
+guida NORMAL). L'unica superficie di contatto — il gate STALE — riceve telemetria *più fresca*, quindi la
+modifica può solo ridurre il rischio su quel percorso.
+
+**Test:** +5 (`AdaptiveTimeoutTests`), tra cui l'invariante di progetto verificato su tutta la gamma di pose
+realistiche (10→600 s): `attesa + posa ≤ finestra`, sempre. Suite plugin **40 verdi**, build 0 warning, audit
+localizzazione ri-certificato (82/82 chiavi, 0 residui non classificati), DLL reinstallata con hash-match.
+**Da validare sul cielo prima del commit** (metodo permanente: implementazione → rebuild → cielo → commit).
+
+### §64-bis — riga dell'istruzione nel sequencer: etichetta + tooltip (2026-07-19)
+
+**Difetto §64 corretto:** il tema di NINA stila `CheckBox` come interruttore ON/OFF e **NON rende il
+`Content`** — la casella "Cadenza automatica" appariva quindi come un toggle muto. Convenzione da rispettare
+d'ora in poi (è la stessa della pagina Opzioni): **ogni etichetta è un `TextBlock` separato**, mai il Content
+di un CheckBox.
+
+**Tooltip localizzati sui parametri della sonda** (3 chiavi ×2, su etichetta E campo — 85 chiavi totali):
+timeout = cadenza fail-safe usata solo a cadenza-auto spenta; min-interval = floor assoluto che vale anche per
+l'hint ed è la leva sul numero di pose-sonda salvate; fallback = usata SOLO se nessun LIGHT è stato ancora
+salvato in sessione (altrimenti si replica il sub, obbligatorio per N1 che non normalizza per posa).
+
+**Icone cestino/disattiva assenti sulla riga — diagnosi:** i comandi ESISTONO già (`DetachCommand`,
+`DisableEnableCommand` sono su `SequenceItem`): è solo rendering. I container Before/After di un trigger
+renderizzano i figli con una `TreeView` le cui risorse mappano `DataType="{x:Type seqItem:SequenceItem}"` →
+`SequenceBlockView` (la cornice con i pulsanti). In WPF il template implicito si risolve prima sul **tipo
+esatto**: il template per `RecoveryProbe` (come quello di QUALSIASI istruzione con editor inline) scavalca
+quello del tipo base e la riga esce nuda. Se confermato, è comportamento di NINA per tutte le istruzioni dentro
+un trigger, non nostro → segnalazione a monte, nessuna patch fragile nel plugin. **Test empirico lasciato ad
+Alessandro:** trascinare un'istruzione core nello stesso Before e vedere se ha le icone.
+
+**Limite §60 rivedibile (decisione aperta):** `SequenceItem.Name` ha setter pubblico con `RaisePropertyChanged`
+→ il nome dell'istruzione *nella sequenza* si potrebbe localizzare a runtime. Effetto collaterale: la voce in
+**libreria** resta EN (lì è `ExportMetadata`, compile-time) → nomi misti. Non implementato di iniziativa.
+
+Build 0/0, test 40 verdi, audit 85/85 con 0 residui non classificati, DLL reinstallata (hash-match). Non
+committato: attende la validazione sul cielo insieme al §64.
+
+### §64-ter — cornice della riga: era un NOSTRO difetto di convenzione, non un limite NINA (2026-07-19)
+
+Il test empirico di Alessandro (istruzioni native dentro lo stesso Before: cestino e menu PRESENTI) ha smentito
+la mia prima ipotesi "template implicito che scavalca la TreeView". La verità, dal template nativo di
+`WaitForTime`: **la convenzione NINA è che la RADICE del DataTemplate di un'istruzione sia il wrapper
+`view:SequenceBlockView`** (namespace `NINA.View.Sequencer`, assembly NINA.Sequencer — referenziabile dai
+plugin), con l'editor dentro `SequenceItemContent`. È il wrapper a disegnare la cornice standard: icona, nome,
+cestino (`DetachCommand`), abilita/disabilita, menu, riga retry/error. Il nostro template §57 aveva come radice
+uno StackPanel nudo → riga senza cornice. Fix: wrappato (XAML-only, zero codice, zero stringhe nuove — la
+cornice arriva da NINA già localizzata nella SUA lingua). Lezione per futuri template di istruzioni:
+**SequenceBlockView come root, sempre.** Build 0/0, 40 test, DLL reinstallata hash-match. Da verificare
+visivamente al prossimo avvio NINA; non committato (viaggia col §64).
+
+### §64-quater — formula v2: il tetto non è un'uguaglianza (2026-07-19, autorizzata da Alessandro)
+
+La domanda di Alessandro sulla funzione di costo ha scoperto il difetto della v1: ottimizzavo il numero di sonde
+soggetto al vincolo di freschezza, sedendomi SUL tetto della finestra — ma il tetto è un vincolo, non un
+obiettivo: sui sub lunghi allungava la latenza di rientro senza alcun beneficio (600 s: attesa 5 min contro i
+3 min validati sul cielo, che stavano GIÀ dentro la finestra da 900 s). Funzione di costo corretta
+(lessicografica): 1) MAI stantia (correttezza — la ri-saturazione STALE distrugge il drain parziale);
+2) latenza cappata al target validato (3 min); 3) minimo numero di sonde soggetto a 1-2.
+
+**v2: `timeout = clamp(min(finestra §43 − posa, 180 s), 60 s, 900 s)`** (`TargetSeconds=180` in
+RecoveryProbeGate; ceiling ora rete inerte). Esempi: 60 s → 2 min (vincola la finestra — qui il fisso 3 min
+VIOLAVA la freschezza: ciclo 4 min > 180 s); 300 s → 2.5 min; 600 s → 3 min (vincola il target — v1 dava 5).
+La v2 domina sia la v1 sia il fisso validato: mai stantia E mai più lenta del valore da campo. Il razionale
+teorico fine dei 3 min è rimandato a più esperienza sul campo (decisione di Alessandro). Test: +1
+(`LongSubs_CappedAtFieldValidatedTarget`) e clamp-test aggiornato → 41; tooltip EN/IT aggiornati col cap.
+Commit+push autorizzati esplicitamente ("miglioramento architetturale supportato dall'analisi; eventuali
+criticità dal cielo → commit correttivo").

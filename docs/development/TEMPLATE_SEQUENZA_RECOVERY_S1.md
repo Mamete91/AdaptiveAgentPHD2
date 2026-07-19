@@ -38,7 +38,8 @@ Trigger On Unsafe
 │
 ├── Before Waiting For Safety:            ← eseguito all'UNSAFE
 │   └── Recovery probe (Adaptive Agent)   ← TUTTO QUI: è l'INTERO ciclo di recovery
-│         Probe timeout (min):    12      ← cadenza fail-safe S1
+│         Cadenza automatica:     ✔       ← §64-v2: attesa = min(finestra §43 − posa, 3 min)
+│         Probe timeout (min):    (auto)  ← usato solo a "Cadenza automatica" spenta
 │         Min interval (min):     5       ← floor assoluto tra sonde
 │         Fallback exposure (s):  60      ← usata SOLO se nessun light visto in sessione
 │
@@ -60,7 +61,7 @@ attesa) e la sequenza riprende. L'annullamento della sequenza interrompe tutto.
 
 | Parametro | Valore | Perché |
 |---|---|---|
-| Probe timeout | **12 min** | Fail-safe: al massimo ~5 sonde/ora sotto nube fitta. Col drain §55 (~1 min dopo la sonda buona) il rientro tipico è ≤ 13 min dal sereno |
+| Probe timeout | **automatico** (§64) | Non più da indovinare: `min(finestra §43 − posa, 3 min)` (60 s → ~2 min; 300 s → ~2.5 min; 600 s → 3 min), così la telemetria non diventa mai stantia tra due sonde. Col drain §55 (~1 min dopo la sonda buona) il rientro tipico è ~5 min dal sereno. Il valore fisso in minuti resta disponibile togliendo la spunta |
 | Min interval | **5 min** | Paletto 3: un hint "ballerino" non martella l'otturatore |
 | Fallback exposure | **60 s** | Usata SOLO se NINA è stata riavviata e nessun LIGHT è ancora stato salvato: in ogni altro caso la sonda **replica automaticamente il light interrotto** (obbligatorio per N1: il confronto `star_count` vs `base_stars` non normalizza per esposizione) |
 | Guiding | *(gestito da sé)* | La sonda è una CaptureImage non guidata: in nube fitta la stella guida sparisce (13/7: guida mai ripartita dalle 03:20) e la sonda parte comunque |
@@ -147,3 +148,14 @@ Set"*). Risultato: la probe viene **cancellata immediatamente, anche a metà pos
 tempi decisi da te. Un ritorno del SAFE a sequenza già conclusa **non riavvia nulla**: il plugin non possiede
 alcuna API di controllo del sequencer — il Safety Monitor protegge una sequenza attiva, non ne è mai un secondo
 orchestratore.
+
+---
+
+## Aggiornamento §64 — la cadenza della sonda ora si calcola da sola
+
+Il campo "Timeout sonda" non va più impostato a mano: la casella **"Cadenza automatica"** (attiva di default)
+deriva l'attesa dalla **finestra di freschezza della telemetria** dell'agente meno la durata della posa che la
+sonda replica — così tra una sonda e l'altra i dati sul cielo non diventano mai stantii, e la cadenza si adatta
+da sola ai tuoi sub, senza mai attendere oltre i 3 minuti validati sul cielo (posa 60 s → attesa ~2 min; 300 s → ~2.5 min; 600 s → 3 min). Il campo in minuti resta
+utilizzabile solo togliendo la spunta, come via di fuga. L'**intervallo minimo** resta invece tuo: è il freno
+sul numero di pose-sonda salvate su disco.
