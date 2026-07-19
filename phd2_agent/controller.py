@@ -197,6 +197,12 @@ class AdaptiveController:
 
         self.guiding_state = GuidingState.INACTIVE
         self.action_history: list[ControlAction] = []
+        # §63 — osservabilità del ciclo motore (dashboard: "raccolta dati" /
+        # "valuta senza intervenire" / "ultimo intervento"): tick di valutazione
+        # VERI (evaluated=True) contati e datati. Senza questo, un motore sano ma
+        # quieto è indistinguibile da un motore fermo (lezione della validazione).
+        self.eval_count = 0
+        self.last_eval_ts: float | None = None
 
         self._ra = AxisState("ra")
         self._dec = AxisState("dec")
@@ -1183,6 +1189,8 @@ class AdaptiveController:
         # semplice riga di log fuori-tick: marcalo per il logging/replay (% INSUFFICIENT
         # reale = solo su evaluated==True).
         snapshot.evaluated = True
+        self.eval_count += 1              # §63 — ciclo motore osservabile in dashboard
+        self.last_eval_ts = time.time()
 
         self._update_guiding_state(snapshot)
         self._update_minmove_baseline_filter()   # §51 — EMA baseline per il cap MinMove
@@ -2688,9 +2696,22 @@ class AdaptiveController:
         if sat_active:
             sat_elapsed = time.monotonic() - self.saturated_lock_since
 
+        last_action = self.action_history[-1] if self.action_history else None
         return {
             "guiding_state": self.guiding_state.name,
             "dry_run": self.dry_run,
+            # §63 — ciclo del motore per la dashboard: distingue "in raccolta dati"
+            # (eval_count=0), "valuta e non interviene" (eval>0, 0 azioni) e
+            # "ultimo intervento" (azioni presenti).
+            "engine": {
+                "eval_count": self.eval_count,
+                "last_eval_ts": self.last_eval_ts,
+                "actions_total": len(self.action_history),
+                "last_action_ts": last_action.timestamp if last_action else None,
+                "last_action": (f"{last_action.axis.upper()} {last_action.param} "
+                                f"{last_action.old_value:g}→{last_action.new_value:g}")
+                               if last_action else None,
+            },
             "ra": {
                 "current_aggr": self._ra.current_aggr,
                 "current_minmove": self._ra.current_minmove,

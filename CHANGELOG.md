@@ -8,6 +8,29 @@ behind a kill-switch and promoted only after real autoguiding sessions.
 
 ---
 
+## [2.8.1] — Hotfix: event-loop crash from §57 wiring (first field bug of 2.8)
+
+First real-sky validation night (2026-07-19) caught a wiring regression:
+`recovery_hint_tracker` was referenced inside `_event_loop` as a `main()` local
+(`NameError` on the first evaluated frame); the exception reached the outer handler
+whose `finally` disconnected from PHD2 — a connect/crash cycle every ~20-35 s (178
+times in 65 minutes). Effects, proven from the session CSV: recovery hint never fed,
+`controller.evaluate` never reached (GUARDIAN inert), RMS baseline starved (~1 sample
+per cycle). The recovery probes themselves worked (probe #1 refreshed N1 to index 1.00).
+
+- **Fix:** the tracker is now a proper `_event_loop` parameter, and the per-frame
+  update is wrapped defensively — a passive observer can never take down the guiding
+  loop (first error logged, then silenced).
+- **Regression tests that execute the real `_event_loop`** (full frame path, crashing
+  observer, missing tracker): the "green suite but broken loop" gap is closed for good.
+- **Engine cycle observability:** new `engine` block on `/status` (`eval_count`,
+  `last_eval_ts`, `actions_total`, `last_action`) and a three-state "Engine cycle" row
+  on the dashboard — *collecting data* / *active, evaluating with no intervention
+  needed* / *last intervention at hh:mm:ss* — so a healthy-but-quiet engine is
+  distinguishable from a stalled one during field validation.
+
+Test suite: **301 tests**. Patch-level versioning introduced (major.minor.patch).
+
 ## [2.8] — Recovery & lifecycle infrastructure (engine core frozen)
 
 Infrastructure-only milestone: the adaptive guiding engine validated in the field is

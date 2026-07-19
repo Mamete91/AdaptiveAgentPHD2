@@ -237,6 +237,9 @@ function applyFullStatus(data) {
   const ctrl = data.controller || {};
   const an = data.analyzer || {};
 
+  // §63 — ciclo del motore (raccolta dati / valuta senza intervenire / intervento)
+  updateEngineCycle(ctrl.engine || {});
+
   // Aggiorna controller UI
   if (ctrl.guiding_state) {
     updateCtrlState(ctrl.guiding_state);
@@ -719,6 +722,26 @@ function updateMinMoveCap(mc) {
     } else {
       winner.style.display = 'none';
     }
+  }
+}
+
+// §63 — rende visibile la differenza tra "sta ancora raccogliendo dati", "valuta
+// regolarmente ma non c'è motivo di intervenire" e "ha effettuato un intervento".
+// Senza questa riga, durante la validazione un motore sano ma quieto sembra fermo.
+function updateEngineCycle(eng) {
+  const elx = el('engine-cycle');
+  if (!elx) return;
+  const n = eng.eval_count || 0;
+  const fmt = ts => ts ? new Date(ts * 1000).toLocaleTimeString('it-IT') : '—';
+  if (n === 0) {
+    elx.textContent = 'In raccolta dati — nessuna valutazione ancora';
+    elx.style.color = '#e0a800';
+  } else if (!eng.actions_total) {
+    elx.textContent = `ATTIVO — valuta e non interviene (${n} valutazioni · ultima ${fmt(eng.last_eval_ts)})`;
+    elx.style.color = '#34d399';
+  } else {
+    elx.textContent = `ATTIVO — ${n} valutazioni · ultimo intervento ${fmt(eng.last_action_ts)}: ${eng.last_action || ''}`;
+    elx.style.color = '#4a9eff';
   }
 }
 

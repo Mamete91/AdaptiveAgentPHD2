@@ -48,17 +48,22 @@ class TestVersionFormat(unittest.TestCase):
     """2. Formato di __version__ e __version_tuple__."""
 
     def test_version_string_format(self):
-        self.assertRegex(about.__version__, r"^\d+\.\d+$")
+        # §63 — ammesso anche il livello patch (es. "2.8.1" per gli hotfix):
+        # major.minor per le milestone, major.minor.patch per le correzioni.
+        self.assertRegex(about.__version__, r"^\d+\.\d+(\.\d+)?$")
 
     def test_version_tuple_consistent(self):
         self.assertIsInstance(about.__version_tuple__, tuple)
         self.assertEqual(len(about.__version_tuple__), 4)
         for n in about.__version_tuple__:
             self.assertIsInstance(n, int)
-        # I primi due elementi della tupla corrispondono alla stringa.
-        major_str, minor_str = about.__version__.split(".")
-        self.assertEqual(about.__version_tuple__[0], int(major_str))
-        self.assertEqual(about.__version_tuple__[1], int(minor_str))
+        # Le componenti della stringa corrispondono alla tupla, posizione per
+        # posizione (patch assente nella stringa => 0 nella tupla).
+        parts = [int(p) for p in about.__version__.split(".")]
+        for i, val in enumerate(parts):
+            self.assertEqual(about.__version_tuple__[i], val)
+        for i in range(len(parts), 3):
+            self.assertEqual(about.__version_tuple__[i], 0)
 
 
 class TestBannerShape(unittest.TestCase):

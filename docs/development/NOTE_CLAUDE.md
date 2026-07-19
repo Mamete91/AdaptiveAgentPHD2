@@ -3219,3 +3219,56 @@ sequenza attiva; non è mai un secondo orchestratore.
 fino a un'ora vicina + pannello coperto → nel log NINA compare "Time limit exceeded - Interrupting…" e la probe
 si ferma. Rifinitura opzionale futura (non richiesta): log esplicito di uscita-per-cancellazione nella probe per
 rendere la proprietà osservabile anche nel NOSTRO log.
+
+## 62. REGOLA PERMANENTE di processo: il rebuild del distribuibile fa parte della Definition of Done (2026-07-17)
+
+Stabilita da Alessandro dopo la v2.8: il commit era corretto ma nella cartella c'era ancora solo
+`Adaptive_Agent_PHD2_v2.7.zip` — repo aggiornato, software installabile stantio. Da oggi, **ogni modifica
+approvata al codice si considera conclusa SOLO dopo il rebuild del componente toccato**, anche quando commit/push
+non sono richiesti (sono attività distinte: il repo è la storia, il pacchetto è il software reale).
+
+Workflow standard: 1) implementazione → 2) build 0 errori/0 avvisi → 3) test/validazione → 4) **REBUILD**
+(Agente: `build_dist.py` → `Pacchetto_Distribuzione/` + `Adaptive_Agent_PHD2_v<versione>.zip`, versione
+single-source da `__about__.py`; Plugin: build Release + `install-plugin.ps1` + verifica hash DLL installata ==
+DLL buildata) → 5) commit/push quando richiesti → 6) report con conferma esplicita della corrispondenza
+sorgente ↔ artefatto ↔ versione dichiarata. Gotcha noti: agente in esecuzione = lock su
+`Pacchetto_Distribuzione/logs/agent.log`; NINA aperto = lock sulla DLL; `pyinstaller` va invocato col
+`.venv/Scripts` nel PATH (build_dist lo chiama nudo via subprocess).
+
+## 63. Primo bug di campo della v2.8: NameError nel wiring §57 abbatteva il loop — fix v2.8.1 + ciclo motore osservabile (2026-07-19)
+
+**Forense (notte 2026-07-19, prima validazione reale del blocco §57).** `recovery_hint_tracker` era una variabile
+locale di `main()` referenziata dentro `_event_loop()` (che non la riceveva): NameError al primo frame "ready"
+di ogni finestra → l'eccezione risaliva all'handler esterno il cui `finally` DISCONNETTEVA da PHD2 → ciclo
+connect → ~9 frame warmup → decimo frame → crash → reconnect, **178 volte in 65 minuti** (100 buchi >10 s nel
+CSV, 87 reset `guiding_restart`). Conseguenze provate dai dati: hint S2 mai alimentato (→ "hint inactive" tutta
+la notte), `controller.evaluate` MAI eseguito (`evaluated=False` × 837, decisions vuoti, GUARDIAN inerte),
+baseline RMS affamata (~1 campione/ciclo → 23/60 dopo 40 min: l'ipotesi velature è smentita — SNR mediana 50.9,
+100% dei frame sopra soglia 6). Il §56 ha retto (leve preservate a ogni ri-aggancio). Perché 297 test verdi non
+l'hanno visto: nessun test eseguiva il CORPO reale di `_event_loop`.
+
+**Timeline N1 dal CSV** (le colonne transparency_*): CLOUD idx 0.16 dalle 01:34, **sonda-1 alle 01:48 con idx
+1.00 CLEAR** (la probe FUNZIONA e aggiorna N1), 13 minuti ancora UNSAFE, sonda-2 alle 02:01 (idx 0.92 = lo
+screenshot), stop 02:04. **Resta aperto il caso N6-non-torna-SAFE** (con CLEAR/1.00/fresh il drain matematico è
+~4 poll): il gate `fresh` governa sia accumulo sia scarico e l'UNSAFE è scattato → il parsing funziona → il
+guasto sta a valle del /status (polling plugin → engine → device → NINA). Da analizzare SEPARATAMENTE con i log
+NINA dopo una sessione con la v2.8.1 (decisione di Alessandro: un problema alla volta, mai inseguirne due).
+
+**Fix §63 (v2.8.1):** (1) `recovery_hint_tracker` è un PARAMETRO di `_event_loop`; (2) try/except difensivo —
+un osservatore passivo non deve MAI poter abbattere il loop di guida (primo errore loggato, poi silenzio);
+(3) `tests/test_event_loop_wiring.py`: 3 test che eseguono il VERO `_event_loop` (percorso completo del frame,
+osservatore che esplode senza uccidere il loop, tracker assente) + 1 sul blocco engine — il buco "verdi ma rotto
+in campo" è chiuso per sempre. Versioning: introdotto il livello patch (major.minor.patch per gli hotfix,
+test_about aggiornato). **301 test verdi.** ZIP v2.8 difettoso RIMOSSO; `Adaptive_Agent_PHD2_v2.8.1.zip`
+rigenerato (regola §62: exe 2.8.1, subsystem GUI).
+
+**Ciclo motore osservabile (richiesta di Alessandro per la validazione).** Verificato sul codice che la catena
+Analyzer→Diagnostic→Controller entra in funzione appena `analyzer.is_ready` (finestra ~10 frame) — `evaluate`
+gira ogni EVAL_INTERVAL INDIPENDENTEMENTE dal completamento della baseline (la baseline governa le soglie, non
+la valutazione; con baseline in corso valgono le soglie provvisorie §33/§40) — quella notte sembrava fermo
+perché evaluate non veniva MAI raggiunto. Per renderlo visibile: `controller.eval_count`/`last_eval_ts` (§63,
+incrementati accanto a `snapshot.evaluated=True`) + blocco `engine` in `get_status()` (eval_count, last_eval_ts,
+actions_total, last_action) + riga "**Ciclo motore**" nella card diagnostica della dashboard con TRE stati:
+ambra "In raccolta dati — nessuna valutazione ancora" (eval_count=0), verde "ATTIVO — valuta e non interviene
+(N valutazioni · ultima hh:mm:ss)", blu "ATTIVO — ultimo intervento hh:mm:ss: RA aggression 70→65". Un motore
+sano ma quieto ora si DISTINGUE da un motore fermo.

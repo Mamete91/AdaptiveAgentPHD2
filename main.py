@@ -252,6 +252,7 @@ def main():
                 stop_event=_stop_event,
                 eval_interval=EVAL_INTERVAL,
                 monitor_only=args.monitor_only,
+                recovery_hint_tracker=recovery_hint_tracker,
             )
         except PHD2ConnectionError as e:
             log.error("Connessione PHD2 persa: %s", e)
@@ -308,10 +309,18 @@ def _event_loop(
     stop_event: threading.Event,
     eval_interval: float,
     monitor_only: bool,
+    recovery_hint_tracker: "RecoveryHintTracker | None" = None,
 ) -> None:
-    """Loop principale che consuma la queue eventi di PHD2."""
+    """Loop principale che consuma la queue eventi di PHD2.
+
+    §63 — recovery_hint_tracker arriva come PARAMETRO: la notte 2026-07-19 il
+    riferimento a una variabile locale di main() (NameError al primo frame utile)
+    faceva risalire l'eccezione all'handler esterno il cui finally DISCONNETTEVA
+    da PHD2 → 178 cicli connect/crash in 65 minuti, controller mai valutato.
+    """
     last_eval = time.monotonic()
     is_settling = False
+    hint_error_logged = False   # §63 — primo errore loggato, poi silenzio (mai spam)
 
     import queue as q_module
     from server import sync_broadcast as _broadcast
@@ -359,9 +368,17 @@ def _event_loop(
                 # (no-op se per_frame_baseline è off). La VALUTAZIONE (classify + leve)
                 # resta gated sul tick interval_seconds.
                 controller.ingest_frame(snapshot)
-                # §57 S2 — hint di recupero: integra la SNR guida per-frame (no-op se
-                # disabilitato o stato N1 non degradato). Solo osservazione.
-                recovery_hint_tracker.update(snapshot.snr_avg)
+                # §57 S2 / §63 — hint di recupero: integra la SNR guida per-frame (no-op
+                # se disabilitato o stato N1 non degradato). È un osservatore PASSIVO e
+                # non deve MAI poter abbattere il loop di guida: try/except difensivo.
+                if recovery_hint_tracker is not None:
+                    try:
+                        recovery_hint_tracker.update(snapshot.snr_avg)
+                    except Exception as e:
+                        if not hint_error_logged:
+                            hint_error_logged = True
+                            log.error("recovery_hint.update fallito (%s) — osservatore "
+                                      "ignorato per il resto della sessione", e)
                 if now - last_eval >= eval_interval:
                     actions = controller.evaluate(snapshot)
                     last_eval = now
