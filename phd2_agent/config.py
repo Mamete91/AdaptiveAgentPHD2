@@ -45,7 +45,13 @@ class SetupConfig:
 
 @dataclass
 class PHD2Config:
-    host: str = "localhost"
+    # §69 — 127.0.0.1 e NON "localhost". Il server eventi di PHD2 usa `wxIPV4address`
+    # (event_server.cpp:2619): ascolta SOLO su IPv4. Su Windows `localhost` risolve prima
+    # a ::1, dove PHD2 non puo' esserci per costruzione -> il tentativo IPv6 e' SEMPRE
+    # sprecato e costa ~2 s per connessione (misurato sui log del 29/7: perfino un
+    # ECONNREFUSED impiegava 2 s). Ricade anche sulla riconnessione per il restore
+    # baseline durante lo shutdown. Un host REMOTO configurato a mano resta rispettato.
+    host: str = "127.0.0.1"
     port: int = 4400
 
 
@@ -135,6 +141,9 @@ class MinMoveCapConfig:
 class LoggingConfig:
     csv_dir: str = "logs"
     log_level: str = "INFO"
+    # §69 — deduplica del retry di connessione a PHD2 (85% del log della notte 29/7).
+    reconnect_verbose_attempts: int = 3       # tentativi loggati per esteso
+    reconnect_heartbeat_minutes: float = 10.0 # battito durante la soppressione (0 = nessuno)
 
 
 @dataclass
@@ -406,6 +415,13 @@ class NinaIndicesConfig:
     cloud_below: float = 0.5           # TI <  -> CLOUD (in mezzo: HAZE)
     hysteresis: float = 0.05           # margine anti-flicker sulle soglie di stato
     deadband_deficit: float = 0.10     # calo % sotto cui è rumore (non conta per confirmed_subs)
+    # §66 — cricchetto del riferimento (anti "rana bollita"): il riferimento adotta
+    # subito i miglioramenti, resta congelato mentre il cielo è già degradato e
+    # rilascia i peggioramenti solo lentamente, a cielo sereno.
+    ref_ratchet_enabled: bool = True       # false = kill-switch (comportamento §45)
+    ref_release_half_life_min: float = 25.0  # emivita del rilascio verso il basso
+    ref_freeze_max_min: float = 90.0        # tetto al congelamento (oltre = nuova normalita')
+    ref_session_floor_frac: float = 0.70    # §67 pavimento: frazione minima del best di sessione
 
 
 @dataclass
@@ -417,6 +433,16 @@ class RecoveryProbeConfig:
     probe_timeout_min: float = 12.0        # cadenza fail-safe della sonda mentre UNSAFE
     probe_min_interval_min: float = 5.0    # paletto 3 — intervallo minimo assoluto tra sonde
     match_sub: bool = True                 # paletto 2 — sonda = stesso filtro/esposizione del sub
+
+
+@dataclass
+class GuideHealthConfig:
+    """§68 — OSSERVABILITÀ del canale di guida (non qualità: quella è del motore).
+    L'agente misura, il plugin decide. Finestre in SECONDI di tempo reale."""
+    enabled: bool = True            # false = kill-switch (nessuna telemetria, /status inerte)
+    error_window_s: float = 120.0   # finestra per il conteggio degli ErrorCode per-frame
+    alert_window_s: float = 180.0   # entro quanto un Alert warning/error resta "corroborante"
+    mass_window_s: float = 120.0    # finestra per la dispersione di StarMass
 
 
 @dataclass
@@ -458,6 +484,22 @@ class AgentConfig:
     nina_indices: NinaIndicesConfig = field(default_factory=NinaIndicesConfig)
     recovery_probe: RecoveryProbeConfig = field(default_factory=RecoveryProbeConfig)   # §57 S1
     recovery_hint: RecoveryHintConfig = field(default_factory=RecoveryHintConfig)      # §57 S2
+    guide_health: GuideHealthConfig = field(default_factory=GuideHealthConfig)        # §68
+
+
+def _normalize_loopback(host: str, what: str) -> str:
+    """§69 — "localhost" -> "127.0.0.1" sui config esistenti.
+
+    PHD2 ascolta solo su IPv4 (`wxIPV4address`), quindi il tentativo IPv6 che Windows
+    fa per primo su "localhost" non puo' MAI riuscire: e' latenza pura (~2 s a
+    connessione). Normalizziamo l'intento, non la scelta: qualunque altro host —
+    incluso un PHD2 remoto — passa inalterato.
+    """
+    if isinstance(host, str) and host.strip().lower() == "localhost":
+        logger.info("%s: 'localhost' -> '127.0.0.1' (§69: PHD2 ascolta solo su IPv4; "
+                    "il tentativo IPv6 di 'localhost' costa ~2 s per connessione)", what)
+        return "127.0.0.1"
+    return host
 
 
 def load_config(path: str | Path = "config.toml") -> AgentConfig:
@@ -484,7 +526,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
     # PHD2
     if "phd2" in raw:
         phd2 = raw["phd2"]
-        cfg.phd2.host = phd2.get("host", cfg.phd2.host)
+        cfg.phd2.host = _normalize_loopback(phd2.get("host", cfg.phd2.host), "[phd2] host")
         cfg.phd2.port = phd2.get("port", cfg.phd2.port)
 
     # Dashboard
@@ -557,6 +599,10 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         lg = raw["logging"]
         cfg.logging.csv_dir = lg.get("csv_dir", cfg.logging.csv_dir)
         cfg.logging.log_level = lg.get("log_level", cfg.logging.log_level)
+        cfg.logging.reconnect_verbose_attempts = int(
+            lg.get("reconnect_verbose_attempts", cfg.logging.reconnect_verbose_attempts))
+        cfg.logging.reconnect_heartbeat_minutes = float(
+            lg.get("reconnect_heartbeat_minutes", cfg.logging.reconnect_heartbeat_minutes))
 
     # PHD2 log import
     if "phd2_log" in raw:
@@ -711,6 +757,20 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             cloud_below=float(ni.get("cloud_below", 0.5)),
             hysteresis=float(ni.get("hysteresis", 0.05)),
             deadband_deficit=float(ni.get("deadband_deficit", 0.10)),
+            ref_ratchet_enabled=bool(ni.get("ref_ratchet_enabled", True)),
+            ref_release_half_life_min=float(ni.get("ref_release_half_life_min", 25.0)),
+            ref_freeze_max_min=float(ni.get("ref_freeze_max_min", 90.0)),
+            ref_session_floor_frac=float(ni.get("ref_session_floor_frac", 0.70)),
+        )
+
+    # §68 — osservabilità del canale di guida. Retrocompat: sezione assente -> default.
+    if "guide_health" in raw:
+        gh = raw["guide_health"]
+        cfg.guide_health = GuideHealthConfig(
+            enabled=bool(gh.get("enabled", True)),
+            error_window_s=float(gh.get("error_window_s", 120.0)),
+            alert_window_s=float(gh.get("alert_window_s", 180.0)),
+            mass_window_s=float(gh.get("mass_window_s", 120.0)),
         )
 
     # §57 — recovery auto-starting: S1 (sonda fail-safe, parametri di riferimento del

@@ -21,7 +21,10 @@ guide_pixel_scale_arcsec_reduced = 1.0    # fallback
 reducer_active                   = false
 
 [phd2]
-host = "localhost"
+# §69 — 127.0.0.1 e NON "localhost": PHD2 ascolta SOLO su IPv4 (wxIPV4address), mentre
+# Windows risolve "localhost" prima a ::1 -> tentativo sempre sprecato, ~2 s per
+# connessione (misurato). Per un PHD2 su un'altra macchina, metti qui il suo IP.
+host = "127.0.0.1"
 port = 4400
 
 [dashboard]
@@ -108,6 +111,13 @@ minmove_step   = 0.05
 [logging]
 csv_dir   = "logs"
 log_level = "INFO"
+# §69 — deduplica del retry di connessione a PHD2. Nella notte del 29/7 l'85% del log
+# (8314 righe su 9716) era questo loop: 3 righe identiche ogni 12 s per ore, con PHD2
+# chiuso e l'Agente vivo insieme a NINA. Con la rotazione a 5 MB quel rumore ESPELLE
+# dal file la storia utile. Ora: primi tentativi per esteso -> una riga di soppressione
+# -> battito raro (il silenzio non e' mai una prova) -> sintesi al ritorno.
+reconnect_verbose_attempts  = 3      # tentativi loggati per esteso prima di sopprimere
+reconnect_heartbeat_minutes = 10.0   # battito durante la soppressione (0 = disattivato)
 
 [phd2_log]
 log_dir     = ""
@@ -322,6 +332,33 @@ clear_above           = 0.8      # TI >= -> CLEAR
 cloud_below           = 0.5      # TI <  -> CLOUD (in mezzo: HAZE)
 hysteresis            = 0.05     # margine anti-flicker sulle soglie di stato
 deadband_deficit      = 0.10     # calo % sotto cui è rumore (non conta per confirmed_subs)
+# §66 — CRICCHETTO del riferimento (anti "rana bollita", osservata sul cielo 20/7):
+# il rolling-high puro seguiva il cielo anche VERSO IL BASSO -> in un degrado lento il
+# denominatore scendeva col numeratore, l'indice restava ~1.00 e il peggioramento non
+# emergeva mai. Ora: miglioramento adottato subito; riferimento CONGELATO se lo stato
+# è già HAZE/CLOUD; peggioramento rilasciato lentamente SOLO a cielo sereno (per
+# adattarsi ai cali legittimi: target che scende, Luna, cambio campo).
+ref_ratchet_enabled       = true   # false = kill-switch (riferimento rolling-high puro, §45)
+ref_release_half_life_min = 25.0   # emivita (min di cielo sereno) del rilascio verso il basso
+ref_freeze_max_min        = 90.0   # tetto al congelamento: oltre, il degrado stabile e' la nuova
+                                   # normalita' (cambio campo/Luna) e il riferimento riprende a rilasciare
+# §67 — PAVIMENTO di sessione: il riferimento non scende sotto questa frazione del meglio
+# della notte per (target, filtro). Sicuro grazie alla chiave per target (campo nuovo =
+# high-water nuovo); i cali legittimi (estinzione per airmass) valgono pochi punti %.
+ref_session_floor_frac    = 0.70   # 0 = disattivato (solo rilascio a tempo)
+
+[guide_health]
+# §68 — OSSERVABILITÀ del canale di guida (NON qualità: quella resta del motore).
+# Nato dal guasto del 26/7: camera di guida in stato patologico (sospetta congestione
+# USB), PHD2 tace e `guiding_state` resta congelato su un valore operativo -> il Safety
+# Monitor non se ne accorge. L'agente MISURA e basta; il latch GUIDE_UNOBSERVABLE del
+# plugin decide. Telemetria letta dal protocollo PHD2 (event_server.cpp):
+# LoopingExposures (camera viva ma non guida), ErrorCode per-frame (SATURATED/
+# MASSCHANGE/... = firma del frame corrotto), Alert con severità strutturata.
+enabled        = true    # false = kill-switch: nessuna telemetria di canale su /status
+error_window_s = 120.0   # finestra di conteggio degli ErrorCode per-frame
+alert_window_s = 180.0   # entro quanto un Alert warning/error resta corroborante
+mass_window_s  = 120.0   # finestra per la dispersione di StarMass (elettrico vs ottico)
 
 [recovery_probe]
 # §57 S1 — posa-sonda FAIL-SAFE durante UNSAFE-nubi. La sonda la scatta il SEQUENCER

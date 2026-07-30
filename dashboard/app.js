@@ -598,10 +598,23 @@ function updateTransparency(nina) {
   el('transp-index-desc').textContent = dpct > 0
     ? `−${dpct}% vs cielo limpido recente`
     : 'al livello del cielo limpido recente';
+  // §66 — accanto a stelle/riferimento, il MEGLIO della serata per questo filtro:
+  // rende visibile la deriva del riferimento (prima invisibile: "rana bollita").
   el('transp-stars').textContent = (t.star_count != null && t.base_stars != null)
-    ? `${Math.round(t.star_count)}/${Math.round(t.base_stars)}` : '—';
+    ? `${Math.round(t.star_count)}/${Math.round(t.base_stars)}`
+      + (t.base_stars_session_best != null
+         && Math.round(t.base_stars_session_best) > Math.round(t.base_stars)
+          ? ` · best ${Math.round(t.base_stars_session_best)}` : '')
+    : '—';
+  // Deriva significativa (>15%): il metro si è spostato rispetto al meglio della notte.
+  const drift = t.ref_drift_pct;
+  el('transp-index-desc').title = (drift != null)
+    ? `Riferimento ${drift}% sotto il meglio della serata (stesso filtro)` : '';
   el('transp-index').textContent = t.index != null ? t.index.toFixed(2) : '—';
-  el('transp-filter').textContent = t.filter || '—';
+  // §67 — contesto da NINA: filtro + target, e airmass come telemetria osservabile.
+  el('transp-filter').textContent = (t.filter || '—')
+    + (t.target ? ` · ${t.target}` : '')
+    + (t.airmass != null ? ` · X ${t.airmass.toFixed(2)}` : '');
 
   // §55 (fix N6) — freschezza esplicita: FRESH (verde, età) o STANTIA (rossa,
   // età vs finestra §43). Con telemetria stantia l'indice è CONGELATO all'ultimo

@@ -48,6 +48,7 @@ _nina_store = None
 _transparency_tracker = None
 # §57 S2 — hint di recupero dalla SNR guida. None => blocco recovery_hint assente.
 _recovery_hint_tracker = None
+_guide_health = None
 # §58 — callback di spegnimento graceful (registrata da main.py: setta _stop_event).
 # None => POST /shutdown risponde 503 (es. server usato in contesti senza main loop).
 _shutdown_callback = None
@@ -85,6 +86,13 @@ def set_recovery_hint_tracker(tracker) -> None:
     (paletto 8) accanto all'ingest N1."""
     global _recovery_hint_tracker
     _recovery_hint_tracker = tracker
+
+
+def set_guide_health(tracker) -> None:
+    """§68 — registra il GuideHealthTracker (osservabilità del canale di guida:
+    SOLO misura, nessuna decisione — il latch vive nel plugin). /status.guide_health."""
+    global _guide_health
+    _guide_health = tracker
 
 
 def set_shutdown_callback(callback) -> None:
@@ -256,12 +264,21 @@ async def get_status():
         logger.exception("Errore leggendo RecoveryHintTracker in /status")
         recovery_hint = {"enabled": False, "active": False}
 
+    # §68 — osservabilità del canale di guida (misura pura; il plugin decide).
+    try:
+        guide_health = (_guide_health.status_block() if _guide_health is not None
+                        else {"enabled": False})
+    except Exception:
+        logger.exception("Errore leggendo GuideHealthTracker in /status")
+        guide_health = {"enabled": False}
+
     return JSONResponse({
         "timestamp": time.time(),
         "controller": ctrl_status,
         "analyzer": analyzer_status,
         "nina": nina_status,
         "recovery_hint": recovery_hint,
+        "guide_health": guide_health,
     })
 
 
@@ -330,6 +347,10 @@ class NinaImageMetrics(BaseModel):
     stdev_adu: Optional[float] = Field(default=None, ge=0)
     exposure_s: Optional[float] = Field(default=None, ge=0)
     filter: Optional[str] = None
+    # §67 — geometria nota a NINA (Telescope.Airmass). SOLO telemetria in questa fase:
+    # nessuna decisione la consuma. Serve a misurare, su notti reali, quanta parte del
+    # calo del conteggio stelle è estinzione legittima invece che meteo.
+    airmass: Optional[float] = Field(default=None, ge=0)
 
 
 class NinaContext(BaseModel):

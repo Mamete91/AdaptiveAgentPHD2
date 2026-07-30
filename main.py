@@ -34,6 +34,8 @@ from phd2_agent.config import load_config
 from phd2_agent.nina_telemetry import NinaTelemetryStore
 from phd2_agent.nina_indices import TransparencyTracker
 from phd2_agent.recovery_hint import RecoveryHintTracker
+from phd2_agent.guide_health import GuideHealthTracker
+from phd2_agent.reconnect_log import ReconnectLogPolicy
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -158,6 +160,10 @@ def main():
         cloud_below=cfg.nina_indices.cloud_below,
         hysteresis=cfg.nina_indices.hysteresis,
         deadband_deficit=cfg.nina_indices.deadband_deficit,
+        ref_ratchet_enabled=cfg.nina_indices.ref_ratchet_enabled,
+        ref_release_half_life_min=cfg.nina_indices.ref_release_half_life_min,
+        ref_freeze_max_min=cfg.nina_indices.ref_freeze_max_min,
+        ref_session_floor_frac=cfg.nina_indices.ref_session_floor_frac,
     )
     controller.nina_store = nina_store
     controller.transparency_tracker = transparency_tracker
@@ -174,16 +180,23 @@ def main():
 
     recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state)
 
+    # §68 — osservabilità del canale di guida: misura soltanto (il latch vive nel
+    # plugin). Alimentato dagli eventi PHD2 nel loop, incluso LoopingExposures che
+    # fino a ora l'agente ignorava del tutto.
+    guide_health = GuideHealthTracker(cfg.guide_health)
+
     # --- Dashboard ---
 
     if not args.no_dashboard:
         try:
             from server import (start_server, set_global_state, set_nina_store,
-                                 set_transparency_tracker, set_recovery_hint_tracker)
+                                 set_transparency_tracker, set_recovery_hint_tracker,
+                                 set_guide_health)
             set_global_state(controller, analyzer, session_logger)
             set_nina_store(nina_store)
             set_transparency_tracker(transparency_tracker)
             set_recovery_hint_tracker(recovery_hint_tracker)
+            set_guide_health(guide_health)
             dash_thread = threading.Thread(
                 target=start_server,
                 kwargs={"host": cfg.dashboard.host, "port": cfg.dashboard.port},
@@ -222,16 +235,29 @@ def main():
     RECONNECT_DELAY = 10
     EVAL_INTERVAL = cfg.control.interval_seconds
 
+    # §69 — deduplica del retry: il log della notte 29/7 era per l'85% questo loop
+    # (8314 righe su 9716), e con la rotazione a 5 MB il rumore espelle la storia
+    # utile. Politica: primi tentativi per esteso -> soppressione -> battito raro
+    # -> sintesi al ritorno. Vedi phd2_agent/reconnect_log.py.
+    reconnect_log = ReconnectLogPolicy(
+        verbose_attempts=cfg.logging.reconnect_verbose_attempts,
+        heartbeat_minutes=cfg.logging.reconnect_heartbeat_minutes)
+
     while not _stop_event.is_set():
-        log.info("Connessione a PHD2...")
+        if not reconnect_log.suppressing:
+            log.info("Connessione a PHD2...")
         try:
             client.connect()
         except PHD2ConnectionError as e:
-            log.error("%s", e)
-            log.info("Riprovo tra %ds... (Ctrl+C per uscire)", RECONNECT_DELAY)
+            for act in reconnect_log.failure(str(e)):
+                getattr(log, act.level)("%s", act.message)
+            if not reconnect_log.suppressing:
+                log.info("Riprovo tra %ds... (Ctrl+C per uscire)", RECONNECT_DELAY)
             _stop_event.wait(RECONNECT_DELAY)
             continue
 
+        for act in reconnect_log.success():
+            getattr(log, act.level)("%s", act.message)
         log.info("Connesso. In attesa che PHD2 avvii la guida...")
 
         try:
@@ -253,6 +279,7 @@ def main():
                 eval_interval=EVAL_INTERVAL,
                 monitor_only=args.monitor_only,
                 recovery_hint_tracker=recovery_hint_tracker,
+                guide_health=guide_health,
             )
         except PHD2ConnectionError as e:
             log.error("Connessione PHD2 persa: %s", e)
@@ -310,6 +337,7 @@ def _event_loop(
     eval_interval: float,
     monitor_only: bool,
     recovery_hint_tracker: "RecoveryHintTracker | None" = None,
+    guide_health: "GuideHealthTracker | None" = None,
 ) -> None:
     """Loop principale che consuma la queue eventi di PHD2.
 
@@ -321,6 +349,20 @@ def _event_loop(
     last_eval = time.monotonic()
     is_settling = False
     hint_error_logged = False   # §63 — primo errore loggato, poi silenzio (mai spam)
+    gh_error_logged = [False]   # §68 — idem per l'osservatore del canale di guida
+
+    def _gh(method: str, *args) -> None:
+        """§63/§68 — un osservatore PASSIVO non deve mai poter abbattere il loop di
+        guida: primo errore loggato, poi silenzio."""
+        if guide_health is None:
+            return
+        try:
+            getattr(guide_health, method)(*args)
+        except Exception as e:
+            if not gh_error_logged[0]:
+                gh_error_logged[0] = True
+                log.error("guide_health.%s fallito (%s) — osservatore ignorato "
+                          "per il resto della sessione", method, e)
 
     import queue as q_module
     from server import sync_broadcast as _broadcast
@@ -357,6 +399,9 @@ def _event_loop(
             # §36 — la misura grezza di PHD2 e' in PIXEL: converti in arcsec all'ingest
             # con la pixel-scale VIVA (override PHD2 -> reduced/native). Kill-switch
             # convert_distance_to_arcsec (shipped ON); a OFF passa 1.0 (px grezzi).
+            # §68 — osservabilità del canale: aggiorna ENTRAMBI gli orologi + qualità frame.
+            _gh("on_guide_step", event)
+
             px_scale = (controller.cfg.setup.guide_pixel_scale_arcsec
                         if controller.cfg.analyzer.convert_distance_to_arcsec else 1.0)
             snapshot = analyzer.ingest_guide_step(event, pixel_scale=px_scale)
@@ -419,6 +464,9 @@ def _event_loop(
         elif event_name == "StarLost":
             snapshot = analyzer.ingest_star_lost(event)
             log.warning("StarLost - %s", event.get("Status", ""))
+            # §68 — la stella persa NON cambia l'attesa di guida: PHD2 sta ancora
+            # guidando (ci prova). Ma il frame esiste: ne registriamo la qualità.
+            _gh("on_guide_step", event)
 
             actions = []
             if not monitor_only and controller:
@@ -427,13 +475,33 @@ def _event_loop(
                     for a in actions:
                         log.info("%s", a)
 
+            # §68 (punto 5) — gli StarLost finivano SOLO in agent.log: nella forense
+            # del 26/7 è mancata proprio questa riga nel CSV di sessione.
+            session_logger.log_snapshot(snapshot, actions)
+
             try:
                 _broadcast({"type": "star_lost", "ts": time.time()})
             except Exception:
                 pass
 
+        elif event_name == "LoopingExposures":
+            # §68 — la camera espone ma NON si sta guidando (tipico dei tentativi di
+            # riaggancio). Prima l'agente ignorava del tutto questo evento: il canale
+            # poteva essere VIVO e sembrarci muto. Non tocca analyzer/controller.
+            _gh("on_looping_exposure", event)
+
+        elif event_name == "LoopingExposuresStopped":
+            _gh("set_guiding_expected", False, "PHD2 ha smesso di esporre (looping stopped)")
+
+        elif event_name == "Paused":
+            _gh("set_guiding_expected", False, "guida in pausa (annuncio PHD2)")
+
+        elif event_name == "Resumed":
+            _gh("set_guiding_expected", True, "guida ripresa (annuncio PHD2)")
+
         elif event_name == "StartGuiding":
             log.info("PHD2 ha avviato la guida")
+            _gh("set_guiding_expected", True, "guida avviata (annuncio PHD2)")
             analyzer.reset()
             if controller.diagnostic_engine is not None:
                 controller.diagnostic_engine.reset("guiding_restart")  # §39: cielo/campo nuovi -> azzera
@@ -446,6 +514,7 @@ def _event_loop(
 
         elif event_name == "GuidingStopped":
             log.info("PHD2 ha fermato la guida")
+            _gh("set_guiding_expected", False, "guida fermata (annuncio PHD2)")
             controller.mark_uninitialized()
             try:
                 _broadcast({"type": "guiding_stopped", "ts": time.time()})
@@ -455,6 +524,13 @@ def _event_loop(
         elif event_name == "AppState":
             state = event.get("State", "")
             log.info("PHD2 AppState: %s", state)
+            # §68 — stato autorevole di PHD2. "LostLock" = sta guidando ma ha perso la
+            # stella: la guida è comunque ATTESA. Gli altri stati (Stopped/Paused/
+            # Looping/Selected/Calibrating) sono pause ANNUNCIATE: nessun allarme.
+            if state in ("Guiding", "LostLock"):
+                _gh("set_guiding_expected", True, f"AppState={state}")
+            elif state:
+                _gh("set_guiding_expected", False, f"AppState={state}")
             if state == "Settling":
                 if not is_settling:
                     log.info("PHD2 AppState Settling: Pausa per Dither/Settling.")
@@ -486,7 +562,13 @@ def _event_loop(
                      event.get("MsgVersion", ""))
 
         elif event_name == "Alert":
-            log.warning("PHD2 Alert: %s", event.get("Msg", ""))
+            # §68 — l'Alert porta anche `Type` (info|question|warning|error): usiamo la
+            # SEVERITÀ strutturata, non il testo (robusto a traduzioni/riformulazioni).
+            # Il 26/7 "Lost connection to camera" arrivò 6 s dopo l'ultimo frame e
+            # veniva solo loggato.
+            log.warning("PHD2 Alert [%s]: %s",
+                        event.get("Type", "info"), event.get("Msg", ""))
+            _gh("on_alert", event.get("Msg", ""), event.get("Type", "info"))
 
         elif event_name == "GuideParamChange":
             log.debug("PHD2 GuideParamChange: %s", event)
@@ -522,7 +604,7 @@ def _make_simulator_client():
     t.start()
     time.sleep(0.5)
 
-    return PHD2Client(host="localhost", port=4400)
+    return PHD2Client(host="127.0.0.1", port=4400)   # §69
 
 
 if __name__ == "__main__":

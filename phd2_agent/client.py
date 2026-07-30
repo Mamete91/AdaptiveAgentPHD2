@@ -38,7 +38,7 @@ class PHD2Client:
 
     DEFAULT_TIMEOUT = 10.0  # secondi per le chiamate RPC
 
-    def __init__(self, host: str = "localhost", port: int = 4400):
+    def __init__(self, host: str = "127.0.0.1", port: int = 4400):   # §69
         self.host = host
         self.port = port
 

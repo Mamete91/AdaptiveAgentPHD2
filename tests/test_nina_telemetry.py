@@ -310,10 +310,12 @@ class TestGracefulAbsent(unittest.TestCase):
         server.set_global_state(None, None, None)
         body = _client().get("/status").json()
         self.assertEqual(set(body.keys()),
-                         {"timestamp", "controller", "analyzer", "nina", "recovery_hint"})
+                         {"timestamp", "controller", "analyzer", "nina", "recovery_hint",
+                          "guide_health"})
         self.assertFalse(body["recovery_hint"]["enabled"])   # tracker non registrato
         body.pop("nina")
         body.pop("recovery_hint")
+        body.pop("guide_health")   # §68 — osservabilità canale di guida
         self.assertEqual(set(body.keys()), {"timestamp", "controller", "analyzer"})
 
 

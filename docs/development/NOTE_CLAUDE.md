@@ -3367,3 +3367,235 @@ teorico fine dei 3 min è rimandato a più esperienza sul campo (decisione di Al
 (`LongSubs_CappedAtFieldValidatedTarget`) e clamp-test aggiornato → 41; tooltip EN/IT aggiornati col cap.
 Commit+push autorizzati esplicitamente ("miglioramento architetturale supportato dall'analisi; eventuali
 criticità dal cielo → commit correttivo").
+
+## 65. Il rientro da STAR_LOST guardava la QUALITÀ della guida invece della sua OPERATIVITÀ (2026-07-20)
+
+**Sintomo (Alessandro, sul campo):** "fa fatica a recuperare il cielo sereno" — con dashboard che mostrava
+CIELO LIMPIDO, indice N1 0.95, telemetria FRESH, e i parametri del percorso nubi già resi più aggressivi
+(ClearSafePolls 2, soglie indice 0.5/0.5) senza alcun beneficio.
+
+**Diagnosi (replay dei tick reali della notte 19/7).** Il ritardo non era sul percorso NUBI ma sul latch
+**STAR_LOST**, che si sbloccava solo con `guiding_state == "NORMAL"` per `ResumeTicks`. Ma NORMAL, in
+`controller._update_guiding_state`, richiede `rms < rms_low` = **75% della baseline**; nella banda neutra
+(`rms_low`→`rms_high`) lo stato **non viene aggiornato affatto**, e la guida normale vive proprio lì (baseline
+mediana 0.689"). Misure: solo **4 tick su 112 (3.6%)** hanno raggiunto NORMAL, tutti nell'ultimo minuto; il SAFE
+delle 03:27:16 è arrivato **18 minuti dopo** l'UNSAFE, con il cielo limpido per tutto il tempo e il rientro
+innescato da un tuffo casuale dell'RMS a 0.609". Non uno stallo assoluto: un'attesa **stocastica e scorrelata
+dal cielo**. Spiega anche il "disallineamento guiding_state ↔ Diagnostic Engine" rimasto aperto in §63.
+
+**Fix §65 (solo plugin, motore adattivo INTOCCATO).** Il criterio di uscita diventa il **complemento esatto**
+di quello d'ingresso: si entra in UNSAFE perché la stella è persa, si esce quando la stella è di nuovo
+tracciata. `isGuidingOperational = GuidingState ∉ {STAR_LOST, INACTIVE, null}`. Due argomenti a supporto della
+scelta degli stati: (1) **coerenza logica** — DEGRADED e CRITICAL non generano UNSAFE da soli, quindi non devono
+poterlo mantenere (uno stato che non basta a far scattare la protezione non può prolungarla); (2) **insieme
+canonico dell'agente** — `controller.py` usa già `(STAR_LOST, INACTIVE)` come "PHD2 NON in guida valida" per il
+gate della riselezione Path B: riusato quello invece di inventarne uno. `null` escluso per fail-safe (payload
+incompleto non è evidenza di stella tracciata). Isteresi `ResumeTicks` invariata: cambia QUALI stati contano,
+non per quanto.
+
+**Nota su CRITICAL (valutata, non accantonata):** guida attiva ma RMS > 1.5×rms_high è pessima per l'imaging —
+però quello è un giudizio di QUALITÀ, competenza del motore adattivo (che in CRITICAL sta già ammorbidendo le
+leve), non della safety; e il percorso NUBI resta a proteggere il caso "cielo davvero inutilizzabile". Escluderlo
+avrebbe reintrodotto una versione attenuata dello stesso stallo.
+
+**Nessun kill-switch aggiunto** (deviazione consapevole dalla dottrina): i kill-switch di §55 proteggevano nuove
+*escalation* verso UNSAFE (rischio falsi allarmi); qui si corregge un rientro che si è dimostrato difettoso, e
+un interruttore per ripristinare il difetto avrebbe valore nullo. L'insieme degli stati è comunque una
+condizione unica e nominata, banale da restringere. Disponibile ad aggiungerlo se Alessandro lo preferisce.
+
+**Test: 45 verdi** (+4: il caso di campo con DEGRADED; tutti gli stati tracciati; INACTIVE/null NON sbloccano;
+isteresi e azzeramento streak su ricaduta). La regressione originale su NORMAL continua a passare. Build 0/0,
+DLL reinstallata (hash-match). **NON committato: attende validazione sul cielo** (decisione di Alessandro).
+
+## 66. Il riferimento di N1 si auto-erodeva: cricchetto anti "rana bollita" (2026-07-20, agente v2.8.2)
+
+**Conferma sul cielo (Alessandro, in diretta).** L'ipotesi formulata in §65 si è materializzata: durante un
+degrado progressivo il riferimento scendeva insieme al cielo, rendendo il confronto sempre meno significativo.
+Da ipotesi a comportamento reale da correggere.
+
+**Causa.** `base_stars` era il rolling-high puro della finestra: **seguiva il cielo anche VERSO IL BASSO**.
+Numeratore e denominatore scendevano insieme → indice ~1.00 → CLEAR, mentre il cielo si dimezzava. Misurato al
+banco (36 pose da 5 min, −2%/posa, cielo al 48%): **§45 dava indice 0.842 = CLEAR** (rana bollita conclamata).
+
+**Strategie valutate.** (a) *Massimo di sessione*: scartato — al cambio di campo/target o con il calo legittimo
+per airmass produce una soglia **irraggiungibile** e uno stallo permanente. (b) *Pavimento relativo al massimo*:
+stessa patologia, solo ritardata (un calo legittimo oltre la soglia del pavimento resta bloccato). (c) *Doppio
+riferimento operativo*: due metri di paragone concorrenti = due superfici decisionali, complessità senza
+guadagno. (d) **CRICCHETTO ASIMMETRICO — scelta.** L'asimmetria è fisica, non arbitraria: *le nubi non creano
+stelle*, quindi un miglioramento è sempre evidenza legittima (adozione immediata), mentre un peggioramento è
+ambiguo (nube? airmass? campo nuovo?) e va trattato con prudenza.
+
+**Le tre regole** (`TransparencyTracker._ratchet`, vale per stelle e per fondo cielo):
+1. **Miglioramento → adottato subito.**
+2. **Stato già degradato (HAZE/CLOUD) → riferimento CONGELATO**: durante un evento il cielo non può riscrivere
+   la propria normalità (stessa disciplina di `snr_ref` in §57). Con **tetto** `ref_freeze_max_min=90` min,
+   tarato sulla durata reale degli eventi osservati (19→100 min).
+3. **Peggioramento a cielo sereno → RILASCIO LENTO**, emivita `ref_release_half_life_min=25` min misurata in
+   **tempo reale** (§57-bis: mai in campioni — indipendente dalla durata dei sub).
+
+**Difetto del mio primo design, trovato dal banco PRIMA del rilascio:** senza il tetto alla regola 2, un livello
+stabilmente più basso (cambio campo) congelava il riferimento **per sempre** → stallo permanente. Il tetto lo
+elimina: recupero misurato ~130 min nel caso peggiore.
+
+**Compromesso dichiarato e scelto consapevolmente** (tabella al banco, emivite 15/25/45/90 min): con emivita 25
+si rileva −2%/posa (0.563 → HAZE) e NON si rileva −1%/posa (0.857 → CLEAR). Quest'ultimo è **voluto**: un calo
+del 30% in 3 ore è indistinguibile dall'airmass di un target che scende, e segnalarlo produrrebbe falsi CLOUD
+non risolvibili. Il tetto di congelamento privilegia la **sicurezza sulla disponibilità** (§55): meglio fino a
+~2 h di riferimento conservativo dopo un cambio campo che l'erosione durante una nube di 100 minuti — e HAZE
+(0.5–0.8) è comunque **neutro** per N6, quindi solo un campo nuovo sotto il 50% mette in pausa.
+
+**Osservabilità (metodologia del progetto: prima si vede, poi si automatizza).** `/status.nina.transparency`
+espone ora `base_stars_session_best` (high-water per filtro) e `ref_drift_pct`; la card mostra
+"170/181 · best 188" con tooltip sulla deriva. Il massimo di sessione è **diagnostico puro**: non entra in
+nessuna decisione, proprio perché come attuatore sarebbe pericoloso.
+
+**Kill-switch** `[nina_indices] ref_ratchet_enabled=false` → comportamento §45 identico. **Test: 310 verdi**
+(+9 `test_transparency_ratchet.py`, tra cui la **controprova** che col kill-switch la rana bolle di nuovo, il
+test sul tetto anti-stallo e l'indipendenza dalla durata dei sub). ZIP **v2.8.2** rigenerato (regola §62), 2.8.1
+rimosso. NON committato: attende validazione sul cielo.
+
+## 67. Il contesto lo conosce già NINA: baseline per (target, filtro) + airmass (2026-07-20, agente v2.8.3)
+
+**Osservazione architetturale di Alessandro**, condivisa: il §66 doveva *dedurre* il cambio campo dal
+comportamento del conteggio stelle, quando NINA quel fatto **lo sa già**. Meglio riconoscerlo che inferirlo.
+
+**Verifica prima di progettare** — il segnale c'è, ed è più ricco del previsto: `ImageSavedEventArgs.MetaData`
+(che il forwarder ha già in mano a ogni posa) espone `Target.Name`, `Target.Coordinates` e
+`Telescope.Altitude/Azimuth/`**`Airmass`** (NINA la calcola già). E il contratto §41 **aveva già lo slot**:
+`NinaContext.target` esisteva per il futuro N2 e il plugin non lo popolava. Tutti i campi `Optional` → aggiunta
+compatibile in ENTRAMBE le direzioni (agente vecchio+plugin nuovo = ignorato; agente nuovo+plugin vecchio =
+None → fallback §66).
+
+**Scelta di design: chiave, non reset.** Alessandro proponeva "cambio target → reinizializza la baseline". Ho
+implementato invece **baseline indicizzata per (target, filtro)**, che è più pulita: nessun ordinamento/race da
+gestire (il target arriva INSIEME a ogni posa, l'associazione è intrinseca), tornare su un target già visto ne
+**ripristina gratis** la baseline, nessuna macchina a stati di reset da sbagliare, ed è la stessa estensione già
+usata per il filtro. Un target nuovo parte con indice ~1.00 = CLEAR invece che con un falso CLOUD da smaltire.
+
+**Conseguenze sul §66:** il tetto di congelamento (90 min) **retrocede a fallback** per l'eccezione (target
+assente, riprese manuali, degrado reale su target singolo) invece di essere il discriminatore principale.
+
+**Il best di sessione promosso da diagnostico a PAVIMENTO (regola 4).** Con la chiave per target il massimo di
+sessione non è più pericoloso — un campo nuovo ha una chiave nuova, quindi un high-water nuovo — e diventa
+quindi utilizzabile come vincolo: `ref >= ref_session_floor_frac × best(target, filtro)`, default **0.70**.
+Chiude il buco residuo del rilascio a tempo, che essendo illimitato nel tempo poteva comunque erodere il
+riferimento all'infinito. Margine sicuro: l'estinzione per airmass alle altezze d'uso reale vale pochi punti
+percentuali (70°→45° ≈ 5%), molto meno del 30% di margine. Sotto il pavimento la degradazione resta VISIBILE
+per sempre (a 50% del best → indice 0.71 = HAZE; a 35% → 0.5 = CLOUD).
+
+**Airmass: SOLO telemetria** (decisione esplicita di Alessandro). Viaggia nel payload, si logga, si mostra in
+dashboard accanto a filtro e target — nessuna decisione la consuma. Un test lo **blinda**: due sessioni identiche
+con airmass 1.0 e 2.5 devono dare lo stesso indice. Dopo qualche notte di dati reali si valuterà se usarla.
+
+**Test: 318 verdi** (+8 §67: cambio target senza falso allarme; ritorno al target precedente che ripristina la
+baseline; nube sullo stesso target ancora rilevata; retrocompatibilità senza target; airmass inerte; pavimento
+che tiene, che è per-target, e che è disattivabile). Plugin 45 verdi, build 0/0, DLL reinstallata (hash-match).
+ZIP **v2.8.3** (regola §62), 2.8.2 rimosso. NON committato: validazione sul cielo di §65+§66+§67 insieme.
+
+## 68. Osservabilità del canale di guida: l'ultimo canale scoperto — agente v2.9.0 + latch GUIDE_UNOBSERVABLE
+
+**Guasto di campo (26/7, forense).** Camera di guida in stato patologico (sospetta congestione USB: setup
+all-ZWO, USB Limit 70, "Failed to set ASI Control Value" nei log NINA). Sequenza reale ricostruita dai tick:
+23:06:22 StarLost → `guiding_state=STAR_LOST` per **5 secondi** → arrivano ancora GuideStep pessimi (rms 1.6")
+che riscrivono lo stato su **CRITICAL** → 23:06:43 **silenzio totale**. Lo stato resta congelato su un valore
+OPERATIVO e `/status` continua a servirlo come attuale. Tutti e quattro i latch muti: STAR_LOST mai consolidato
+(300 s richiesti, e con polling a 15 s c'era **2/3 di probabilità che N6 non vedesse nemmeno** quella finestra da
+5 s — aliasing di campionamento), CLOUD con cielo CLEAR 0.919, STALE gated su "ultimo cielo degradato",
+AGENT_LOST con agente vivo. Senza l'intervento manuale di Alessandro il monitor sarebbe rimasto **SAFE tutta la
+notte**. Il guasto è dovuto al solo difetto strutturale: l'`OSError` delle 23:13 era una chiusura manuale.
+
+**Principio.** Il consolidamento richiedeva **evidenza continuata del guasto**, ma questo guasto **distrugge il
+canale dell'evidenza**. La domanda giusta non è "la stella è persa?" ma **"posso ancora fidarmi del canale di
+guida?"** — che è §55 ("perdere l'osservazione affidabile è di per sé una condizione di rischio") finalmente
+esteso all'ULTIMO canale rimasto scoperto: NINA aveva STALE, l'agente aveva AGENT_LOST, PHD2 non aveva nulla.
+Confine §65 intatto: si misura l'OSSERVABILITÀ (binaria, oggettiva), non la QUALITÀ (continua, del motore).
+
+**Scoperta sul protocollo PHD2** (letto `event_server.cpp` vendorizzato, non a memoria): stavamo buttando via
+telemetria preziosa. `LoopingExposures` (camera che espone senza guidare — MAI gestito prima: il canale poteva
+essere vivo e sembrarci muto); `ErrorCode` per-frame con `Star::FindResult` (**SATURATED / MASSCHANGE** =
+esattamente la firma del frame corrotto da USB); `Alert.Type` **strutturato** (info|question|warning|error → via
+lo string-matching fragile); `StarMass` già parsato e mai consumato.
+
+**Agente (`guide_health.py`, misura e basta).** DUE orologi distinti: `frame_age_s` (ultimo frame QUALSIASI =
+osservabilità vera) e `guide_age_s` (ultimo GuideStep = da quanto non si guida). `guiding_expected` derivato
+dagli **annunci espliciti** di PHD2 (StartGuiding/GuidingStopped/Paused/Resumed/AppState) — è l'asimmetria che
+rende sicuro il gate: **le pause legittime PHD2 le annuncia, sui guasti tace**. Volutamente indipendente da
+`_lastKnownGuidingActive` del plugin: ripararlo avrebbe **disarmato STALE e AGENT_LOST** durante flip/autofocus
+(regressione individuata prima di scrivere codice — "sessione attiva" ≠ "guida in corso"). Più: conteggio
+ErrorCode per codice, severità Alert, dispersione robusta di StarMass (MAD/mediana: distingue il guasto
+ELETTRICO — salti erratici — dalla velatura — calo graduale). Disciplina §63: osservatore passivo in try/except,
+non può abbattere il loop. Kill-switch `[guide_health] enabled`.
+
+**Plugin (latch GUIDE_UNOBSERVABLE, decide).** Quinto latch INDIPENDENTE (non fuso in un punteggio: i pesi non
+sarebbero validabili e si perderebbe `LastCause`, cioè l'azione operativa distinta "vai a controllare camera/USB").
+Accumulatore **leaky** come §55 — non streak consecutivo, che è precisamente il difetto del Bug A rimasto sul
+canale guida. S1 fail-safe deterministico: silenzio > `GuideSilenceSeconds` (90 s) con guida attesa → accumula;
+frame che tornano → drena; cap `GuideUnobservablePolls` (3 ≈ 45 s). S2 corroborazione (Alert severo o ≥3
+ErrorCode recenti) **dimezza la soglia** ma non decide mai da sola — stesso paletto del §57. Retrocompat totale:
+agente <v2.9 non espone il blocco → latch inerte. Kill-switch in opzioni + toast/tooltip localizzati.
+
+**Latenza sul caso reale**: Alert a 6 s dall'ultimo frame → con corroborazione UNSAFE a ~90 s; senza, ~135 s.
+Contro "mai".
+
+**Test: 330 agente** (+12 `test_guide_health.py`) **e 52 plugin** (+6, incluso il caso 26/7 riprodotto:
+stato congelato su CRITICAL + cielo CLEAR + agente vivo → UNSAFE solo per il silenzio). Build 0/0, audit
+localizzazione 93/93 con 0 residui, ZIP **v2.9.0** e DLL reinstallata (hash-match). Punto 5 fatto: gli StarLost
+finiscono ora anche nel CSV di sessione (nella forense del 26/7 mancava proprio quella riga). NON committato:
+attende validazione sul cielo insieme a §65/§66/§67.
+
+## 69. Il pedaggio IPv6 su `localhost` e il rumore del log — agente v2.9.1 (2026-07-30)
+
+**Sintomo (Alessandro):** chiusura di NINA lenta, finestra congelata "parecchi secondi", due volte kill manuale.
+
+**Forense sui log NINA** (ricostruzione al millisecondo, due chiusure reali). Prima ho **scagionato** due
+sospetti miei: (a) i device si disconnettono in **238 ms** — l'ipotesi "USB/ZWO lento" cade; (b) il `Teardown`
+del plugin è `async` con `ConfigureAwait(false)` e non esiste un solo `.Wait()/.Result` in tutto il plugin —
+niente deadlock. Poi il dato: fra `Disconnected Safety Monitor` e il `200` del POST passavano **2807 ms**, di cui
+**2031 ms per il solo POST /shutdown** verso localhost. L'agente rispondeva all'istante (2-3 s per l'intero
+graceful, watchdog §59 mai scattato in 10 chiusure).
+
+**Causa:** il plugin chiamava `http://localhost:8080`; su Windows `localhost` risolve **prima a `::1` (IPv6)`**
+mentre uvicorn fa bind su `0.0.0.0` (**solo IPv4**) → ogni chiamata pagava il fallback.
+
+**Prova sperimentale** (Alessandro, endpoint → `127.0.0.1`, due sessioni): POST `/shutdown` **2031 ms → 5 ms**
+(fattore ~400); contributo totale del plugin **2807 → 239 ms**; sequenza visibile di chiusura **3043 → 402 ms**.
+Non variabilità: sparizione di un ritardo sistematico.
+
+**Fix.** `DefaultDashboardUrl` = `http://127.0.0.1:8080` + **migrazione one-shot** al Load: chi ha in
+`settings.json` esattamente il vecchio default passa a 127.0.0.1 (non era una scelta, era un default difettoso);
+un URL scelto a mano viene rispettato. Allineati anche i testi utente (help, fallback dashboard) e la
+LongDescription. **Il bind dell'agente NON cambia** (`cfg.dashboard.host = 0.0.0.0`): la dashboard resta
+raggiungibile da tutta la LAN via IP della macchina — sono due cose indipendenti (chi ascolta ≠ chi telefona).
+
+**Rumore del log (stessa milestone).** Misurato: **85% del log** della notte 29/7 (8314 righe su 9716) era il
+retry di connessione a PHD2 — 3 righe ogni 12 s per ore, con PHD2 chiuso e l'agente vivo insieme a NINA. Con la
+rotazione a 5 MB quel rumore **espelle la storia utile**. Nuovo `phd2_agent/reconnect_log.py`
+(`ReconnectLogPolicy`, logica pura + clock iniettabile, stile §57): primi N tentativi per esteso → **una** riga
+di soppressione → **battito** ogni 10 min → **sintesi** al ritorno ("PHD2 raggiungibile dopo N tentativi in X
+min"); un messaggio d'errore DIVERSO riporta subito in verboso. Il battito non è un vezzo: **il silenzio non è
+mai una prova** — senza, un lettore futuro non distingue "agente vivo che ritenta" da "agente morto", ed è
+l'ambiguità che è costata tempo in §63 e §68. Effetto misurato dal test: **un'ora di retry passa da ~700 righe a
+≤11**. Parametri in `[logging]`, battito disattivabile (0).
+
+**Test: 337 agente** (+7 `test_reconnect_log.py`, incluso il caso reale "un'ora di retry") **e 52 plugin**;
+build 0/0, audit localizzazione 93/93 con 0 residui; ZIP **v2.9.1** e DLL reinstallata (hash-match).
+
+**Terza modifica, autorizzata dopo il report — agente v2.9.2.** Anche `[phd2] host` pagava il pedaggio: nei log
+una connessione RIFIUTATA a PHD2 impiegava **2 secondi** (un ECONNREFUSED su loopback IPv4 è istantaneo), e la
+stessa latenza ricadeva sulla "riconnessione per restore baseline" allo shutdown. **Verifica di compatibilità
+sul sorgente PHD2 vendorizzato** (`event_server.cpp:2619`): il server eventi crea un `wxIPV4address`, quindi
+ascolta **SOLO su IPv4** — il tentativo IPv6 di `localhost` non può riuscire *per costruzione*, è latenza pura.
+Prova più forte di quella del plugin, dove l'IPv4-only di uvicorn era dedotto dal bind. Fix: default
+`127.0.0.1` in `PHD2Config`/`config.toml`/`PHD2Client` + **normalizzazione al load** del solo valore
+`"localhost"` (case-insensitive, con log). Invariante protetto da test: si normalizza l'INTENTO (loopback), mai
+la SCELTA — IP, hostname di rete e `::1` passano inalterati, e il **bind della dashboard resta `0.0.0.0`**
+(altra cosa: è ciò che la rende raggiungibile da LAN). +6 test → **343 verdi**, ZIP **v2.9.2**.
+
+**Aperti, con evidenza, NON risolti qui:**
+1. **Thread-affinity WPF**: `AgentHealthChecker: a StatusChanged subscriber threw (The calling thread cannot
+   access this object...)` — il VM del pannello aggiorna badge/pulsante dal thread del timer senza marshalling
+   (View e SafetyMonitor invece marshallano). Catturata, safety prosegue, ma il badge non si aggiorna. Race.
+3. **WebView2 mai disposto** nel pannello dashboard: difetto reale (risorse), ma **scagionato** dai ~3 s
+   misurati — sta tutto DOPO l'ultima riga di log di NINA, zona cieca.
+4. Le chiusure con **kill manuale** si sono piantate durante la disconnessione della **montatura**, prima ancora
+   che il nostro Teardown venisse raggiunto: fuori dal nostro perimetro.
