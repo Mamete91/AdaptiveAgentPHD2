@@ -62,6 +62,7 @@ class TransparencyTracker:
         self._now = now_fn                              # iniettabile nei test (clock finto)
         self._degraded_since: Optional[float] = None    # inizio dell'evento degradato corrente
         self._target: Optional[str] = None              # §67 — target corrente (da NINA)
+        self._session_target: str = ""                  # §70 — ultimo target DICHIARATO
         self._last_airmass: Optional[float] = None      # §67 — solo telemetria
 
         self._lock = threading.Lock()
@@ -109,11 +110,26 @@ class TransparencyTracker:
         # tornando su un target già visto se ne ritrova la baseline, gratis).
         # Retrocompat: plugin vecchio / riprese manuali -> target assente -> chiave ("",
         # filtro) = identica al comportamento §45/§66.
-        target = ((payload or {}).get("context") or {}).get("target") or ""
-        target = target.strip() if isinstance(target, str) else ""
-        key = (target, filt)
+        declared = ((payload or {}).get("context") or {}).get("target") or ""
+        declared = declared.strip() if isinstance(declared, str) else ""
 
         with self._lock:
+            # §70 — EREDITARIETÀ DEL CONTESTO (regressione trovata sul campo il 3-4/8).
+            # Le immagini della Recovery Probe nascono nel Trigger On Unsafe, FUORI dal
+            # contenitore target di NINA: arrivano sempre SENZA `context.target`. Con la
+            # sola regola §67 aprivano una chiave vergine ("", filtro) e la baseline si
+            # auto-inizializzava dal campione stesso: 7 stelle / rif 7 = indice 1.00 PER
+            # COSTRUZIONE -> falso CLEAR -> falso SAFE sotto nubi fitte (23:48 del 3/8).
+            # Regola: un'immagine che NON dichiara un target appartiene al contesto di
+            # sessione corrente (ultimo target dichiarato da una light). Durante l'UNSAFE
+            # la sequenza è interrotta, quindi il contesto NON può essere cambiato; al
+            # cambio target reale le nuove light lo dichiarano e il contesto si aggiorna.
+            # Senza alcun target mai dichiarato si resta su ("", filtro) = pre-§67.
+            if declared:
+                self._session_target = declared
+            target = declared or self._session_target
+            key = (target, filt)
+
             stars = self._stars_by_filter.setdefault(key, deque(maxlen=self.window))
             bkgs = self._bkg_by_filter.setdefault(key, deque(maxlen=self.window))
             stars.append(sc)

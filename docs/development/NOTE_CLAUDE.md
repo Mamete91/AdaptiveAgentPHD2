@@ -3599,3 +3599,466 @@ la SCELTA — IP, hostname di rete e `::1` passano inalterati, e il **bind della
    misurati — sta tutto DOPO l'ultima riga di log di NINA, zona cieca.
 4. Le chiusure con **kill manuale** si sono piantate durante la disconnessione della **montatura**, prima ancora
    che il nostro Teardown venisse raggiunto: fuori dal nostro perimetro.
+
+## 70. La sonda che si confrontava con se stessa: ereditarietà del contesto — agente v2.9.3 (2026-08-04)
+
+**Prima uscita reale del recupero post-§67 (notte 3-4/8) e prima regressione del §67, trovata dal campo.**
+Prova documentale nei nomi file di NINA (token `$$TARGETNAME$$`): le light di sequenza sono `LIGHT_H_Abell 61_…`,
+le immagini della Recovery Probe sono `LIGHT_H__…` — **doppio underscore, target vuoto**. La RecoveryProbe vive
+dentro Trigger On Unsafe, alla radice della sequenza, FUORI dal contenitore target: NINA risolve
+`MetaData.Target` risalendo la catena dei contenitori e per la sonda non trova nulla. Strutturale: OGNI immagine
+di sonda nasce senza target.
+
+**Catena del guasto** (tre log incrociati: agent.log + CSV + log NINA): UNSAFE 23:35 (STAR_LOST, corretto) →
+sonda #1 senza target → forwarder omette `context` (riga 150) → chiave §67 `("","H")` MAI vista → bootstrap
+`refs[key]=candidate` → **7/7 = indice 1.00 per costruzione** → N1 CLOUD→CLEAR (23:43:05) → il falso CLEAR drena
+l'accumulatore nubi → **falso SAFE 23:48 sotto nubi fitte**. Sonda #2 (32 stelle): cricchetto regola 1 sulla
+chiave orfana (32>7) → 32/32=1.00. La prima light vera (00:08, CON target) è rientrata sulla chiave giusta:
+130/263 = 0.49 VELATURE → UNSAFE#2 corretto. Nota: il "32/32 dopo il SAFE" che sembrava una posa era la CODA
+della sonda #2 (loop chiuso a SAFE già dichiarato); la STANTIA 847s era il flip al meridiano (23:53-56). Anche il
+recupero finale "giusto" (284/284, 356/356 su O) passava dallo stesso percorso rotto: `("","O")` era un'ALTRA
+chiave vergine — esito corretto solo perché il cielo era davvero tornato. Con la chiave pre-§67 (solo filtro) la
+sonda avrebbe detto 7/264=0.03 CLOUD: **il §67 ha spezzato in silenzio il contratto su cui la sonda si regge**
+("replica il sub interrotto — obbligatorio per l'indice di trasparenza", §57-bis). I test §67 validavano le
+light; il percorso sonda-contro-baseline non era mai stato esercitato (integration test rimandato; 27/7 senza
+UNSAFE).
+
+**Fix (§70, nina_indices.ingest, dentro il lock):** un'immagine che NON dichiara un target non apre una chiave
+propria — **eredita il contesto di sessione corrente** (`_session_target` = ultimo target dichiarato da una
+light). Robusto per costruzione: durante l'UNSAFE la sequenza è interrotta → il contesto non può cambiare; al
+cambio target reale le nuove light dichiarano e il contesto si aggiorna; senza alcun target mai dichiarato →
+chiave ("", filtro) = pre-§67 (retrocompatibile, validato mesi). L'ereditarietà riguarda il TARGET, il filtro
+resta quello del payload (la sonda espone col vetro montato: il 3/8 ciclo 2 era O — corretto così). Il fix cura
+TUTTI i produttori di immagini orfane, non solo la sonda. Limiti onesti, documentati: (a) riavvio agente durante
+UNSAFE → contesto perso → prima sonda post-riavvio bootstrappa — proprietà pre-esistente delle baseline
+in-memoria, non di questo fix; (b) UNSAFE nel varco slew→prima-light di un target nuovo → sonda ereditа il
+target precedente — identico al comportamento pre-§67, mai stato un problema sul campo.
+
+**Cambio di comportamento ATTESO da segnalare:** col fix, un evento nubi che scavalca il meridiano tiene UNSAFE
+finché il cielo non torna davvero → il flip avviene DOPO, alla ripresa (il 3/8 il flip delle 23:53 è "andato in
+orario" solo grazie al falso SAFE). La protezione a cavallo del meridiano è di NINA (19/7: flip bloccato in
+unsafe, "Stopping tracking instead") — dominio suo, comportamento corretto nostro.
+
+**Test:** `tests/test_target_inheritance.py` — replay fedele del 3/8 come regressione permanente (sonda 7 stelle
+→ DEVE dire 0.03 CLOUD; 32 → 0.12 CLOUD; light 130 → 0.49 come sul campo; recupero reale 284 → CLEAR) + regole
+di contesto (nessun-target-mai = pre-§67; cambio target aggiorna; filtri separati nel target ereditato).
+**349 verdi.** ZIP **v2.9.3**. Plugin NON toccato. NO commit (validazione cielo prima).
+
+### 70-bis. Flip al meridiano sotto UNSAFE prolungato — comportamento NINA verificato (log 19/7 + sorgente)
+
+Domanda di Alessandro dopo il §70 (che rende possibile un UNSAFE *onesto* a cavallo del meridiano). Risposta
+verificata su DUE fonti: il log NINA del 19/7 (lo scenario è GIÀ successo sul suo setup: UNSAFE 02:15→03:01,
+deadline flip 02:38) e `MeridianFlipTrigger.cs` (develop).
+
+**Catena:** (1) il trigger del flip VIENE valutato anche a sequenza parcheggiata (§61: RunTriggers risale ai
+parent — provato dal log: valutazioni alle 02:38 con park dalle 02:15). (2) Deadline oltrepassata con monitor
+unsafe → NON flippa: `Safety Monitor connected and reports unsafe conditions. Flip should happen but it is
+unsafe. Stopping tracking instead.` → `telescopeMediator.SetTrackingEnabled(false)` — montatura congelata
+appena oltre il meridiano, pier protetto. (3) Da quel momento il trigger SI AUTO-ESCLUDE: `Telescope is not
+tracking. Skip flip evaluation` (ShouldTrigger → false se non traccia). (4) **NESSUN percorso di codice riavvia
+il tracking** — verificato sul sorgente: zero occorrenze di ripresa. (5) Esiste una finestra di "delayed flip"
+(~11-12 h post-meridiano) che recupererebbe il flip tardivo (è il percorso visto il 3/8 alle 23:53) — ma è
+raggiungibile SOLO con tracking attivo: dopo lo stop di sicurezza è lettera morta.
+
+**Conseguenza sistemica (deadlock, BY DESIGN di NINA):** tracking fermo → stella di guida deriva a velocità
+siderale → StarLost continuo → latch STAR_LOST armato → mai SAFE; e le sonde stesse, su montatura ferma,
+producono campo strisciato → star detection collassa → N1 resta CLOUD anche sotto cielo PERFETTO. Il sistema
+non può uscirne da solo: **nubi che attraversano il meridiano in unsafe = notte finita su quel target**, chiusa
+con grazia solo dalle condizioni di fine sequenza (§61: alba/ora — il loop di recovery viene cancellato, park/
+warm finali eseguiti). Fail-safe stretto: nulla si rompe, la montatura è protetta.
+
+**Recupero operatore = UN click:** riattivare il tracking siderale dal pannello montatura di NINA. Alla
+valutazione successiva il trigger vede il pier sbagliato → "Flip should happen now" → flip tardivo completo
+(slew, recenter, stella guida, ripresa autoguida) da solo. Il 3/8 il flip "in orario" delle 23:53 fu un
+sottoprodotto del falso SAFE — coincidenza, non feature.
+
+**Roadmap (non implementato, da discutere):** §72 candidato — toast del plugin quando il flip viene mancato per
+unsafe ("al ritorno del sereno riattivare il tracking"): il plugin ha accesso ai mediator NINA, costo piccolo,
+valore operativo alto. Cintura extra lato hardware: verificare il comportamento al meridiano impostato nel
+firmware CEM70G (limite proprio della montatura, indipendente da NINA).
+
+## 71. Il gate della sonda sul "canale pronto" — agente v2.10.0 + plugin v1.9.0.0 (2026-08-04)
+
+**Origine:** riflessione di Alessandro dopo la notte 3-4/8 — la sonda #1 partì alle 23:38, nel minuto PEGGIORE
+del canale guida (0/21 frame con stella), quando il suo esito era scontato. Il canale guida è il sensore
+GRATUITO e continuo (3 s); la sonda quello COSTOSO e discreto (300 s): il gratuito deve decidere QUANDO il
+costoso vale la pena. È il duale dell'hint S2 (stesso strumento fisico, polarità opposte): S2 accelera, §71
+dirada.
+
+**Forma: consenso AND di condizioni binarie SOSTENUTE — mai uno score pesato** (anti-§68: i pesi non si
+validano sul cielo e un punteggio non spiega COSA manca). Asticella DELIBERATAMENTE sopra il criterio di PHD2
+(che si dichiara "guiding" all'istante dell'aggancio): il riaggancio-lampo del 3/8 alle 23:40 (41% di frame
+utili, ripersa subito) resta respinto; le 23:47 (86% sostenuto) aprono. Condizioni (`_channel_ready`,
+guide_health.py): frame che fluiscono (≤10 s), frazione tracciata ≥70% su 90 s con base statistica minima (10
+campioni — mai "pronto per assenza di prove"), ≤2 ErrorCode recenti, nessun Alert severo. Ogni condizione ha la
+sua reason loggabile; `/status.guide_health.channel_ready` + reasons + tracked_fraction. Nuovo `on_star_lost()`
+(lo StarLost È un frame — canale vivo, stella no; prima finiva in on_guide_step).
+
+**Lato plugin: DEFERRER, mai veto.** `RecoveryProbeGate.Evaluate(..., channelReady)`: a canale dichiarato NON
+pronto la S1 slitta, MAI oltre `AutoCeilingSeconds` (900 s, la costante §64) — sotto canale morto le sonde al
+tetto sono pura diagnosi (i latch guida §65/§68 impediscono comunque il resume). Invarianti blindati nei test:
+**S2 prioritario assoluto** (hint ⇒ gate aperto), **fail-open** su null (agente vecchio/irraggiungibile/
+kill-switch ⇒ comportamento pre-§71), min-interval sovrano. Kill-switch `ProbeChannelGateEnabled` (default ON).
+Replay 3/8 nei test agente (progressione 0%→41%→86%) e 26/7 (canale muto: mai pronto, tetto unica via).
+
+## 72. MERIDIAN_PROTECTION: la finestra che evita il deadlock del flip — plugin v1.9.0.0 (2026-08-04)
+
+**Problema (§70-bis, verificato su log 19/7 + sorgente):** flip deadline in unsafe → NINA non flippa, ferma il
+tracking, e NULLA lo riavvia → stella in deriva (STAR_LOST perenne) + sonde strisciate (N1 CLOUD anche a cielo
+perfetto) → il monitor perde TUTTI gli occhi insieme → mai più SAFE → notte finita. **Idea di Alessandro**,
+principio: il nostro monitor DEVE osservare per decidere (§55); una protezione che acceca l'osservatore è essa
+stessa un guasto di sicurezza. Il flip è una necessità GEOMETRICA della sessione, non un giudizio sul cielo →
+MERIDIAN_PROTECTION = **autoprotezione del monitor**, non deroga.
+
+**Vincolo che decide la forma: IsSafe è UN bit, broadcast.** Lo stato può esistere internamente, ma verso NINA
+si proietta solo come finestra LIMITATA di Safe riportato. "Solo il flip" non lo impone il canale (impossibile):
+lo impongono TIMING (apertura a lead min dalla deadline → il flip parte per primo per costruzione, "no more
+remaining time") e REVOCA (pier cambiato → chiusa → l'unsafe onesto ri-parcheggia entro un ciclo; al più un
+inizio di posa interrotto). **Verifica pregiudiziale sul sorgente NINA (MeridianFlipVM):** il flip riattiva il
+tracking PRIMA dello slew e su OGNI percorso d'errore ("Re-enable Tracking after meridian flip error"); recenter
+"best effort, so always return true" → sotto nubi il flip si completa meccanicamente. Seconda pregiudiziale
+(altri consumatori di IsSafe): censimento dell'operatore — **nessuno, solo NINA**.
+
+**Implementazione:** `MeridianProtectionEngine` (macchina a stati PURA: Idle→Open→Idle/Lockout, clock
+iniettabile) + coordinator nel monitor. `_internalSafe` = stato ONESTO dei latch (MAI toccati);
+`IsSafe = _internalSafe || windowOpen`. Apertura: unsafe interno + montatura connessa + pier west + deadline
+(meridiano + MaxMinutesAfterMeridian del profilo, HA da LST−RA) entro lead (default 4 min). Chiusure: pier
+cambiato (flip fatto, toast); TIMEOUT 20 min senza flip → **LOCKOUT** (niente riaperture = mai oscillazioni
+safe/unsafe cicliche; toast col rimedio manuale); safe reale/mount perso/kill-switch. **Ex-post:** se il
+tracking è GIÀ fermo (finestra nata tardi, o deadlock pre-esistente) lo riattiva UNA volta per finestra dentro
+la finestra — il flip tardivo scatta alla valutazione successiva del trigger (finestra delayed ~11-12 h del
+sorgente). Fail-inert totale: mount assente/pier ignoto/eccezione → finestra chiusa, tick N6 mai abbattuto.
+Riga diagnostica: `meridian[OPEN|idle] internal=… reported=…`.
+
+**Born-operative (decisione di Alessandro, agli atti):** nel perimetro attuale l'unico consumatore di IsSafe è
+NINA e il rischio reale è il deadlock, non l'autorizzazione impropria di altri dispositivi. **Da rivalutare se
+compariranno tetti/cupole/osservatori che consumano IsSafe** (annotato anche nell'help delle impostazioni).
+Lead configurabile 1-10 min; kill-switch `MeridianProtectionEnabled`.
+
+**Nuove dipendenze plugin:** `ITelescopeMediator` + `IProfileService` via MEF nel costruttore →
+`AgentServices.AttachNinaServices` (nullable: senza aggancio la protezione è inerte).
+
+**Test: 354 agente e 63 plugin** (+7 §72: aperture condizionate, chiusura su pier change, tetto+lockout senza
+riaperture, ex-post una-volta-sola, fail-inert; +4 §71 gate). Build 0/0, audit 103/103 con 0 residui, ZIP
+**v2.10.0** + DLL **1.9.0.0** installata (hash-match). NO commit: validazione sul cielo prima — con §70 la
+prossima nuvolata a cavallo del meridiano è il banco di prova naturale di tutto il blocco §70-§72.
+
+## 73. Lo stato del Safety Monitor nella dashboard — agente v2.11.0 + plugin v1.10.0.0 (2026-08-04)
+
+**Richiesta di Alessandro:** dopo §71/§72 il monitor "non è più una funzione interna: è un protagonista della
+sessione". Sostituire il toggle MODALITÀ TEST (spazio prezioso, utilità operativa ormai nulla) con un indicatore
+di stato del Safety Monitor, uno solo alla volta, con tooltip esplicativi.
+
+**Vincolo architetturale trovato subito (determina la forma).** La decisione di sicurezza vive nel PLUGIN
+(latch, causa, finestra §72); la dashboard la serve l'AGENTE, che di tutto questo non sa nulla. Serviva quindi
+un flusso NUOVO plugin → agente. Non un polling inverso (l'agente non deve interrogare NINA: dipendenza
+capovolta, e il monitor potrebbe non esistere): il plugin **pubblica** a ogni tick su `POST /nina/safety`,
+l'agente conserva e riespone su `/status.safety`. Direzione sola: nessuna risposta dell'agente influenza il
+monitor.
+
+**Nessuno stato inventato.** Alessandro aveva proposto anche RECOVERY_OBSERVATION / RECOVERY_PENDING: non
+esistono nel `SafetyDecisionEngine` e fabbricarli avrebbe creato una mappa UI→realtà falsa. Gli stati VERI sono
+tre — SAFE, UNSAFE, MERIDIAN_PROTECTION — e per l'UNSAFE è la CAUSA a fare lo stato visibile, perché la causa è
+l'azione operativa distinta ("guarda la camera di guida" ≠ "aspetta che passi la nuvola"): STAR_LOST, NUBI,
+TELEMETRIA STANTIA, AGENTE PERSO, GUIDE_UNOBSERVABLE (⚫ suo, come chiesto). L'intenzione dietro
+RECOVERY_* è però reale e utile, e vive nella **riga di dettaglio**, composta dalla dashboard con dati che
+l'agente ha già: "sonda differita — stella instabile (41% tracciata)" (§71), "canale guida pronto — in attesa
+della sonda". Così si vede il PERCHÉ della decisione senza inventare stati.
+
+**Invariante difeso (§55 esteso alla presentazione): l'assenza di notizie non è mai "sicuro".** Lo store ha
+freschezza (60 s = 4 tick persi): plugin muto, NINA chiusa o monitor scollegato → **UNKNOWN ⚪**, mai un verde
+residuo lasciato sullo schermo. Un UNSAFE stantio non decade in SAFE (test dedicato). `Disconnect()` pubblica
+esplicitamente `connected=false`. Stato non riconosciuto (versione futura) → rifiutato, non indovinato: lo
+stato precedente resta.
+
+**§72 reso visibile:** dentro la finestra il RIPORTATO diverge dall'INTERNO — il chip dice MERIDIAN PROTECTION
+🔵 e il tooltip aggiunge "Valutazione interna: ancora UNSAFE". È esattamente il caso in cui l'osservatore deve
+capire perché la sequenza si muove sotto un cielo cattivo.
+
+**Correzione architetturale in corsa (trovata dall'audit §60):** la prima versione faceva mandare al plugin una
+stringa di dettaglio in italiano — ma il plugin è localizzato EN/IT e la dashboard ha una lingua sua: due
+sistemi di localizzazione sullo stesso testo. Ora **il plugin invia FATTI (stato, causa), la dashboard mette le
+PAROLE**. Audit di nuovo a 0 residui.
+
+**Bug intercettato prima del campo:** rimuovendo il toggle restava `el('dry-run-switch').checked = isDryRun` in
+`applyFullStatus` → `TypeError` a OGNI refresh → dashboard congelata. Trovato con una verifica di residui, non
+dai test (la dashboard non ne ha). Da valutare: smoke test headless della dashboard.
+
+**Sul toggle rimosso:** si è tolto l'INTERRUTTORE, non la funzione. `dry_run` resta impostabile da
+`config.toml` [control] e da CLI `--dry-run`, e la modalità resta VISIBILE nel `mode-badge` sotto. Il colore del
+chip è sempre ridondante col testo: mai affidare a un colore da solo un'informazione di sicurezza.
+
+**Test: 363 agente** (+9 `test_safety_state.py`, incluso "un UNSAFE stantio non diventa mai SAFE") **e 63
+plugin**; build 0/0, audit 103/103 con 0 residui; ZIP **v2.11.0**, DLL **1.10.0.0** installata (hash-match).
+NO commit: validazione sul cielo con l'intero blocco §70-§73.
+
+### 73-bis. Il badge del canale guida, e una mia disonestà corretta — agente v2.11.1
+
+**Da una revisione esterna (GPT, relayed da Alessandro)** che chiedeva di rappresentare il gate §71 come
+INFORMAZIONE ACCESSORIA e non come nuovo stato del monitor — "il §71 non modifica il Safety Monitor, modifica
+il comportamento della Recovery Probe". Osservazione corretta e già rispettata nella struttura (§73 non ha mai
+creato uno stato per il gate). Ma rileggendo la riga di dettaglio con quella lente, **commetteva in piccolo
+proprio il peccato che avevo criticato**: diceva *"sonda differita"* e *"in attesa della sonda"* — affermazioni
+sulla Recovery Probe che l'Agente NON PUÒ conoscere. L'Agente misura il canale; non sa se una sonda sia in
+corso, né se una RecoveryProbe esista affatto nella sequenza dell'utente. Con una sequenza priva di sonda la
+dashboard avrebbe dichiarato differita una posa inesistente.
+
+**Corretto:** la riga dichiara ora solo il FATTO MISURATO (*"stella instabile (41% tracciata)"*, *"canale guida
+stabile"*), e la conseguenza sulla sonda vive nel tooltip **al condizionale** ("le pose-sonda di recupero, SE
+attive, restano differite... mai oltre 15 minuti"). Aggiunto il badge accessorio richiesto — `CANALE NON PRONTO`
+(arancio) / `CANALE PRONTO` (giallo) — deliberatamente piccolo e subordinato al chip: la grafica non deve
+suggerire che il gate sia uno stato del monitor. Visibile solo con UNSAFE + §68 abilitato + segnale presente
+(assente ⇒ nascosto, mai un badge che finge di sapere).
+
+**Nuovo controllo automatico:** lo script di verifica ora estrae ogni `el('id')` da app.js e ne verifica la
+presenza in index.html. È il bug del §73 (`dry-run-switch` orfano ⇒ TypeError a ogni refresh) trasformato in
+controllo ripetibile — la dashboard resta senza test propri, ma questa classe di errore ora non passa più.
+
+**Due imprecisioni della revisione, per gli atti** (non cambiano le conclusioni): (a) `GUIDE_UNOBSERVABLE` è
+una CAUSA di UNSAFE, non uno stato con una causa dentro; (b) non esiste un "UNSAFE HAZE" — HAZE è la zona
+NEUTRA dell'accumulatore §55, quella che deliberatamente NON fa scattare nulla: la causa è CLOUD. (c) Il
+"domani aggiungi una lingua senza toccare il plugin" vale come principio, ma la dashboard oggi è
+monolingua italiana hard-coded: la separazione è pronta, la capacità multilingua della dashboard no.
+
+**363 test verdi**, ZIP **v2.11.1**. Plugin invariato (1.10.0.0). NO commit.
+
+## 74. Pannelli dinamici: lo spazio in proporzione all'attività — agente v2.12.0 (2026-08-04)
+
+**Principio (Alessandro):** *"l'informazione più importante non è tutto ciò che esiste, ma ciò che sta
+succedendo adesso"*. Osservazione nata dal campo: il Controller INACTIVE occupa un terzo dello schermo per ore
+mostrando Aggressività e MinMove — valori leggibili in PHD2 e privi di valore operativo finché il motore non
+interviene. La dashboard smette di essere una pagina di telemetria e diventa un cruscotto.
+
+**Due categorie.** SEMPRE VISIBILI = stato generale che l'operatore deve poter consultare in qualsiasi momento
+(Safety Monitor §73, Trasparenza, Recovery, grafico guida, stato Agente, e il ciclo motore §63 — è la spia di
+"il motore è vivo", non un dettaglio interno). DINAMICI = attività interna del motore: Controller, Esposizione
+Dinamica, Escalation Gate, Adaptive MinMove.
+
+**Tre regole, scelte per non nascondere mai ciò che conta:**
+1. **Attività → apre SEMPRE**, anche se l'operatore l'aveva chiuso a mano: un intervento del motore deve
+   attirare l'occhio, è tutto lo scopo della modifica.
+2. **Quiete → richiude dopo 120 s, MA MAI un pannello aperto dall'operatore** (pin 📌): una scelta esplicita non
+   viene mai contraddetta dall'automatismo.
+3. **Da chiuso la barra porta comunque lo STATO** (chip): l'informazione essenziale non sparisce, si comprime.
+Il Log Decisioni resta la memoria persistente: richiudere non perde nulla di forense.
+
+**Segnali di attività, tutti verificati sui campi reali di `controller.get_status()`** (nessuno inventato):
+Controller = `engine.actions_total` che cresce (EVENTO, non stato: è l'intervento vero); Esposizione = stato
+≠ NOMINAL, o `steps_above_base` > 0, o cooldown in corso; Escalation Gate = `ra || dec` saturato (gate APERTO,
+path B può agire); Adaptive MinMove = **`clamping_active`**, non `cap_active`. Quest'ultimo è l'affinamento
+importante: il controller espone due flag distinti — `cap_active` = il cap ESISTE (baseline pronta),
+`clamping_active` = il cap ha davvero TAGLIATO una richiesta (§0-bis). "Spazio in proporzione all'attività"
+significa il secondo: un cap pronto che non taglia nulla non sta lavorando. Chip a tre valori:
+NON ATTIVO / PRONTO / STA LIMITANDO.
+
+**Implementazione a rischio minimo: nessuna modifica strutturale all'HTML.** Il wrapping (header cliccabile +
+`div.panel-body` richiudibile) avviene a runtime in `setupDynamicPanels()`: tutti gli id restano dove sono e
+ogni funzione di aggiornamento esistente continua a trovare i propri elementi invariata. Il chip di stato si
+aggiunge SOLO se l'header non ha già un badge suo (Adaptive MinMove ce l'ha) — niente informazione duplicata.
+Un `try/catch` per pannello: uno che sbaglia non rompe il refresh degli altri.
+
+**Verifiche:** oltre alla suite (363 verdi, invariata: la dashboard non ha test propri), **smoke test HTTP
+reale** — server avviato, `/` 20.5 kB, `/status` con tutti i blocchi, `app.js` servito con le nuove funzioni — e
+**test end-to-end del canale §73**: POST UNSAFE/CLOUD → riflesso corretto; MERIDIAN_PROTECTION con
+`internal_safe=false`; stato ignoto → `accepted:false` e stato precedente intatto; `connected:false` → UNKNOWN.
+Più il controllo automatico degli id orfani (§73-bis). ZIP **v2.12.0**, plugin invariato (1.10.0.0). NO commit.
+
+**Prossimo incremento concordato (non fatto):** tooltip a due livelli — primo livello sintetico (cos'è, perché
+conta, **origine del dato**: PHD2 / NINA / Safety Monitor / Agente), secondo livello "Approfondisci" solo per
+gli elementi complessi. Solo hover, niente gestione touch (uso reale = browser su PC). Prerequisito già
+identificato: esporre su `/status` le soglie citate, perché un tooltip non deve mai scrivere in prosa un numero
+configurabile. Da fare DOPO la validazione sul cielo, quando i valori diagnostici si saranno visti muovere.
+
+## 75. Fine ciclo dell'AI Finder: un interruttore che peggiorava il sistema — agente v2.13.0 (2026-08-04)
+
+**Domanda di Alessandro, applicando la regola del §74** ("un elemento esiste perché rappresenta qualcosa che il
+sistema fa realmente"): che ruolo ha oggi il toggle "AI Finder (Forzato)"? Promuoverlo a sottosistema vivo o
+chiuderne il ciclo?
+
+**Indagine sul codice** (con una mia correzione in corsa: avevo concluso troppo in fretta che scipy non fosse
+nel distribuibile — c'era, il mio `head -3` aveva troncato l'elenco prima della "s"). Fatti:
+- il toggle NON era una statuina: era agganciato al motore, ma **in un solo punto** — `_evaluate_star_lost()`,
+  il ramo di recupero dopo la perdita stella;
+- funzionava davvero (star_finder.py + scipy negli hidden import dello .spec);
+- **spento di default** e con **zero test** su 363;
+- **scavalcava il backoff §17** — i tre tier nati dopo l'incidente reale delle 130+ chiamate a `find_star` in
+  6 minuti su camera crashata via USB. Le NOTE §17 lo dicevano candidamente: *"Il backoff non è applicato lì
+  (scenario meno critico)"*. Dopo il **26/7** quella valutazione non regge più: acceso su una camera in crisi
+  l'agente avrebbe fatto save_image + analisi scipy ogni 10 s **senza freno**, caricando proprio il bus che
+  stava soffocando;
+- il suo unico valore differenziale — rilevare la **saturazione** — è oggi coperto per via NATIVA dal §68
+  (`ErrorCode = STAR_SATURATED` da PHD2, ogni 3 s, senza salvare un FITS, senza scipy, senza rischio).
+
+**Decisione (Alessandro, condivisa):** rimuovere il toggle, NON il modulo. Motivazione architetturale che
+condivido e metto agli atti: **la selezione della stella di guida è competenza di PHD2** — conosce camera,
+profilo, calibrazione, maschere. Il progetto ha vinto ogni volta che ha rispettato i confini (PHD2 guida, NINA
+possiede la sequenza, noi misuriamo e decidiamo la sicurezza) e ha sofferto quando li ha sfumati. L'Agente
+misura, interpreta e decide; non duplica algoritmi nativi meglio informati.
+
+**Rimosso:** `ai_find_enabled` dal controller, l'intero ramo in `_evaluate_star_lost` (ora il **backoff è
+l'unico percorso** — guadagno netto di sicurezza), l'endpoint `POST /config/ai_find`, il campo su `/status`, il
+toggle e il listener in dashboard, le voci del manuale (markdown + builder PDF). La riga di troubleshooting è
+stata **riscritta su ciò che il sistema fa davvero oggi**: backoff → SUSPENDED → *"è un problema USB/camera"* +
+il pannello GUIDE UNOBSERVABLE del §73.
+
+**RESTA `star_finder.py`**, rinominato nella sua intestazione per quello che è: strumento del **Path B**, che lo
+usa per riselezionare una stella NON satura al cambio esposizione — compito diverso, che PHD2 da solo non copre.
+Sottosistema vivo. (Nota: scipy pesa 69 MB su 179 del pacchetto, ma non è eliminabile proprio perché il Path B
+lo usa: rimuovere il toggle non fa risparmiare spazio, e non era quello l'obiettivo.)
+
+**Test: 368** (+5 `test_star_lost_recovery.py`) che blindano l'invariante conquistato — *ogni tentativo di
+riselezione passa dal backoff* — contro reintroduzioni future: il toggle non deve tornare né come attributo né
+su `/status`; conteggio fallimenti, rallentamento, sospensione, reset al successo. **Verifica live sul server
+reale**: `/config/ai_find` → **404**, `ai_find_enabled` assente da `/status`, `ai-find-switch` assente sia dalla
+pagina servita sia da `app.js`. ZIP **v2.13.0**, plugin invariato (1.10.0.0). NO commit.
+
+### 73-ter. Il battito mancante: due metà del §73 che assumevano cose opposte — v2.13.1 + plugin 1.10.1.0
+
+**Segnalazione di Alessandro (4/8, dashboard aperta in attesa del buio):** all'avvio il monitor mostra SAFE,
+dopo 2-3 minuti passa da solo a `MONITOR — in attesa del Safety Monitor`, senza aver scollegato nulla. Domanda:
+è il timeout di freschezza previsto, o il plugin ha smesso di pubblicare? E la sua ipotesi: "magari torna SAFE
+alla prima esposizione".
+
+**Non era normale, e non si sarebbe sistemato da solo: difetto mio nel §73.** Le due metà si contraddicevano.
+
+| Componente | Assunzione implicita |
+|---|---|
+| `SafetyStatePublisher` (plugin) | deduplicava — POST **solo al cambio di stato** ⇒ *"l'agente conserva l'ultimo valore"* |
+| `SafetyStateStore` (agente) | freschezza 60 s ⇒ *"il plugin ripubblica periodicamente"* |
+
+A stato stabile **nessuno dei due parlava più**: primo POST SAFE, poi silenzio, e dopo 60 s la dashboard
+dichiarava UNKNOWN col monitor perfettamente vivo. Sarebbe rimasta così tutta la notte.
+
+**Chi correggere.** La freschezza è GIUSTA — è l'invariante §55 applicato alla presentazione ("nessuna notizia
+non è mai sicuro") e va difesa. A sbagliare era il publisher: **chi ha una scadenza deve ricevere un battito**.
+Ora pubblica a OGNI tick; costo reale un POST su loopback da ~5 ms (misurato nel §69), a cadenza 15 s.
+
+**Secondo difetto latente, trovato nello stesso ragionamento e corretto insieme:** `HealthCheckIntervalSeconds`
+è configurabile **da 5 a 120 s**. Anche col battito, una soglia FISSA a 60 s sarebbe scaduta *sempre* con
+cadenza 120 s — a monitor vivo. Il plugin ora **dichiara la propria cadenza** (`poll_interval_s` nel payload) e
+l'agente ne **deriva** la finestra: `max(45 s, 3 × cadenza)` — tre battiti persi. È lo stesso principio del §43,
+dove la finestra di freschezza si deriva dalla durata della posa invece di essere indovinata. Verificato dal
+vivo: cadenza 15 s → finestra 45 s; cadenza 120 s → finestra 360 s. `/status.safety` espone ora anche
+`staleness_window_s` e `poll_interval_s`, così un eventuale UNKNOWN a torto si spiega da sé.
+
+**Test: 372** (+4) — SAFE stabile per 30 minuti simulati resta SAFE; finestra derivata dalla cadenza dichiarata;
+pavimento a cadenza rapida; e soprattutto **l'invariante non indebolito**: il plugin che TACE davvero resta
+UNKNOWN. Plugin 63 verdi, build 0/0. ZIP **v2.13.1**, DLL **1.10.1.0** installata (hash-match). NO commit.
+
+**Lezione trasversale:** ogni canale con una scadenza ha bisogno di un battito, e chi ha la scadenza non deve
+indovinare la cadenza altrui — deve fargliela dichiarare. Vale già per §43 (telemetria NINA) e §68 (frame di
+guida); il §73 era l'unico che l'aveva dimenticato.
+
+## 76. Il sensore veloce accanto a quello lento — agente v2.14.0 + plugin v1.11.0.0 (2026-08-05)
+
+**Osservazione di Alessandro dopo la notte 4/8**, la prima ad attraversare tutte le fasi (limpido → degrado →
+UNSAFE → sonda → recupero → SAFE): il Recovery Hint e la Recovery Probe lavorano su **scale temporali
+incompatibili** — canale guida ogni ~3 s, posa di verifica ogni 300 s — e il monitor ascolta quasi solo il lento.
+
+**Prima cosa: la risposta fattuale alla sua domanda** ("il Hint smette di calcolare durante la sonda?"). NO.
+`update(snr)` gira a ogni GuideStep senza alcuna nozione di sonda in corso: durante i 300 s di posa il Hint è
+vivo e produce evidenza. Si spegne invece nell'istante in cui **N1 dice CLEAR** (è gated su stato degradato) —
+nei log del 4/8: sonda osservata 23:27:09, `hint inerte` 23:27:12, **tre secondi dopo**. L'infrastruttura
+c'era già; mancava un consumatore.
+
+**Il ritardo misurato, scomposto** (recupero del 4/8): canale guida vede la risalita 23:20 → hint ACTIVE 23:22
+(60 s di sostegno) → **posa-sonda 300 s** → N1 CLEAR 23:27 → drain → SAFE ~23:28. **~8 minuti**, di cui **5 sono
+l'esposizione stessa**: irriducibile, e non aggredibile dando peso al Hint.
+
+**Decisione architetturale — le due direzioni NON sono simmetriche.**
+• *Verso SAFE*: **no**. Il sensore veloce è UNA stella; N1 ne conta centinaia sul campo. Uno squarcio sopra la
+  stella di guida non dice che il campo è utilizzabile — è la modalità di guasto del 3/8 (falso CLEAR → falso
+  SAFE) da cui è nato il §70. Il giudice resta la posa-sonda. Richiesta declinata, con l'accordo di Alessandro.
+  Nota: "il Hint influenza la valutazione della Probe" non ha un posto dove atterrare — la sonda non valuta
+  nulla, è un'esposizione; a valutarla è N1.
+• *Verso UNSAFE*: **sì, ed è un buco misurato**. Il 4/8 la SNR è crollata da ~70 a ~22 fra le 23:07 e le 23:11;
+  N1 ha riconosciuto le nubi alle **23:14** (era fermo all'ultima posa buona) e il monitor è passato UNSAFE alle
+  **23:16**. Otto minuti di posa integralmente sotto le nubi. E **nessun latch poteva scattare**: la stella non
+  era *persa* (SNR 22, ancora tracciata), quindi STAR_LOST non si è armato. Non esisteva un percorso rapido per
+  il *degrado*, solo per la *perdita*.
+
+**Perché è sicuro in quella direzione**: (a) costi — dichiarare unsafe presto costa una pausa, tardi costa pose
+rovinate; (b) fisica — una stella può testimoniare che il cielo è brutto (le nubi sono grandi: se coprono lei
+coprono il campo), non che è tornato buono.
+
+**Implementazione.** Agente: seconda polarità nel `RecoveryHintTracker` (stessa classe perché **condivide
+`snr_ref`** — due copie dell'EMA divergerebbero e il riferimento È il metro di entrambe), gated sul complemento
+esatto del hint (attiva a N1 CLEAR, rientra appena N1 riconosce). Asimmetrie deliberate: soglia 50% contro
+l'80% del recupero, sostegno 90 s contro 60 s. Fail-inert senza riferimento credibile. Plugin: `SkyDegrading`
+nello snapshot; nel percorso CLOUD **forza l'accumulo e blocca il drain**, mai il contrario; il gate di
+freschezza è stato allentato perché **la SNR di guida arriva da PHD2, non da NINA** (test dedicato). Kill-switch
+`SkyDegradingAccumulateEnabled`, fail-inert su Agenti <v2.14.
+
+### 76-bis. La rana bollita, di nuovo — questa volta nel riferimento SNR
+
+**Trovata scrivendo il replay della notte**: il test falliva con soglia `13.2` invece di `35`. Causa: `snr_ref`
+era un'EMA **simmetrica**, aggiornata a ogni frame CLEAR — quindi durante il crollo il riferimento **colava giù
+insieme al cielo** (70 → 26 in 4 minuti) e la soglia relativa con lui. Il degrado diventava **invisibile al
+proprio stesso metro**. È esattamente il difetto del §66, identico, in un altro componente: lì il riferimento
+era il conteggio stelle di N1, qui la SNR di guida.
+
+Cura, la stessa: **cricchetto**. Il miglioramento si adotta subito ("le nubi non creano segnale"); verso il
+basso si scende con **emivita lunga in tempo reale** (25 min, stessa costante del §66, regola 3). Con l'EMA
+simmetrica il riferimento perdeva il 62% in 4 minuti; ora meno del 6%. Un primo tentativo — congelare durante
+l'accumulo — **non bastava**, ed è documentato nel codice: il congelamento partiva troppo tardi, perché la
+soglia scendeva più in fretta di quanto il segnale riuscisse a raggiungerla.
+
+**Il difetto colpiva ANCHE l'hint di recupero (§57), nel verso opposto**: un riferimento eroso rende il
+recupero troppo facile da dichiarare, quindi anticipa sonde su cielo ancora cattivo. Questa correzione risana
+entrambe le polarità — ed è un bug fix indipendente dal §76.
+
+## 77. "Condizioni del Cielo": far vedere il monitor mentre pensa — dashboard
+
+Richiesta di Alessandro, esplicitamente **senza toccare la logica**: il riquadro "Condizioni" diventa
+"Condizioni del Cielo" e ospita una riga che racconta cosa sta facendo il monitor, unendo le due voci — il
+sensore veloce e quello lento. Sei situazioni, una sola alla volta, con la precedenza al fatto più urgente:
+peggioramento in corso ☁️ / cielo coperto ☁️ / recupero visto dalla guida ma non ancora confermato 🌤️ / sonda
+in corso 🔍 / recupero confermato ✅ / cielo limpido ☀️. I testi dicono sempre *chi* ha visto *cosa* — es. *"Il
+canale di guida vede un miglioramento (SNR 52 su 70 di riferimento). Attendo la conferma della posa di verifica:
+una stella sola non basta a dire che il campo è tornato buono."* Nessuna decisione, nessuno stato inventato: si
+raccontano solo dati già presenti su `/status`.
+
+**Test: 383 agente** (+11 `test_sky_degradation.py`: replay del 4/8, nessun falso positivo su transitori,
+fail-inert senza riferimento, cricchetto, e i confini con §57/§55) **e 68 plugin** (+5: accumula a indice ancora
+CLEAR, **mai drena**, kill-switch, funziona senza telemetria di trasparenza, fail-inert su agenti vecchi).
+Build 0/0, audit 105/105 con 0 residui. Verifica live: `/status.recovery_hint` espone il blocco degrado, la
+pagina servita contiene il pannello. ZIP **v2.14.0**, DLL **1.11.0.0** installata (hash-match). NO commit.
+
+### 77-bis. Il racconto in due righe, e il "Recovery Manager" come modello mentale — v2.14.1
+
+**Da una revisione esterna (GPT, relayed da Alessandro).** Due osservazioni, una già soddisfatta e una giusta.
+
+**Già soddisfatta:** "Code parla di Hint / Probe / N1, l'utente no". Vero come principio, ma le stringhe
+spedite nel §77 non contengono nessun nome interno — dicevano già *"il canale di guida vede un
+miglioramento"*, *"verifico il campo di ripresa"*, *"recupero confermato dalla posa di verifica"*. Un
+controllo automatico lo verifica adesso: zero occorrenze di hint/probe/N1/latch nelle stringhe visibili.
+
+**Giusta, e recepita:** le mie frasi erano TROPPO LUNGHE. Gli esempi della revisione avevano una struttura
+migliore — **cosa vedo / cosa sto facendo**, due righe brevi. Alle due di notte conta. Ora:
+
+    ☁️  Il cielo sta peggiorando rapidamente.
+        Sto accumulando evidenze senza aspettare la prossima posa.
+
+    🌤️  Vedo un recupero stabile del cielo.
+        Attendo la conferma dalla posa di verifica.
+
+    🔍  Cielo coperto.
+        Verifico periodicamente il campo di ripresa.
+
+    ✅  Recupero confermato.
+        Completo le verifiche, poi la sequenza riprende.
+
+Prima riga in evidenza, seconda in sottotono; **i numeri (SNR, secondi, riferimento) sono migrati nel
+tooltip** — chi vuole il dettaglio lo trova, chi passa davanti allo schermo legge due righe. Voce in prima
+persona: il racconto è del recupero nel suo insieme, non di un componente.
+
+**Sul "Recovery Manager" proposto dalla revisione** (Hint → Recovery Manager → accumulo/sonda → N1 → monitor):
+come **modello mentale è corretto e utile**, e lo adotto nel linguaggio della documentazione e nella voce
+della dashboard — che è appunto la voce del recupero, non di un sottosistema. Ma **non creo il componente**:
+oggi il recupero è deliberatamente distribuito (il tracker misura nell'agente, il gate e il loop vivono nel
+sequencer di NINA, i latch nel monitor) e accorparlo in un oggetto significherebbe spostare codice fra due
+processi senza alcun beneficio funzionale, con rischio reale. È la stessa disciplina del §73 applicata
+all'architettura: non si inventa una struttura che non esiste solo perché il diagramma è più bello.
+
+**383 test verdi** (invariati: il pannello è presentazione), controllo id orfani + controllo nomi interni,
+ZIP **v2.14.1**. Plugin invariato (1.11.0.0). NO commit.

@@ -31,19 +31,18 @@
         <span id="conn-label">Disconnesso</span>
       </div>
       <div class="header-toggles" style="display: flex; gap: 1.5rem; align-items: center;">
-        <div class="smart-ai-toggle">
-          <label class="toggle-label" for="ai-find-switch" style="font-size: 0.85rem; color: #a9b5c7;">
-            <span>AI Finder (Forzato)</span>
-            <input type="checkbox" id="ai-find-switch">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <div class="dry-run-toggle">
-          <label class="toggle-label" for="dry-run-switch">
-            <span>MODALITÀ TEST</span>
-            <input type="checkbox" id="dry-run-switch" checked>
-            <span class="toggle-slider"></span>
-          </label>
+        <!-- §73 — stato del Safety Monitor: uno solo alla volta, quello realmente
+             attivo. Il monitor non e' piu' una funzione interna ma un protagonista
+             della sessione: il suo stato merita il colpo d'occhio. -->
+        <div class="safety-chip unknown" id="safety-chip" title="">
+          <span class="safety-dot" id="safety-dot">⚪</span>
+          <div class="safety-text">
+            <span class="safety-state" id="safety-state">MONITOR —</span>
+            <span class="safety-sub">
+              <span class="safety-gate" id="safety-gate" hidden></span>
+              <span class="safety-detail" id="safety-detail">in attesa del Safety Monitor</span>
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -94,10 +93,21 @@
       </div>
 
       <div class="condition-card">
-        <div class="condition-label">Condizioni</div>
+        <div class="condition-label">Condizioni del Cielo</div>
         <div class="condition-icon" id="condition-icon">🌙</div>
         <div class="condition-name" id="condition-name">In attesa…</div>
         <div class="condition-desc" id="condition-desc"></div>
+        <!-- §77 — la riga che racconta cosa sta facendo il monitor: unisce ciò
+             che vede il sensore VELOCE (canale guida, 3 s) e quello LENTO (posa
+             di verifica, 300 s). Nessuna decisione qui: solo il racconto. -->
+        <div class="sky-story" id="sky-story">
+          <span class="sky-story-icon" id="sky-story-icon">🌙</span>
+          <span class="sky-story-lines">
+            <span class="sky-story-text" id="sky-story-text">In attesa dei primi dati…</span>
+            <span class="sky-story-action" id="sky-story-action"></span>
+          </span>
+        </div>
+
         <div class="separator"></div>
         <div class="mini-stats">
           <div class="mini-stat">

@@ -471,12 +471,6 @@ S(blist([
     "riportata giù), così colleghi a vista «ho cambiato esposizione qui» con l'andamento dell'RMS prima e "
     "dopo." % B("Marker sul grafico RMS"),
 ]))
-S(Paragraph(B("Interruttore «AI Finder (Forzato)»"), h3))
-S(blist([
-    "%s: l'Agente interviene in caso di perdita stella forzando la visione AI (accettando i palloni saturi "
-    "se non c'è altro a cui aggrapparsi)." % B("Attivo"),
-    "%s: l'emergenza stella si comporta come il classico PHD2 limitato." % B("Spento"),
-]))
 S(Paragraph(B("Interruttore «MODALITÀ TEST»"), h3))
 S(callout("SUGGERIMENTO", ACCENT,
     "Se %s (Dry Run) è %s, l'Agente emula le sue deduzioni nel «Log Decisioni Controller» dicendoti "
@@ -614,9 +608,13 @@ tshoot_rows = [
     [Paragraph("Progresso baseline resta fermo a 0/60 o n/60 a lungo", small),
      Paragraph("L'Agente raccoglie solo frame NOMINAL con SNR sufficiente. Cielo turbolento, stella debole o implosion detector attivo.", small),
      Paragraph("Aspetta condizioni più stabili. Verifica nei log che SNR sia sopra 8 e che non compaiano CRITICAL di tipo \"RMS IMPLOSION\".", small)],
-    [Paragraph("L'AI Star Finder non aggancia nulla in emergenza", small),
-     Paragraph("Interruttore %s spento sulla dashboard, oppure PHD2 non sta più scattando frame (camera scollegata)." % B("AI Finder Forzato"), small),
-     Paragraph("Attiva l'interruttore in dashboard. Se PHD2 non scatta nemmeno frame, è un problema USB/camera, non dell'Agente.", small)],
+    [Paragraph("Dopo la perdita della stella non viene riagganciata nulla", small),
+     Paragraph("L'Agente chiede a PHD2 di riselezionare (find_star) a intervalli crescenti: se i tentativi "
+               "falliscono ripetutamente entra in backoff e infine sospende, per non martellare una camera "
+               "in difficoltà. Nel log compare \"find_star SUSPENDED dopo N fallimenti consecutivi\".", small),
+     Paragraph("Quel messaggio indica un problema USB/camera, non dell'Agente: verifica cavo e alimentazione. "
+               "Il pannello Safety Monitor mostra GUIDE UNOBSERVABLE quando il canale di guida smette di "
+               "fornire informazioni affidabili.", small)],
     [Paragraph("Triangoli (giallo/verde) non appaiono mai sul grafico RMS", small),
      Paragraph("Escalation gate chiuso (le leve aggr/MinMove non sono ancora sature), oppure il cielo è troppo stabile per richiedere il path B.", small),
      Paragraph("Normale: il path B esposizione scatta solo dopo che le leve cheap sono al limite da almeno un cooldown. Su cieli buoni può non scattare mai.", small)],

@@ -255,13 +255,11 @@ function applyFullStatus(data) {
     el('dec-param-name').textContent = ctrl.dec.aggr_param || '—';
   }
   isDryRun = ctrl.dry_run ?? true;
-  el('dry-run-switch').checked = isDryRun;
+  // §73 — l'interruttore nell'header non esiste più (sostituito dallo stato del
+  // Safety Monitor): la MODALITÀ resta comunque visibile nel badge qui sotto.
   el('mode-badge').textContent = isDryRun ? 'MODALITÀ TEST' : 'LIVE CONTROL';
   el('mode-badge').classList.toggle('live', !isDryRun);
   
-  if (ctrl.ai_find_enabled !== undefined) {
-    el('ai-find-switch').checked = ctrl.ai_find_enabled;
-  }
 
   // Aggiorna analyzer UI se disponibile
   if (an.rms_ra !== undefined) {
@@ -293,6 +291,9 @@ function applyFullStatus(data) {
   // §45 — Transparency Index (NINA, Layer-2)
   updateTransparency(data.nina);
   updateRecoveryHint(data.recovery_hint);
+  updateSafetyState(data.safety, data.guide_health);
+  updateSkyStory(data);
+  updateDynamicPanels(data);
 
   // §51 — Adaptive MinMove (cap adattivo)
   updateMinMoveCap(ctrl.minmove_cap);
@@ -636,6 +637,398 @@ function updateTransparency(nina) {
 
 // §57 — card Recovery: hint SNR-guida (S2, sola osservazione) + ultima sonda (S1/S2).
 // Graceful: nascosta se il tracker è spento o non c'è mai stato contesto degradato.
+// ---------------------------------------------------------------------------
+//  §73 — Stato del Safety Monitor
+//  Il monitor decide nel plugin; qui si RIFLETTE soltanto. Uno stato per volta,
+//  quello vero: nessuno stato inventato. La causa dell'UNSAFE è mostrata come
+//  stato perché è l'azione operativa distinta ("guarda la camera" ≠ "aspetta la
+//  nuvola"); il dettaglio racconta cosa sta facendo il recupero.
+// ---------------------------------------------------------------------------
+const SAFETY_UI = {
+  SAFE: {
+    cls: 'safe', dot: '🟢', label: 'SAFE',
+    tip: "SAFE\nIl Safety Monitor non rileva condizioni di rischio: la sequenza può procedere normalmente.",
+  },
+  MERIDIAN_PROTECTION: {
+    cls: 'meridian', dot: '🔵', label: 'MERIDIAN PROTECTION',
+    tip: "MERIDIAN PROTECTION\nStato transitorio: autorizza la sola manovra meccanica di meridian flip mentre la valutazione di sicurezza resta internamente invariata. Terminato il flip il monitor riprende immediatamente il controllo normale.",
+  },
+  STAR_LOST: {
+    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · STAR LOST',
+    tip: "UNSAFE — STAR LOST\nPHD2 ha perso la stella di guida in modo persistente. La sequenza resta sospesa finché la guida non torna operativa.",
+  },
+  CLOUD: {
+    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · NUBI',
+    tip: "UNSAFE — NUBI\nDegrado di trasparenza persistente misurato sul conteggio stelle della camera di ripresa. Il rientro richiede evidenza di cielo realmente tornato limpido.",
+  },
+  STALE_TELEMETRY: {
+    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · TELEMETRIA STANTIA',
+    tip: "UNSAFE — TELEMETRIA STANTIA\nLa telemetria di NINA si è fermata mentre l'ultimo cielo noto era degradato: senza osservazione affidabile non si dichiara sicuro.",
+  },
+  AGENT_LOST: {
+    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · AGENTE PERSO',
+    tip: "UNSAFE — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio.",
+  },
+  GUIDE_UNOBSERVABLE: {
+    cls: 'guide', dot: '⚫', label: 'GUIDE UNOBSERVABLE',
+    tip: "GUIDE UNOBSERVABLE\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). La sequenza resta sospesa fino al ripristino dell'osservabilità: controlla camera di guida, cavo e USB.",
+  },
+  UNKNOWN: {
+    cls: 'unknown', dot: '⚪', label: 'MONITOR —',
+    tip: "STATO SCONOSCIUTO\nIl Safety Monitor non sta pubblicando il proprio stato: non è connesso in NINA, oppure il plugin non è attivo. Assenza di notizie non significa 'sicuro'.",
+  },
+};
+
+// ===========================================================================
+//  §74 — PANNELLI DINAMICI
+//  "L'informazione più importante non è tutto ciò che esiste, ma ciò che sta
+//  succedendo adesso." I pannelli che descrivono l'ATTIVITÀ INTERNA del motore
+//  restano una barra finché non lavorano davvero; quando intervengono si aprono
+//  da soli e si richiudono dopo un periodo di quiete.
+//
+//  Restano SEMPRE visibili i pannelli di STATO GENERALE (Safety Monitor,
+//  Trasparenza, Recovery, grafico guida, stato Agente): sono quelli che
+//  l'operatore deve poter consultare in qualsiasi momento.
+//
+//  Regole (deliberate, per non nascondere mai ciò che conta):
+//   1. attività  -> il pannello si APRE sempre, anche se era stato chiuso a
+//      mano: un intervento del motore deve attirare l'occhio, è il suo scopo.
+//   2. quiete    -> si richiude dopo PANEL_IDLE_MS, MA MAI se l'operatore lo
+//      ha aperto lui (pin): una scelta esplicita non viene mai contraddetta.
+//   3. da chiuso la barra porta comunque lo STATO (chip), così l'informazione
+//      essenziale non sparisce mai — si comprime.
+//  Il log decisioni resta la memoria persistente: la chiusura non perde nulla.
+// ===========================================================================
+
+const PANEL_IDLE_MS = 120000;   // 2 min di quiete prima di richiudere
+
+const DYNAMIC_PANELS = [
+  {
+    key: 'controller',
+    find: () => document.querySelector('.controller-card'),
+    // Attività EVENTO: il motore ha eseguito un'azione (il contatore cresce).
+    read: (d) => {
+      const ctrl = d.controller || {};
+      const eng = ctrl.engine || {};
+      const st = ctrl.guiding_state || '—';
+      return {
+        active: false,
+        pulse: eng.actions_total || 0,
+        chip: String(st).replace(/_/g, ' '),
+        working: st && st !== 'INACTIVE',
+      };
+    },
+  },
+  {
+    key: 'exposure',
+    // La card "Esposizione Dinamica" (l'altra .exposure-card è Adaptive MinMove).
+    find: () => document.querySelector('.exposure-card:not(#minmove-cap-card)'),
+    // Attività STATO: esposizione sopra la base o cooldown in corso.
+    read: (d) => {
+      const exp = (d.controller || {}).exposure;
+      if (!exp) { return { active: false, chip: '—', working: false }; }
+      const steps = exp.steps_above_base || 0;
+      const boosted = (exp.state || 'NOMINAL') !== 'NOMINAL';
+      const cooling = (exp.cooldown_residuo_s ?? 0) > 0;
+      return {
+        active: boosted || steps > 0 || cooling,
+        chip: boosted ? String(exp.state).replace(/_/g, ' ')
+                      : (steps > 0 ? `+${steps} step` : 'NOMINAL'),
+        working: boosted || steps > 0,
+      };
+    },
+  },
+  {
+    key: 'escalation',
+    find: () => document.querySelector('.escalation-card'),
+    // Attività STATO: un asse è al limite -> il gate è APERTO (path B può agire).
+    read: (d) => {
+      const g = (d.controller || {}).escalation_gate;
+      if (!g) { return { active: false, chip: '—', working: false }; }
+      const open = !!(g.ra || g.dec);
+      return {
+        active: open,
+        chip: open ? 'GATE APERTO' : (g.enabled ? 'GATE CHIUSO' : 'DISATTIVO'),
+        working: open,
+      };
+    },
+  },
+  {
+    key: 'minmove',
+    find: () => document.getElementById('minmove-cap-card'),
+    // Attività STATO. Attenzione ai due flag distinti del controller:
+    //   cap_active      = il cap ESISTE (baseline filtrata pronta)
+    //   clamping_active = il cap ha davvero TAGLIATO una richiesta (§0-bis)
+    // "Occupare spazio in proporzione all'attività" significa il SECONDO:
+    // un cap pronto ma che non taglia nulla non sta lavorando.
+    read: (d) => {
+      const mc = (d.controller || {}).minmove_cap;
+      const ready = !!(mc && mc.enabled !== false && mc.cap_active === true);
+      const clamping = !!(mc && mc.clamping_active === true);
+      return {
+        active: clamping,
+        chip: clamping ? 'STA LIMITANDO' : (ready ? 'PRONTO' : 'NON ATTIVO'),
+        working: clamping,
+      };
+    },
+  },
+];
+
+const panelState = {};   // key -> {card, body, chipEl, pinEl, pinned, lastPulse, lastActiveTs}
+
+function setupDynamicPanels() {
+  for (const spec of DYNAMIC_PANELS) {
+    const card = spec.find();
+    if (!card) { continue; }
+
+    // Header = la riga che contiene il titolo (a volte già dentro un wrapper).
+    const head = card.querySelector('.diag-header') || card.querySelector('h2');
+    if (!head) { continue; }
+
+    // Corpo = tutto ciò che segue l'header, spostato in un contenitore
+    // richiudibile. Nessun id viene toccato: le funzioni di update esistenti
+    // continuano a trovare i propri elementi esattamente come prima.
+    const body = document.createElement('div');
+    body.className = 'panel-body';
+    let node = head.nextSibling;
+    while (node) {
+      const next = node.nextSibling;
+      body.appendChild(node);
+      node = next;
+    }
+    card.appendChild(body);
+
+    head.classList.add('panel-head');
+    const chevron = document.createElement('span');
+    chevron.className = 'panel-chevron';
+    chevron.textContent = '▼';
+    head.insertBefore(chevron, head.firstChild);
+
+    const pin = document.createElement('span');
+    pin.className = 'panel-pin';
+    pin.textContent = '📌';
+    pin.hidden = true;
+    head.appendChild(pin);
+
+    // Il chip di stato si aggiunge solo se l'header non ha già un badge suo
+    // (Adaptive MinMove ce l'ha): niente informazione duplicata.
+    let chip = null;
+    if (!head.querySelector('[class*="badge"]')) {
+      chip = document.createElement('span');
+      chip.className = 'panel-chip';
+      chip.textContent = '—';
+      head.appendChild(chip);
+    }
+
+    panelState[spec.key] = {
+      card, body, chip, pin, pinned: false, lastPulse: null, lastActiveTs: 0,
+    };
+    card.classList.add('panel-collapsed');   // si parte compatti
+
+    head.addEventListener('click', () => {
+      const st = panelState[spec.key];
+      const collapsed = card.classList.toggle('panel-collapsed');
+      // Aperto a mano = scelta esplicita: l'automatismo non lo richiude più.
+      st.pinned = !collapsed;
+      st.pin.hidden = !st.pinned;
+    });
+  }
+}
+
+function updateDynamicPanels(data) {
+  const now = Date.now();
+  for (const spec of DYNAMIC_PANELS) {
+    const st = panelState[spec.key];
+    if (!st) { continue; }
+
+    let info;
+    try {
+      info = spec.read(data) || {};
+    } catch (e) {
+      continue;   // un pannello non deve mai rompere il refresh degli altri
+    }
+
+    if (st.chip) {
+      st.chip.textContent = info.chip || '—';
+      st.chip.classList.toggle('working', !!info.working);
+    }
+
+    // Regola 1 — evento (contatore che cresce) o stato attivo: APRE sempre.
+    const pulsed = info.pulse != null && st.lastPulse != null && info.pulse > st.lastPulse;
+    if (info.pulse != null) { st.lastPulse = info.pulse; }
+
+    if (info.active || pulsed) {
+      st.lastActiveTs = now;
+      if (st.card.classList.contains('panel-collapsed')) {
+        st.card.classList.remove('panel-collapsed');
+      }
+      continue;
+    }
+
+    // Regola 2 — quiete: si richiude, ma mai contro una scelta dell'operatore.
+    if (!st.pinned && !st.card.classList.contains('panel-collapsed')
+        && st.lastActiveTs > 0 && (now - st.lastActiveTs) > PANEL_IDLE_MS) {
+      st.card.classList.add('panel-collapsed');
+    }
+  }
+}
+
+// ===========================================================================
+//  §77 — "Condizioni del Cielo": il racconto del recupero
+//
+//  Il monitor ha DUE osservatori con scale temporali diversissime:
+//    • il canale di guida — SNR della stella, ogni ~3 s: velocissimo, ma vede
+//      UNA stella. Può testimoniare che il cielo è peggiorato, non che il campo
+//      è tornato buono;
+//    • la posa di verifica — centinaia di stelle sul campo di ripresa, ma una
+//      fotografia ogni 300 s: lentissima, e l'unica che autorizza il ritorno.
+//
+//  Questa riga NON decide nulla: unisce le due voci e le racconta, così durante
+//  una notte vera si capisce PERCHÉ il monitor sta facendo quello che fa —
+//  soprattutto nei minuti in cui il veloce ha già capito e il lento sta ancora
+//  esponendo. Ordine di precedenza: si racconta il fatto più urgente e più
+//  fresco, uno solo alla volta.
+// ===========================================================================
+
+function updateSkyStory(data) {
+  const box = el('sky-story');
+  if (!box) { return; }
+
+  const rh = data.recovery_hint || {};
+  const t = ((data.nina || {}).transparency) || {};
+  const safety = data.safety || {};
+  const state = t.state || null;
+  const unsafe = safety.state === 'UNSAFE';
+
+  // §77-bis — DUE righe brevi. Il racconto è dal punto di vista del recupero nel
+  // suo insieme, in prima persona: chi legge vuole sapere cosa sta facendo il
+  // sistema, non quale sottocomponente ha prodotto quale valore. I nomi interni
+  // (hint, sonda, N1, latch) non compaiono mai; i numeri stanno nel tooltip.
+  let cls = '', icon = '🌙';
+  let seeing = 'In attesa dei primi dati…';
+  let doing = '';
+  let detail = '';
+
+  if (rh.degrading) {
+    cls = 'worsening'; icon = '☁️';
+    seeing = 'Il cielo sta peggiorando rapidamente.';
+    doing = 'Sto accumulando evidenze senza aspettare la prossima posa.';
+    detail = `Segnale della stella di guida in calo da ${Math.round(rh.degrade_s || 0)}s` +
+             (rh.snr != null && rh.snr_ref != null
+               ? ` (${rh.snr} contro ${rh.snr_ref} del cielo sereno recente).` : '.');
+  } else if (state === 'CLOUD' || state === 'HAZE') {
+    if (rh.active) {
+      cls = 'recovering'; icon = '🌤️';
+      seeing = 'Vedo un recupero stabile del cielo.';
+      doing = 'Attendo la conferma dalla posa di verifica.';
+      detail = (rh.snr != null && rh.snr_ref != null
+                ? `Stella di guida a ${rh.snr} contro ${rh.snr_ref} del sereno recente. ` : '') +
+               'La stella di guida è una sola: a dire se il campo di ripresa è ' +
+               'tornato utilizzabile può essere solo la camera di ripresa.';
+    } else if (unsafe) {
+      cls = 'probing'; icon = '🔍';
+      seeing = 'Cielo coperto.';
+      doing = 'Verifico periodicamente il campo di ripresa.';
+      detail = 'Scatto pose di controllo finché il cielo non torna davvero ' +
+               'utilizzabile; la sequenza resta sospesa fino ad allora.';
+    } else {
+      cls = 'clouded'; icon = '☁️';
+      seeing = 'Cielo coperto.';
+      doing = 'Il campo di ripresa non è utilizzabile.';
+    }
+  } else if (state === 'CLEAR') {
+    const lastProbe = (Array.isArray(rh.probes) && rh.probes.length)
+      ? rh.probes[rh.probes.length - 1] : null;
+    if (unsafe && lastProbe && lastProbe.outcome_state === 'CLEAR') {
+      cls = 'confirmed'; icon = '✅';
+      seeing = 'Recupero confermato.';
+      doing = 'Completo le verifiche, poi la sequenza riprende.';
+      detail = 'La posa di controllo ha ritrovato il campo al livello del sereno ' +
+               'recente: servono ancora alcune conferme prima di riautorizzare.';
+    } else {
+      cls = 'clear'; icon = '☀️';
+      seeing = 'Cielo limpido.';
+      doing = 'Il campo è al livello del sereno recente.';
+    }
+  }
+
+  box.className = `sky-story ${cls}`;
+  el('sky-story-icon').textContent = icon;
+  el('sky-story-text').textContent = seeing;
+  el('sky-story-action').textContent = doing;
+  box.title = detail || `${seeing} ${doing}`.trim();
+}
+
+function updateSafetyState(safety, guideHealth) {
+  const chip = el('safety-chip');
+  if (!chip) { return; }
+
+  const state = (safety && safety.state) || 'UNKNOWN';
+  const cause = (safety && safety.cause) || null;
+  // Per l'UNSAFE è la CAUSA a fare lo stato visibile (azione operativa distinta).
+  const key = state === 'UNSAFE' ? (SAFETY_UI[cause] ? cause : 'STAR_LOST') : state;
+  const ui = SAFETY_UI[key] || SAFETY_UI.UNKNOWN;
+
+  chip.className = `safety-chip ${ui.cls}`;
+  el('safety-dot').textContent = ui.dot;
+  el('safety-state').textContent = ui.label;
+
+  // §73-bis — badge ACCESSORIO del canale guida (§71). Il gate NON è uno stato
+  // del monitor: il monitor non cambia stato, cambia il comportamento della sonda.
+  // Contenuto ONESTO: si dichiara ciò che l'Agente MISURA (lo stato del canale),
+  // non ciò che non può sapere (se una sonda sia in corso, o se esista affatto
+  // nella sequenza). La conseguenza sulla sonda vive nel tooltip, al condizionale.
+  const gate = el('safety-gate');
+  let gateTip = '';
+  if (gate) {
+    const gh = guideHealth || {};
+    const showGate = state === 'UNSAFE' && gh.enabled && gh.channel_ready != null;
+    gate.hidden = !showGate;
+    if (showGate) {
+      if (gh.channel_ready === false) {
+        gate.className = 'safety-gate closed';
+        gate.textContent = 'CANALE NON PRONTO';
+        gateTip = "\n\nCanale guida: NON PRONTO — " +
+          (gh.channel_not_ready_reasons || []).join(', ') +
+          ".\nLe pose-sonda di recupero, se attive, restano differite finché il canale non è stabile (mai oltre 15 minuti).";
+      } else {
+        gate.className = 'safety-gate ready';
+        gate.textContent = 'CANALE PRONTO';
+        gateTip = "\n\nCanale guida: PRONTO (stella tracciata in modo stabile). " +
+          "Nessun rinvio in corso sulle pose-sonda di recupero.";
+      }
+    }
+  }
+
+  // Dettaglio: il fatto misurato dall'Agente dietro la decisione del monitor.
+  let detail = (safety && safety.detail) || '';
+  if (!detail && state === 'UNSAFE' && guideHealth && guideHealth.enabled) {
+    if (guideHealth.channel_ready === false) {
+      const why = (guideHealth.channel_not_ready_reasons || [])[0];
+      detail = why || 'canale guida non ancora affidabile';
+    } else if (guideHealth.channel_ready === true) {
+      detail = 'canale guida stabile';
+    }
+  }
+  if (!detail && state === 'MERIDIAN_PROTECTION') {
+    detail = 'flip meccanico autorizzato — cielo ancora da verificare';
+  }
+  if (!detail && state === 'SAFE') { detail = 'sequenza autorizzata'; }
+  if (!detail && state === 'UNKNOWN') { detail = 'in attesa del Safety Monitor'; }
+  el('safety-detail').textContent = detail;
+
+  // §72 — dentro la finestra il riportato diverge dall'interno: dirlo esplicitamente.
+  let tip = ui.tip;
+  if (safety && safety.internal_safe === false && state === 'MERIDIAN_PROTECTION') {
+    tip += "\n\nValutazione interna: ancora UNSAFE — al termine del flip la sequenza torna sospesa.";
+  }
+  if (safety && safety.age_s != null && safety.fresh === false) {
+    tip += `\n\nUltimo aggiornamento ${Math.round(safety.age_s)} s fa.`;
+  }
+  if (gateTip) { tip += gateTip; }
+  chip.title = detail ? `${tip}\n\n${detail}` : tip;
+}
+
 function updateRecoveryHint(rh) {
   const card = el('recovery-card');
   if (!card) { return; }
@@ -926,36 +1319,11 @@ el('btn-clear-log').addEventListener('click', () => {
   el('action-log').innerHTML = '<div class="log-placeholder">Log pulito.</div>';
 });
 
-el('dry-run-switch').addEventListener('change', async function () {
-  const enabled = this.checked;
-  try {
-    await fetch(`${API_BASE}/config/dry_run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    el('mode-badge').textContent = enabled ? 'MODALITÀ TEST' : 'LIVE CONTROL';
-    el('mode-badge').classList.toggle('live', !enabled);
-  } catch (e) {
-    console.error('Errore aggiornamento dry_run:', e);
-    // rollback toggle visivo
-    this.checked = !enabled;
-  }
-});
+// §73 — il toggle MODALITÀ TEST è stato sostituito dall'indicatore di stato del
+// Safety Monitor (spazio dell'header, molto più utile sul campo). La modalità resta
+// impostabile da config.toml ([control] dry_run) o da CLI (--dry-run), e resta
+// visibile nel badge di modalità: si è rimosso l'interruttore, non la funzione.
 
-el('ai-find-switch').addEventListener('change', async function () {
-  const enabled = this.checked;
-  try {
-    await fetch(`${API_BASE}/config/ai_find`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-  } catch (e) {
-    console.error('Errore aggiornamento ai_find:', e);
-    this.checked = !enabled;
-  }
-});
 
 // §31/§54 — switcher modalità motore. OFF = kill switch (nessuna conferma); attivare
 // GUARDIAN richiede conferma (e allow_dashboard_mode_switch lato server). JITTER è
@@ -1021,6 +1389,7 @@ async function loadBrandInfo() {
 // ===== AVVIO =====
 document.addEventListener('DOMContentLoaded', () => {
   loadBrandInfo();
+  setupDynamicPanels();   // §74
   connectWS();
 
   // Poll status ogni 5s come fallback se il WS non manda aggiornamenti

@@ -159,6 +159,105 @@ class TestCorroboration(unittest.TestCase):
                            "la dispersione deve distinguere i due regimi")
 
 
+class TestChannelReady(unittest.TestCase):
+    """§71 — "canale pronto" per la sonda: consenso AND di condizioni sostenute.
+    Il riferimento è il profilo REALE della notte 3-4/8 (frazione di frame con
+    stella, dai log): 0%% → 41%% (riaggancio-lampo) → 86%% sostenuto."""
+
+    def _feed_minute(self, t, c, tracked, lost, err_code=2):
+        """Un minuto di frame a ~3 s: `tracked` GuideStep e `lost` StarLost."""
+        total = tracked + lost
+        for i in range(total):
+            if i < lost:
+                t.on_star_lost({"ErrorCode": err_code, "SNR": 1.0})
+            else:
+                t.on_guide_step({"SNR": 25.0, "StarMass": 9000})
+            c.advance(60.0 / max(1, total))
+
+    def test_replay_20260803_progression(self):
+        c = _Clock()
+        t = _tracker(c, ready_window_s=90.0, ready_min_tracked_fraction=0.7,
+                     ready_frame_max_age_s=10.0, ready_max_errors=2,
+                     ready_min_samples=10, error_window_s=120.0)
+        t.set_guiding_expected(True, "test")
+
+        # 23:37 — buio totale: 21 StarLost, 0 GuideStep
+        self._feed_minute(t, c, tracked=0, lost=21)
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"], "0% tracciata: gate chiuso")
+
+        # 23:40 — riaggancio-lampo: 9 tracciati / 13 persi = 41%
+        self._feed_minute(t, c, tracked=9, lost=13)
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"],
+                         "41% NON è stabilità: la sonda reale partì qui per niente")
+        self.assertTrue(any("instabile" in r or "errori" in r
+                            for r in b["channel_not_ready_reasons"]))
+
+        # 23:47-48 — riaggancio sostenuto: >2 min di guida pulita
+        # (drena sia la finestra della frazione sia quella degli errori)
+        self._feed_minute(t, c, tracked=21, lost=0)
+        self._feed_minute(t, c, tracked=21, lost=0)
+        self._feed_minute(t, c, tracked=21, lost=0)
+        b = t.status_block()
+        self.assertTrue(b["channel_ready"],
+                        f"86%+ sostenuto deve aprire: {b['channel_not_ready_reasons']}")
+        self.assertGreaterEqual(b["tracked_fraction"], 0.9)
+
+    def test_dead_channel_26_7_stays_closed(self):
+        """Canale muto (26/7): nessun frame -> mai pronto. Il tetto S1 dei 15 min
+        (lato plugin) resta l'unica via — per diagnosi, non per ripresa."""
+        c = _Clock()
+        t = _tracker(c)
+        t.set_guiding_expected(True, "test")
+        t.on_guide_step({"SNR": 30.0})
+        c.advance(300)
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"])
+        self.assertTrue(any("frame" in r for r in b["channel_not_ready_reasons"]))
+
+    def test_severe_alert_blocks_readiness(self):
+        c = _Clock()
+        t = _tracker(c, alert_window_s=180.0)
+        t.set_guiding_expected(True, "test")
+        for _ in range(30):
+            t.on_guide_step({"SNR": 30.0})
+            c.advance(3)
+        self.assertTrue(t.status_block()["channel_ready"])
+        t.on_alert("Lost connection to camera", "error")
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"])
+        self.assertIn("alert PHD2 severo recente", b["channel_not_ready_reasons"])
+
+    def test_insufficient_samples_is_not_ready(self):
+        """Poca statistica = NON pronto (mai 'pronto per assenza di prove')."""
+        c = _Clock()
+        t = _tracker(c, ready_min_samples=10)
+        t.set_guiding_expected(True, "test")
+        for _ in range(4):
+            t.on_guide_step({"SNR": 30.0})
+            c.advance(3)
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"])
+        self.assertTrue(any("statistica" in r for r in b["channel_not_ready_reasons"]))
+
+    def test_error_burst_blocks_even_with_good_fraction(self):
+        """MASSCHANGE/SATURATED ripetuti (firma USB 26/7): anche a stella
+        'tracciata', il canale non è affidabile."""
+        c = _Clock()
+        t = _tracker(c, ready_max_errors=2, error_window_s=120.0)
+        t.set_guiding_expected(True, "test")
+        for i in range(30):
+            ev = {"SNR": 28.0, "StarMass": 9000}
+            if i % 5 == 0:
+                ev["ErrorCode"] = 7          # MASSCHANGE, frame comunque "guidato"
+            t.on_guide_step(ev)
+            c.advance(3)
+        b = t.status_block()
+        self.assertFalse(b["channel_ready"])
+        self.assertTrue(any("errori" in r for r in b["channel_not_ready_reasons"]))
+
+
 class TestRobustness(unittest.TestCase):
 
     def test_kill_switch_makes_it_inert(self):

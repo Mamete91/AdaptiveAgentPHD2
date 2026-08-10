@@ -153,10 +153,6 @@ La pagina web è la cabina di pilotaggio dove l'Agente ti espone in tempo reale 
   * **Cooldown residuo**: i secondi che mancano prima che l'Agente possa fare un nuovo cambio di esposizione.
   * **Marker sul grafico RMS**: ogni cambio di esposizione lascia un triangolino sul grafico (giallo = esposizione alzata, verde = riportata giù), così puoi collegare visivamente "ho cambiato esposizione qui" con l'andamento dell'RMS prima e dopo.
 
-* **Interruttore "AI Finder (Forzato)"**:
-  * **Attivo**: ordina all'Agente di intervenire in caso d'emergenza o perdita stella, forzando la visione AI sui sensori.
-  * **Spento**: l'emergenza stella si comporta come il classico PHD2 limitato.
-
 * **Interruttore "MODALITÀ TEST"**:
   > [!TIP]
   > Se `MODALITÀ TEST` (Dry Run) è **ATTIVA**, l'Agente emulerà le sue deduzioni nel "Log Decisioni Controller" dicendoti cosa farebbe, **ma senza agire fisicamente in PHD2**. Spegnila e passa in **`LIVE CONTROL`** per lasciare che l'Agente prenda attivamente il controllo del telescopio. Di default il pacchetto distribuito parte già in LIVE.

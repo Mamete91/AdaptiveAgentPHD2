@@ -1,5 +1,11 @@
 """
-star_finder.py - AI Star Finder per emergenze StarLost.
+star_finder.py - analisi centroide/saturazione su frame salvato.
+
+§75: NON e' piu' il vecchio "AI Star Finder" per le emergenze StarLost
+(quel ramo e' stato rimosso: la selezione della stella di guida e'
+competenza di PHD2). Resta VIVO come strumento del Path B, che lo usa
+per riselezionare una stella NON satura quando l'esposizione cambia -
+compito diverso, e che PHD2 da solo non copre.
 
 Localizza il blob piu' consistente in un FITS PHD2 anche se la stella e'
 satura (palloni bianchi) che PHD2 normalmente scarterebbe.

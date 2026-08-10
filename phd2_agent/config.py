@@ -443,6 +443,15 @@ class GuideHealthConfig:
     error_window_s: float = 120.0   # finestra per il conteggio degli ErrorCode per-frame
     alert_window_s: float = 180.0   # entro quanto un Alert warning/error resta "corroborante"
     mass_window_s: float = 120.0    # finestra per la dispersione di StarMass
+    # §71 — condizioni del "canale pronto" (gate della Recovery Probe, lato misura).
+    # Consenso AND di condizioni binarie SOSTENUTE — mai uno score pesato (anti-§68).
+    # L'asticella è DELIBERATAMENTE sopra il criterio di PHD2 ("stella agganciata"):
+    # una sonda da 300 s merita un canale STABILE, non un riaggancio-lampo (3/8 23:40).
+    ready_window_s: float = 90.0            # finestra della frazione di frame tracciati
+    ready_min_tracked_fraction: float = 0.7 # quota minima di frame CON stella nella finestra
+    ready_frame_max_age_s: float = 10.0     # frame che fluiscono ADESSO (≈2 esposizioni guida)
+    ready_max_errors: int = 2               # ErrorCode recenti tollerati (finestra error_window_s)
+    ready_min_samples: int = 10             # sotto questa base statistica: NON pronto
 
 
 @dataclass
@@ -459,6 +468,15 @@ class RecoveryHintConfig:
     snr_recover_frac: float = 0.8      # PROVVISORIO — buono se snr >= frac × snr_ref (pre-nube)
     snr_recover_floor: float = 25.0    # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
     sustained_seconds: float = 60.0    # PROVVISORIO — secondi di segnale buono per active=true
+    # §76 — POLARITÀ OPPOSTA: evidenza che il cielo sta PEGGIORANDO, mentre N1 è
+    # ancora fermo all'ultima posa buona. Tarati sulla notte 2026-08-04, dove la
+    # SNR è crollata da ~70 a ~22 (31% del riferimento) fra le 23:07 e le 23:11,
+    # mentre N1 ha riconosciuto le nubi solo alle 23:14 e il monitor è passato
+    # UNSAFE alle 23:16: OTTO minuti di posa integralmente sotto le nubi.
+    degrade_enabled: bool = True
+    snr_degrade_frac: float = 0.5      # peggiora se snr <= frac × snr_ref (era 31% quella notte)
+    degrade_sustained_seconds: float = 90.0   # sostegno richiesto: più lungo del recupero (60 s)
+    degrade_min_ref: float = 15.0      # sotto questo snr_ref il rapporto non è affidabile
     drain_factor: float = 2.0          # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
 
 
@@ -772,6 +790,14 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             alert_window_s=float(gh.get("alert_window_s", 180.0)),
             mass_window_s=float(gh.get("mass_window_s", 120.0)),
         )
+        gh = raw["guide_health"]
+        cfg.guide_health.ready_window_s = float(gh.get("ready_window_s", cfg.guide_health.ready_window_s))
+        cfg.guide_health.ready_min_tracked_fraction = float(
+            gh.get("ready_min_tracked_fraction", cfg.guide_health.ready_min_tracked_fraction))
+        cfg.guide_health.ready_frame_max_age_s = float(
+            gh.get("ready_frame_max_age_s", cfg.guide_health.ready_frame_max_age_s))
+        cfg.guide_health.ready_max_errors = int(gh.get("ready_max_errors", cfg.guide_health.ready_max_errors))
+        cfg.guide_health.ready_min_samples = int(gh.get("ready_min_samples", cfg.guide_health.ready_min_samples))
 
     # §57 — recovery auto-starting: S1 (sonda fail-safe, parametri di riferimento del
     # template) + S2 (hint SNR-guida). Retrocompat: sezioni assenti -> default.
@@ -792,5 +818,14 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             sustained_seconds=float(rh.get("sustained_seconds", 60.0)),
             drain_factor=float(rh.get("drain_factor", 2.0)),
         )
+        rh = raw["recovery_hint"]
+        cfg.recovery_hint.degrade_enabled = bool(
+            rh.get("degrade_enabled", cfg.recovery_hint.degrade_enabled))
+        cfg.recovery_hint.snr_degrade_frac = float(
+            rh.get("snr_degrade_frac", cfg.recovery_hint.snr_degrade_frac))
+        cfg.recovery_hint.degrade_sustained_seconds = float(
+            rh.get("degrade_sustained_seconds", cfg.recovery_hint.degrade_sustained_seconds))
+        cfg.recovery_hint.degrade_min_ref = float(
+            rh.get("degrade_min_ref", cfg.recovery_hint.degrade_min_ref))
 
     return cfg

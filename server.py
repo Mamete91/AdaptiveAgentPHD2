@@ -49,6 +49,7 @@ _transparency_tracker = None
 # §57 S2 — hint di recupero dalla SNR guida. None => blocco recovery_hint assente.
 _recovery_hint_tracker = None
 _guide_health = None
+_safety_state = None
 # §58 — callback di spegnimento graceful (registrata da main.py: setta _stop_event).
 # None => POST /shutdown risponde 503 (es. server usato in contesti senza main loop).
 _shutdown_callback = None
@@ -93,6 +94,13 @@ def set_guide_health(tracker) -> None:
     SOLO misura, nessuna decisione — il latch vive nel plugin). /status.guide_health."""
     global _guide_health
     _guide_health = tracker
+
+
+def set_safety_state_store(store) -> None:
+    """§73 — registra lo store dello stato del Safety Monitor (riflesso del plugin:
+    la decisione resta sua). Alimentato da POST /nina/safety, letto da /status."""
+    global _safety_state
+    _safety_state = store
 
 
 def set_shutdown_callback(callback) -> None:
@@ -222,9 +230,6 @@ async def get_status():
             "consecutive_low": snap.consecutive_low,
         }
 
-    if _controller is not None:
-        ctrl_status["ai_find_enabled"] = _controller.ai_find_enabled
-
     # §41 — blocco top-level `nina` (telemetria esterna, NON stato del controller).
     # Difensivo: qualunque errore dello store degrada a "assente", non rompe /status.
     try:
@@ -272,6 +277,14 @@ async def get_status():
         logger.exception("Errore leggendo GuideHealthTracker in /status")
         guide_health = {"enabled": False}
 
+    # §73 — riflesso dello stato del Safety Monitor (pubblicato dal plugin).
+    try:
+        safety = (_safety_state.status_block() if _safety_state is not None
+                  else {"state": "UNKNOWN", "fresh": False})
+    except Exception:
+        logger.exception("Errore leggendo SafetyStateStore in /status")
+        safety = {"state": "UNKNOWN", "fresh": False}
+
     return JSONResponse({
         "timestamp": time.time(),
         "controller": ctrl_status,
@@ -279,6 +292,7 @@ async def get_status():
         "nina": nina_status,
         "recovery_hint": recovery_hint,
         "guide_health": guide_health,
+        "safety": safety,
     })
 
 
@@ -294,9 +308,6 @@ async def get_history(limit: int = 100):
 class DryRunPayload(BaseModel):
     enabled: bool
 
-class AIFindPayload(BaseModel):
-    enabled: bool
-
 class DiagModePayload(BaseModel):
     mode: str   # "off" | "jitter" | "guardian"
 
@@ -306,13 +317,6 @@ async def set_dry_run(payload: DryRunPayload):
     if _controller:
         _controller.set_dry_run(payload.enabled)
     return JSONResponse({"dry_run": payload.enabled})
-
-@app.post("/config/ai_find")
-async def set_ai_find(payload: AIFindPayload):
-    """Attiva/Disattiva AI Star Finder."""
-    if _controller:
-        _controller.ai_find_enabled = payload.enabled
-    return JSONResponse({"ai_find": payload.enabled})
 
 @app.post("/config/diagnostic_mode")
 async def set_diagnostic_mode(payload: DiagModePayload):
@@ -367,6 +371,38 @@ class NinaTelemetryPayload(BaseModel):
     ts_unix: Optional[float] = Field(default=None, ge=0)
     image: Optional[NinaImageMetrics] = None
     context: Optional[NinaContext] = None
+
+
+class SafetyStatePayload(BaseModel):
+    """§73 — stato del Safety Monitor pubblicato dal plugin a ogni tick N6.
+
+    Contratto tollerante come §41: campi ignoti si ignorano, stato non
+    riconosciuto => accepted=false (mai indovinare uno stato di sicurezza).
+    """
+    state: str
+    cause: Optional[str] = None
+    detail: Optional[str] = None
+    connected: bool = True
+    internal_safe: Optional[bool] = None
+    # §73-ter — cadenza del battito dichiarata dal plugin: l'Agente ne deriva la
+    # finestra di freschezza invece di indovinarla (vedi SafetyStateStore).
+    poll_interval_s: Optional[float] = Field(default=None, ge=0)
+
+
+@app.post("/nina/safety")
+async def ingest_safety_state(payload: SafetyStatePayload):
+    """Riceve lo stato del Safety Monitor dal plugin (SOLO presentazione).
+
+    Nessun consumatore nel motore: questo dato non entra in alcuna decisione
+    dell'agente — e' il riflesso di una decisione gia' presa dal plugin.
+    """
+    store = _safety_state
+    if store is None:
+        return JSONResponse({"accepted": False, "reason": "no store"})
+    ok = store.update(payload.state, payload.cause, payload.detail,
+                      payload.connected, payload.internal_safe,
+                      payload.poll_interval_s)
+    return JSONResponse({"accepted": ok})
 
 
 @app.post("/nina/telemetry")

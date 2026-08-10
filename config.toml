@@ -360,6 +360,17 @@ error_window_s = 120.0   # finestra di conteggio degli ErrorCode per-frame
 alert_window_s = 180.0   # entro quanto un Alert warning/error resta corroborante
 mass_window_s  = 120.0   # finestra per la dispersione di StarMass (elettrico vs ottico)
 
+# §71 — "canale pronto" per la Recovery Probe: consenso AND di condizioni sostenute
+# (frame che fluiscono, stella tracciata in modo STABILE, niente raffiche di errori,
+# niente alert severi). L'asticella è sopra il criterio di PHD2: il riaggancio-lampo
+# del 3/8 (41% di frame utili) resta correttamente respinto. Il plugin usa questo
+# segnale solo per DIFFERIRE la sonda S1 (tetto 15 min): mai per decidere il SAFE.
+ready_window_s             = 90.0
+ready_min_tracked_fraction = 0.7
+ready_frame_max_age_s      = 10.0
+ready_max_errors           = 2
+ready_min_samples          = 10
+
 [recovery_probe]
 # §57 S1 — posa-sonda FAIL-SAFE durante UNSAFE-nubi. La sonda la scatta il SEQUENCER
 # di NINA (template builtin: Trigger On Unsafe + Loop While Unsafe + Take Exposure —
@@ -382,3 +393,15 @@ snr_recover_frac   = 0.8         # PROVVISORIO — frame "buono" se snr >= frac 
 snr_recover_floor  = 25.0        # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
 sustained_seconds  = 60.0        # PROVVISORIO — secondi di segnale buono per active=true
 drain_factor       = 2.0         # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
+
+# §76 — polarità OPPOSTA: evidenza che il cielo sta PEGGIORANDO mentre N1 è ancora
+# fermo all'ultima posa buona. Tarata sulla notte 4/8: SNR crollata da ~70 a ~22
+# (31% del riferimento) fra le 23:07 e le 23:11, N1 ha visto le nubi alle 23:14 e
+# il monitor è passato UNSAFE alle 23:16 — otto minuti di posa sotto le nubi.
+# Soglia più severa e sostegno più lungo del recupero: un falso positivo qui mette
+# in pausa la sequenza, quindi si chiede più evidenza.
+degrade_enabled           = true
+snr_degrade_frac          = 0.5
+degrade_sustained_seconds = 90.0
+degrade_min_ref           = 15.0
+

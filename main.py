@@ -36,6 +36,7 @@ from phd2_agent.nina_indices import TransparencyTracker
 from phd2_agent.recovery_hint import RecoveryHintTracker
 from phd2_agent.guide_health import GuideHealthTracker
 from phd2_agent.reconnect_log import ReconnectLogPolicy
+from phd2_agent.safety_state import SafetyStateStore
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -184,6 +185,8 @@ def main():
     # plugin). Alimentato dagli eventi PHD2 nel loop, incluso LoopingExposures che
     # fino a ora l'agente ignorava del tutto.
     guide_health = GuideHealthTracker(cfg.guide_health)
+    # §73 — riflesso dello stato del Safety Monitor del plugin (solo dashboard).
+    safety_state = SafetyStateStore()
 
     # --- Dashboard ---
 
@@ -191,12 +194,13 @@ def main():
         try:
             from server import (start_server, set_global_state, set_nina_store,
                                  set_transparency_tracker, set_recovery_hint_tracker,
-                                 set_guide_health)
+                                 set_guide_health, set_safety_state_store)
             set_global_state(controller, analyzer, session_logger)
             set_nina_store(nina_store)
             set_transparency_tracker(transparency_tracker)
             set_recovery_hint_tracker(recovery_hint_tracker)
             set_guide_health(guide_health)
+            set_safety_state_store(safety_state)
             dash_thread = threading.Thread(
                 target=start_server,
                 kwargs={"host": cfg.dashboard.host, "port": cfg.dashboard.port},
@@ -466,7 +470,7 @@ def _event_loop(
             log.warning("StarLost - %s", event.get("Status", ""))
             # §68 — la stella persa NON cambia l'attesa di guida: PHD2 sta ancora
             # guidando (ci prova). Ma il frame esiste: ne registriamo la qualità.
-            _gh("on_guide_step", event)
+            _gh("on_star_lost", event)   # §71: frame arrivato, stella NO
 
             actions = []
             if not monitor_only and controller:

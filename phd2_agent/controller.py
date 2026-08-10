@@ -11,7 +11,8 @@ Il controller opera con un cooldown minimo tra modifiche successive
 per evitare oscillazioni nella regolazione stessa.
 
 PATCH APPLICATE rispetto alla versione originale:
-  - Fix import os mancante (era runtime bug nel ramo AI Star Finder LIVE)
+  - Fix import os mancante (era runtime bug nel ramo AI Star Finder LIVE,
+    rimosso in §75: la selezione stella e' competenza di PHD2)
   - MinMove dinamico (ora rispetta i range del config)
   - Baseline Guardian: save/restore baseline.json + orphan recovery
   - Saturation Timer: dopo 300s su stella satura forza re-scan find_star
@@ -247,7 +248,6 @@ class AdaptiveController:
         self._valid_exposures: list[int] = []
         self._auto_exposure_warned: bool = False
         self.star_lost_since: Optional[float] = None
-        self.ai_find_enabled: bool = False
         self._find_star_failures: int = 0
         self._find_star_last_attempt: float = 0.0
 
@@ -2404,7 +2404,7 @@ class AdaptiveController:
 
     def _evaluate_saturation_timer(self) -> list[ControlAction]:
         """
-        Se l'AI Star Finder ha forzato una stella satura, dopo X secondi
+        Se il Path B ha agganciato una stella satura, dopo X secondi
         (configurabile, default 300) tenta un re-scan via find_star() standard
         per vedere se le condizioni sono migliorate (velatura passata).
         """
@@ -2459,106 +2459,60 @@ class AdaptiveController:
         if elapsed < self.cfg.emergency.find_star_delay:
             return actions
 
-        if self.ai_find_enabled:
-            reason = (
-                f"Stella persa consecutivamente per {elapsed:.1f}s - "
-                f"AI Star Finder in azione"
-            )
-            action = ControlAction(
-                timestamp=time.time(), axis="camera", param="ai_find_star",
-                old_value=0.0, new_value=1.0, reason=reason, dry_run=self.dry_run,
-            )
-            if self.dry_run:
-                logger.info("[TEST] %s", action)
-            else:
-                try:
-                    from phd2_agent.star_finder import find_best_star
-                    filepath = self.client.save_image()
-                    if filepath and os.path.exists(filepath):
-                        cx, cy, info = find_best_star(filepath)
-                        if cx is not None and cy is not None:
-                            self.client.set_lock_position(cx, cy)
-                            action.reason += f" -> Trovata a ({cx:.1f}, {cy:.1f})"
+        # §75 — percorso UNICO di riselezione: `find_star()` di PHD2, con il
+        # backoff a tre livelli del §17 (nato dall'incidente delle 130+ chiamate
+        # in 6 minuti su camera crashata via USB). Il vecchio ramo "AI Star
+        # Finder" e' stato rimosso: era spento di default, il suo unico valore
+        # differenziale (rilevare la saturazione) e' oggi coperto per via NATIVA
+        # dal §68 (ErrorCode = STAR_SATURATED, ogni 3 s, senza salvare un FITS)
+        # e soprattutto SCAVALCAVA questo backoff — acceso su una camera in
+        # crisi avrebbe caricato proprio il bus che stava soffocando.
+        # La selezione della stella di guida e' competenza di PHD2: l'Agente
+        # misura, interpreta e decide, non duplica algoritmi nativi meglio
+        # informati. `star_finder.py` RESTA: lo usa il Path B (riselezione di
+        # stelle sature), che e' un sottosistema vivo e diverso da questo.
+        failures = self._find_star_failures
+        since_last = now - self._find_star_last_attempt
 
-                            if info.get("is_saturated"):
-                                self.saturated_lock_since = time.monotonic()
-                                self.last_saturation_info = {
-                                    **info, "cx": cx, "cy": cy,
-                                    "started_at": time.time(),
-                                }
-                                action.reason += (
-                                    f" [SATURATED peak={info['peak_adu']} ADU "
-                                    f"- possibile bias centroide, timer 300s avviato]"
-                                )
-                                logger.warning(
-                                    "AI Star Finder ha selezionato stella satura "
-                                    "(peak=%d ADU) - timer 300s avviato per re-scan",
-                                    info["peak_adu"],
-                                )
-                            else:
-                                # Reset timer se la nuova stella e' pulita
-                                self.saturated_lock_since = None
-                                self.last_saturation_info = None
+        if failures >= _FIND_STAR_SUSP_THRESHOLD:
+            if since_last >= _FIND_STAR_SUSP_INTERVAL:
+                logger.warning(
+                    "find_star SUSPENDED dopo %d fallimenti consecutivi — "
+                    "verificare connessione USB camera.",
+                    failures,
+                )
+                self._find_star_last_attempt = now
+            return actions
 
-                            logger.info("[LIVE] %s", action)
-                        else:
-                            action.reason += " -> Fallita, fallback standard"
-                            self.client.find_star()
-                            logger.info("[LIVE-FALLBACK] %s", action)
-                    else:
-                        self.client.find_star()
-                    self.star_lost_since = now
-                except Exception as e:
-                    logger.error("Errore AI Star Finder: %s", e)
-                    try:
-                        self.client.find_star()
-                    except Exception as e2:
-                        logger.error("Anche find_star standard fallito: %s", e2)
-                    self.star_lost_since = now
-            actions.append(action)
+        if failures >= _FIND_STAR_SLOW_THRESHOLD and since_last < _FIND_STAR_SLOW_INTERVAL:
+            return actions
+
+        reason = (
+            f"Stella persa consecutivamente per {elapsed:.1f}s - "
+            f"Auto-selezione nuova stella"
+        )
+        action = ControlAction(
+            timestamp=time.time(), axis="camera", param="find_star",
+            old_value=0.0, new_value=1.0, reason=reason, dry_run=self.dry_run,
+        )
+        self._find_star_last_attempt = now
+        if self.dry_run:
+            logger.info("[TEST] %s", action)
         else:
-            failures = self._find_star_failures
-            since_last = now - self._find_star_last_attempt
+            try:
+                self.client.find_star()
+                logger.info("[LIVE] %s", action)
+                self.star_lost_since = now
+                self._find_star_failures = 0
+            except Exception as e:
+                self._find_star_failures += 1
+                logger.error(
+                    "Errore find_star (tentativo %d): %s",
+                    self._find_star_failures, e,
+                )
+                action.dry_run = True
 
-            if failures >= _FIND_STAR_SUSP_THRESHOLD:
-                if since_last >= _FIND_STAR_SUSP_INTERVAL:
-                    logger.warning(
-                        "find_star SUSPENDED dopo %d fallimenti consecutivi — "
-                        "verificare connessione USB camera.",
-                        failures,
-                    )
-                    self._find_star_last_attempt = now
-                return actions
-
-            if failures >= _FIND_STAR_SLOW_THRESHOLD and since_last < _FIND_STAR_SLOW_INTERVAL:
-                return actions
-
-            reason = (
-                f"Stella persa consecutivamente per {elapsed:.1f}s - "
-                f"Auto-selezione nuova stella"
-            )
-            action = ControlAction(
-                timestamp=time.time(), axis="camera", param="find_star",
-                old_value=0.0, new_value=1.0, reason=reason, dry_run=self.dry_run,
-            )
-            self._find_star_last_attempt = now
-            if self.dry_run:
-                logger.info("[TEST] %s", action)
-            else:
-                try:
-                    self.client.find_star()
-                    logger.info("[LIVE] %s", action)
-                    self.star_lost_since = now
-                    self._find_star_failures = 0
-                except Exception as e:
-                    self._find_star_failures += 1
-                    logger.error(
-                        "Errore find_star (tentativo %d): %s",
-                        self._find_star_failures, e,
-                    )
-                    action.dry_run = True
-
-            actions.append(action)
+        actions.append(action)
         return actions
 
     # ------------------------------------------------------------------ #

@@ -89,6 +89,11 @@ class GuideHealthTracker:
         # dalla velatura (calo graduale). Solo telemetria, in questa fase.
         self._masses: deque[tuple[float, float]] = deque(maxlen=120)
 
+        # §71 — cronologia (ts, stella_tracciata) per la FRAZIONE SOSTENUTA: il
+        # riaggancio-lampo (3/8 23:40: 41% di frame utili, ripersa subito) non deve
+        # aprire il gate della sonda. Cadenza guida ~3 s => 400 campioni ≈ 20 min.
+        self._frames: deque[tuple[float, bool]] = deque(maxlen=400)
+
     # ------------------------------------------------------------------ #
     #  Ingest dagli eventi PHD2 (thread del loop eventi)                  #
     # ------------------------------------------------------------------ #
@@ -101,6 +106,21 @@ class GuideHealthTracker:
         with self._lock:
             self._last_guide_step = now
             self._last_frame = now
+            self._frames.append((now, True))
+            self._note_frame_quality(event, now)
+
+    def on_star_lost(self, event: dict) -> None:
+        """§71 — StarLost: la camera HA consegnato un frame (canale vivo) ma la
+        stella non c'è. Aggiorna l'orologio dei frame, NON quello di guida, e
+        registra il frame come non-tracciato per la frazione sostenuta. Gli
+        StarLost portano ErrorCode/SNR/StarMass del tentativo fallito: la
+        qualità va annotata (è la corroborazione del latch §68)."""
+        if not self.cfg.enabled:
+            return
+        now = self._now()
+        with self._lock:
+            self._last_frame = now
+            self._frames.append((now, False))
             self._note_frame_quality(event, now)
 
     def on_looping_exposure(self, event: dict) -> None:
@@ -111,6 +131,7 @@ class GuideHealthTracker:
         now = self._now()
         with self._lock:
             self._last_frame = now
+            self._frames.append((now, False))
             self._note_frame_quality(event, now)
 
     def _note_frame_quality(self, event: dict, now: float) -> None:
@@ -169,6 +190,42 @@ class GuideHealthTracker:
         mad = statistics.median([abs(v - med) for v in vals])
         return round(mad / med, 3)
 
+    def _channel_ready(self, now: float, errors_recent: int,
+                       alert_severe: bool) -> tuple[bool, list[str], Optional[float]]:
+        """§71 — "il canale guida merita una sonda da 300 s?" — consenso AND di
+        condizioni binarie SOSTENUTE, mai uno score pesato (anti-§68: i pesi non
+        si validano sul cielo e un punteggio non spiega COSA manca).
+
+        L'asticella è volutamente SOPRA il criterio di PHD2: PHD2 si dichiara
+        "guiding" nell'istante dell'aggancio; qui serve stabilità dimostrata.
+        Il 3/8 alle 23:40 (riaggancio al 41%%, ripersa subito) resta respinto;
+        alle 23:47 (86%% sostenuto) il gate si apre. Chiamata sotto lock.
+
+        SOLO MISURA: il plugin usa questo per DIFFERIRE la sonda S1 entro un
+        tetto rigido (15 min) — mai per decidere il SAFE, mai come veto.
+        """
+        reasons: list[str] = []
+
+        frame_age = self._age(self._last_frame, now)
+        if frame_age is None or frame_age > self.cfg.ready_frame_max_age_s:
+            reasons.append("nessun frame recente dal canale")
+
+        window = [tr for ts, tr in self._frames if now - ts <= self.cfg.ready_window_s]
+        fraction: Optional[float] = None
+        if len(window) < self.cfg.ready_min_samples:
+            reasons.append(f"base statistica insufficiente ({len(window)} frame)")
+        else:
+            fraction = round(sum(window) / len(window), 3)
+            if fraction < self.cfg.ready_min_tracked_fraction:
+                reasons.append(f"stella instabile ({fraction:.0%} tracciata)")
+
+        if errors_recent > self.cfg.ready_max_errors:
+            reasons.append(f"{errors_recent} errori stella recenti")
+        if alert_severe:
+            reasons.append("alert PHD2 severo recente")
+
+        return (not reasons, reasons, fraction)
+
     def status_block(self) -> dict[str, Any]:
         with self._lock:
             now = self._now()
@@ -183,6 +240,12 @@ class GuideHealthTracker:
             if self._last_alert is not None:
                 a_ts, alert_type, alert_msg = self._last_alert
                 alert_age = self._age(a_ts, now)
+
+            alert_severe_now = bool(alert_type in _ALERT_SEVERE
+                                    and alert_age is not None
+                                    and alert_age <= self.cfg.alert_window_s)
+            ready, reasons, tracked_fraction = self._channel_ready(
+                now, len(recent), alert_severe_now)
 
             return {
                 "enabled": self.cfg.enabled,
@@ -209,4 +272,8 @@ class GuideHealthTracker:
                                      and alert_age <= self.cfg.alert_window_s),
                 "star_mass_dispersion": self._mass_dispersion(now),
                 "error_window_s": self.cfg.error_window_s,
+                # §71 — "canale pronto" per la sonda: consenso AND, vedi _channel_ready.
+                "channel_ready": ready,
+                "channel_not_ready_reasons": reasons,
+                "tracked_fraction": tracked_fraction,
             }
