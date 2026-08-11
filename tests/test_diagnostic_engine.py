@@ -256,6 +256,73 @@ class TestGuardianReviewAttenuate(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+#  §80. Ultimo verdetto Guardian: un EVENTO, non uno stato                       #
+# --------------------------------------------------------------------------- #
+
+class TestLastVerdict(unittest.TestCase):
+    """Il Guardian non ha uno stato: ha una serie di giudizi su singole azioni.
+    Il campo si chiama last_verdict e porta istante e leva proprio per non poter
+    essere letto come "condizione corrente" — il vincolo posto in revisione."""
+
+    def test_absent_until_something_is_judged(self):
+        """Mai un verdetto per difetto: se nessuna azione e' stata rivista, e' None."""
+        eng = _engine()
+        self.assertIsNone(eng.get_state()["last_verdict"],
+                          "senza azioni riviste non esiste alcun verdetto")
+
+    def test_records_verdict_lever_and_instant(self):
+        eng = _engine()
+        _build_refs(eng)
+        eng.classify(_snap(rms_total=0.6, lag1_ra=0.5, lag1_dec=0.5, trend_ra=0.1))
+        eng.review("CASO1", is_minmove=False, direction=-1.0,
+                   context="RA/Aggressiveness")
+        lv = eng.get_state()["last_verdict"]
+        self.assertEqual(lv["verdict"], "BLOCK")
+        self.assertEqual(lv["context"], "RA/Aggressiveness",
+                         "la leva in esame va detta: senza, il verdetto non e' rileggibile")
+        self.assertEqual(lv["factor"], 0.0, "bloccato = ampiezza superstite nulla")
+        self.assertTrue(lv["ts_utc"], "un evento senza istante non e' un evento")
+        self.assertIn("DRIFT", lv["reason"])
+
+    def test_attenuate_keeps_the_surviving_amplitude(self):
+        """La distinzione che motiva tutto il §80: 'non si e' mossa' contro
+        'si e' mossa a meta''."""
+        eng = _engine(guardian_attenuate_factor=0.45)
+        _build_refs(eng)
+        eng.classify(_snap(rms_total=0.6, lag1_ra=-0.9, lag1_dec=-0.9))
+        eng.review("CASO1", is_minmove=True, direction=+1.0, context="DEC/MinMove")
+        lv = eng.get_state()["last_verdict"]
+        self.assertEqual(lv["verdict"], "ATTENUATE")
+        self.assertAlmostEqual(lv["factor"], 0.45)
+
+    def test_every_branch_carries_the_lever(self):
+        """Il contesto e' depositato da review(), non inoltrato ramo per ramo:
+        nessun percorso puo' dimenticarlo. Qui il ramo fail-safe, il piu' lontano
+        dal punto di deposito."""
+        eng = _engine()                      # refs non pronte -> fail-safe CONFIRM
+        eng.review("CASO3", is_minmove=False, direction=+1.0, context="RA/MinMove")
+        lv = eng.get_state()["last_verdict"]
+        self.assertEqual(lv["verdict"], "CONFIRM")
+        self.assertEqual(lv["context"], "RA/MinMove")
+
+    def test_context_does_not_leak_to_the_next_verdict(self):
+        """Consumato dopo l'uso: un verdetto senza contesto non deve ereditare
+        quello del precedente (sarebbe un'attribuzione falsa)."""
+        eng = _engine()
+        eng.review("CASO3", is_minmove=False, direction=+1.0, context="RA/Aggressiveness")
+        eng.review("CASO3", is_minmove=False, direction=+1.0)
+        self.assertIsNone(eng.get_state()["last_verdict"]["context"])
+
+    def test_survives_reset_like_the_counters(self):
+        """E' una traccia storica: un dither non cancella cio' che e' accaduto."""
+        eng = _engine()
+        eng.review("CASO3", is_minmove=False, direction=+1.0, context="RA/Aggressiveness")
+        eng.reset("dither")
+        self.assertIsNotNone(eng.get_state()["last_verdict"],
+                             "il reset azzera la diagnosi, non la cronaca")
+
+
+# --------------------------------------------------------------------------- #
 #  14. Guardian review fail-safe: confidence bassa / UNCERTAIN -> CONFIRM         #
 # --------------------------------------------------------------------------- #
 

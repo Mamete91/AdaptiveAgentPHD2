@@ -238,7 +238,7 @@ NOVITA' v1.2 (Safety Monitor virtuale opzionale):
 Il plugin v1.2 espone anche un Safety Monitor virtuale che NINA puo'
 usare come driver di sicurezza. Si attiva in NINA andando in Equipment
 -> Safety Monitor, selezionando dalla tendina (sotto categoria N.I.N.A.)
-"Adaptive Agent for PHD2 - Guide Safety" e cliccando Connect. Il driver
+"Adaptive Agent for PHD2 - Condizioni del Cielo" e cliccando Connect. Il driver
 segnala unsafe quando la guida resta in STAR_LOST oltre 5 minuti (valore
 configurabile nelle impostazioni del plugin). Le reazioni concrete
 (pausa sequenza, parking, ecc.) si configurano dentro NINA in

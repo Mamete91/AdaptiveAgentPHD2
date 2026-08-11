@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Optional
@@ -169,6 +170,13 @@ class SeeingDiagnosticEngine:
         self._guardian_counts: dict[str, int] = {
             "CONFIRM": 0, "ATTENUATE": 0, "BLOCK": 0, "micro": 0,
         }
+        # §80 — ULTIMO verdetto emesso, con istante e leva. NON e' "lo stato del
+        # Guardian": il Guardian non ha uno stato, ha una serie di giudizi su
+        # singole azioni. Rileggendo una notte, "la leva non si e' mossa" e "la
+        # leva si e' mossa a meta'" sono due storie diverse, e finora erano
+        # distinguibili solo aprendo i log. Sopravvive al reset come i conteggi.
+        self._last_verdict: Optional[dict] = None
+        self._verdict_context: Optional[str] = None
         # §47 — shadow: quante volte il ramo oscillazioni AVREBBE agito da disattivo
         # (e in quante di quelle l'RMS stava davvero peggiorando, rms>rms_high).
         self._osc_would_fire: int = 0
@@ -533,8 +541,9 @@ class SeeingDiagnosticEngine:
     #  Guardian: review delle mosse v2.3                                   #
     # ------------------------------------------------------------------ #
 
-    def review(self, caso: str, is_minmove: bool,
-               direction: float) -> tuple[GuardianVerdict, float, str]:
+    def review(self, caso: str, is_minmove: bool, direction: float,
+               context: Optional[str] = None
+               ) -> tuple[GuardianVerdict, float, str]:
         """Rivede una mossa leva proposta dalla v2.3 (modalita' guardian).
 
         Fail-safe: in dubbio (diagnosi non confidente) -> CONFIRM. I soli BLOCK:
@@ -543,6 +552,10 @@ class SeeingDiagnosticEngine:
 
         Ritorna (verdict, factor, reason). `factor` e' usato solo per ATTENUATE.
         """
+        # §80 — la leva in esame, per l'ultimo verdetto. Depositata qui e letta
+        # da _verdict(): cosi' ogni ramo la eredita senza doverla inoltrare.
+        self._verdict_context = context
+
         # Fail-safe: senza diagnosi confidente la v2.3 passa invariata.
         if not self._is_confident():
             return self._verdict(GuardianVerdict.CONFIRM, 1.0,
@@ -571,6 +584,15 @@ class SeeingDiagnosticEngine:
     def _verdict(self, verdict: GuardianVerdict, factor: float,
                  reason: str) -> tuple[GuardianVerdict, float, str]:
         self._guardian_counts[verdict.name] += 1
+        self._last_verdict = {
+            "verdict": verdict.name,          # CONFIRM | ATTENUATE | BLOCK
+            # Ampiezza superstite: 1.0 confermata, 0.0 bloccata, in mezzo attenuata.
+            "factor": round(float(factor), 3),
+            "reason": reason,
+            "context": self._verdict_context,   # "RA/Aggressiveness", se noto
+            "ts_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        self._verdict_context = None
         return verdict, factor, reason
 
     # ------------------------------------------------------------------ #
@@ -623,6 +645,7 @@ class SeeingDiagnosticEngine:
                             "trend_max": 0.0},
                 "counts": dict(self._counts),
                 "guardian_counts": dict(self._guardian_counts),
+                "last_verdict": dict(self._last_verdict) if self._last_verdict else None,
                 "oscillation_branch_enabled": getattr(self.cfg, "oscillation_branch_enabled", False),
                 "osc_would_fire": self._osc_would_fire,
                 "osc_would_fire_degraded": self._osc_would_fire_degraded,
@@ -644,6 +667,7 @@ class SeeingDiagnosticEngine:
             "metrics": r.metrics,
             "counts": dict(self._counts),
             "guardian_counts": dict(self._guardian_counts),
+            "last_verdict": dict(self._last_verdict) if self._last_verdict else None,
             "oscillation_branch_enabled": getattr(self.cfg, "oscillation_branch_enabled", False),
             "osc_would_fire": self._osc_would_fire,
             "osc_would_fire_degraded": self._osc_would_fire_degraded,

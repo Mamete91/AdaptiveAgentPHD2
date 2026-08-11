@@ -1729,7 +1729,9 @@ class AdaptiveController:
             return action
 
         direction = new_value - old_value
-        verdict, factor, vreason = self.diagnostic_engine.review(caso, is_minmove, direction)
+        verdict, factor, vreason = self.diagnostic_engine.review(
+            caso, is_minmove, direction,
+            context=f"{axis_state.axis}/{param_name}")   # §80
 
         if verdict == GuardianVerdict.CONFIRM:
             action = self._apply(axis_state, limits, param_name, old_value, new_value,

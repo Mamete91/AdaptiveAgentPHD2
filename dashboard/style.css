@@ -1110,3 +1110,129 @@ input:checked + .toggle-slider::after { transform: translateX(20px); background:
   color: #8a9cc0;
 }
 .sky-story-action:empty { display: none; }
+
+/* ===================================================================== */
+/*  §81 — LIVELLO 1: la striscia delle cinque condizioni                 */
+/*  Regola di gerarchia: la prominenza del primo slot si ottiene con     */
+/*  larghezza e dimensione dell'icona, MAI col colore — il colore è      */
+/*  riservato alla condizione (regola 1 del linguaggio visivo).          */
+/* ===================================================================== */
+.l1-strip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.l1-slot {
+  padding: 0.9rem 1rem;
+  border-right: 1px solid var(--border);
+  cursor: help;
+  transition: background 0.15s ease;
+}
+.l1-slot:last-child { border-right: none; }
+.l1-slot:hover { background: var(--bg-card-hover); }
+.l1-head {
+  font-size: 0.6rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.55rem;
+}
+.l1-body { display: flex; align-items: center; gap: 0.6rem; }
+.l1-txt { min-width: 0; }
+.l1-ico {
+  width: 30px; height: 30px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+  color: var(--text-muted);
+}
+.l1-title {
+  font-size: 0.82rem; font-weight: 650; line-height: 1.25;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.l1-val {
+  font-family: var(--font-mono); font-size: 0.65rem;
+  color: var(--text-muted); margin-top: 0.1rem;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Slot primario: più aria, icona più grande, titolo più grande. */
+.l1-primary { background: var(--bg-elevated); }
+.l1-primary .l1-ico { width: 38px; height: 38px; }
+.l1-primary .l1-title { font-size: 0.95rem; }
+.l1-primary .l1-head { color: var(--text-secondary); }
+
+/* Il tono colora icona e titolo insieme: una sola sorgente di verità. */
+.l1-slot.tone-green  .l1-ico, .l1-slot.tone-green  .l1-title { color: var(--green); }
+.l1-slot.tone-yellow .l1-ico, .l1-slot.tone-yellow .l1-title { color: var(--yellow); }
+.l1-slot.tone-orange .l1-ico, .l1-slot.tone-orange .l1-title { color: var(--orange); }
+.l1-slot.tone-red    .l1-ico, .l1-slot.tone-red    .l1-title { color: var(--red); }
+.l1-slot.tone-blue   .l1-ico, .l1-slot.tone-blue   .l1-title { color: var(--blue); }
+.l1-slot.tone-purple .l1-ico, .l1-slot.tone-purple .l1-title { color: var(--purple); }
+
+/* Icona del racconto cielo: da emoji a vettoriale, stesso vocabolario. */
+svg.sky-story-icon {
+  width: 22px; height: 22px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+@media (max-width: 900px) {
+  .l1-strip { grid-template-columns: 1fr 1fr; }
+  .l1-slot { border-bottom: 1px solid var(--border); }
+}
+
+/* §81 — i tre pannelli storici passano da emoji a vettoriale: stesso
+   vocabolario della striscia, così la dashboard parla una lingua sola. */
+svg.condition-icon {
+  width: 34px; height: 34px;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ===================================================================== */
+/*  §82 — LIVELLO 2: "cosa sta intervenendo"                             */
+/*  Non e' un pannello: e' una riga che ESISTE solo quando c'e' qualcosa  */
+/*  da segnalare. Niente placeholder, niente "tutto ok" — quello lo dice  */
+/*  gia' il livello 1, che e' il solo autorizzato a mostrare il verde.    */
+/* ===================================================================== */
+.l2-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.l2-row[hidden] { display: none; }
+.l2-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.8rem 0.45rem 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  cursor: help;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.l2-chip:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
+.l2-ico {
+  width: 20px; height: 20px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+  color: var(--text-muted);
+}
+.l2-lbl { font-size: 0.72rem; font-weight: 600; color: var(--text-secondary); }
+.l2-val {
+  font-family: var(--font-mono); font-size: 0.66rem;
+  color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+/* Stesso vocabolario cromatico del livello 1: un colore, un significato. */
+.l2-chip.tone-green  .l2-ico, .l2-chip.tone-green  .l2-lbl { color: var(--green); }
+.l2-chip.tone-yellow .l2-ico, .l2-chip.tone-yellow .l2-lbl { color: var(--yellow); }
+.l2-chip.tone-orange .l2-ico, .l2-chip.tone-orange .l2-lbl { color: var(--orange); }
+.l2-chip.tone-red    .l2-ico, .l2-chip.tone-red    .l2-lbl { color: var(--red); }
+.l2-chip.tone-blue   .l2-ico, .l2-chip.tone-blue   .l2-lbl { color: var(--blue); }

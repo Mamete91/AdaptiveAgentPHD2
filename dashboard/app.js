@@ -214,9 +214,9 @@ function handleMessage(msg) {
   } else if (msg.type === 'status') {
     applyFullStatus(msg);
   } else if (msg.type === 'star_lost') {
-    setCondition('STAR_LOST', '⭕', '🌕 Stella persa');
+    setCondition('STAR_LOST', 'mirinoLost', 'Stella persa');
   } else if (msg.type === 'start_guiding') {
-    setCondition('NOMINAL', '🌟', 'Guida avviata');
+    setCondition('NOMINAL', 'mirino', 'Guida avviata');
   } else if (msg.type === 'guiding_stopped') {
     setCondition('UNKNOWN', '⏸', 'Guida ferma');
   }
@@ -291,7 +291,8 @@ function applyFullStatus(data) {
   // §45 — Transparency Index (NINA, Layer-2)
   updateTransparency(data.nina);
   updateRecoveryHint(data.recovery_hint);
-  updateSafetyState(data.safety, data.guide_health);
+  updateLevel1(data);      // §81 — include lo slot SESSIONE
+  updateLevel2(data);      // §82 — solo in deviazione
   updateSkyStory(data);
   updateDynamicPanels(data);
 
@@ -405,24 +406,24 @@ function addChartPoint(label, ra, dec, tot, expMarker = null, ninaMarker = null)
 
 // Condizione seeing
 const CONDITION_MAP = {
-  NOMINAL:         { icon: '🌟', color: '#00d68f', label: 'Nominale' },
-  DEGRADED_SEEING: { icon: '🌪', color: '#ff9a3c', label: 'Seeing Degradato' },
-  OSCILLATING:     { icon: '〰️', color: '#ffd66b', label: 'Oscillazione' },
-  LOW_SNR:         { icon: '🌫', color: '#8a9cc0', label: 'SNR Basso' },
-  STAR_LOST:       { icon: '❌', color: '#ff5555', label: 'Stella Persa' },
-  UNKNOWN:         { icon: '🌙', color: '#4d5f7a', label: 'In attesa…' },
+  NOMINAL:         { icon: 'mirino',     color: '#00d68f', label: 'Nominale' },
+  DEGRADED_SEEING: { icon: 'diagSeeing', color: '#ff9a3c', label: 'Seeing Degradato' },
+  OSCILLATING:     { icon: 'diagOver'  , color: '#ffd66b', label: 'Oscillazione' },
+  LOW_SNR:         { icon: 'ondaGiu',    color: '#8a9cc0', label: 'SNR Basso' },
+  STAR_LOST:       { icon: 'mirinoLost', color: '#ff5555', label: 'Stella Persa' },
+  UNKNOWN:         { icon: 'mirinoOff',  color: '#4d5f7a', label: 'In attesa…' },
 };
 
 function setCondition(key, iconOverride, labelOverride) {
   const cfg = CONDITION_MAP[key] || CONDITION_MAP.UNKNOWN;
-  el('condition-icon').textContent = iconOverride || cfg.icon;
+  setGlyph('condition-icon', iconOverride || cfg.icon);
   el('condition-name').textContent = labelOverride || cfg.label;
   el('condition-name').style.color = cfg.color;
 }
 
 function setConditionFromName(condName, desc) {
   const cfg = CONDITION_MAP[condName] || CONDITION_MAP.UNKNOWN;
-  el('condition-icon').textContent = cfg.icon;
+  setGlyph('condition-icon', cfg.icon);
   el('condition-name').textContent = cfg.label;
   el('condition-name').style.color = cfg.color;
   el('condition-desc').textContent = desc;
@@ -576,9 +577,9 @@ function fmtDelta(v) {
 }
 
 const TRANSP_STATE = {
-  CLEAR: { icon: '🌌', color: '#4ade80', label: 'CIELO LIMPIDO' },
-  HAZE:  { icon: '🌫️', color: '#fbbf24', label: 'VELATURE' },
-  CLOUD: { icon: '☁️', color: '#f87171', label: 'NUVOLE' },
+  CLEAR: { icon: 'sole',     color: '#4ade80', label: 'CIELO LIMPIDO' },
+  HAZE:  { icon: 'soleNube', color: '#fbbf24', label: 'VELATURE' },
+  CLOUD: { icon: 'nube',     color: '#f87171', label: 'NUVOLE' },
 };
 
 // §45 — card Transparency Index (NINA). Graceful: senza telemetria la card è nascosta.
@@ -591,8 +592,8 @@ function updateTransparency(nina) {
     return;
   }
   card.style.display = '';
-  const cfg = TRANSP_STATE[t.state] || { icon: '🌌', color: '#9ca3af', label: t.state || '—' };
-  el('transp-icon').textContent = cfg.icon;
+  const cfg = TRANSP_STATE[t.state] || { icon: 'nubeIgn', color: '#9ca3af', label: t.state || '—' };
+  setGlyph('transp-icon', cfg.icon);
   el('transp-state').textContent = cfg.label;
   el('transp-state').style.color = cfg.color;
   const dpct = (t.deficit_pct != null) ? t.deficit_pct : 0;
@@ -638,46 +639,285 @@ function updateTransparency(nina) {
 // §57 — card Recovery: hint SNR-guida (S2, sola osservazione) + ultima sonda (S1/S2).
 // Graceful: nascosta se il tracker è spento o non c'è mai stato contesto degradato.
 // ---------------------------------------------------------------------------
-//  §73 — Stato del Safety Monitor
+//  §73 — Stato del monitor Condizioni del Cielo (§78)
 //  Il monitor decide nel plugin; qui si RIFLETTE soltanto. Uno stato per volta,
 //  quello vero: nessuno stato inventato. La causa dell'UNSAFE è mostrata come
 //  stato perché è l'azione operativa distinta ("guarda la camera" ≠ "aspetta la
 //  nuvola"); il dettaglio racconta cosa sta facendo il recupero.
 // ---------------------------------------------------------------------------
 const SAFETY_UI = {
-  SAFE: {
-    cls: 'safe', dot: '🟢', label: 'SAFE',
-    tip: "SAFE\nIl Safety Monitor non rileva condizioni di rischio: la sequenza può procedere normalmente.",
-  },
-  MERIDIAN_PROTECTION: {
-    cls: 'meridian', dot: '🔵', label: 'MERIDIAN PROTECTION',
-    tip: "MERIDIAN PROTECTION\nStato transitorio: autorizza la sola manovra meccanica di meridian flip mentre la valutazione di sicurezza resta internamente invariata. Terminato il flip il monitor riprende immediatamente il controllo normale.",
-  },
-  STAR_LOST: {
-    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · STAR LOST',
-    tip: "UNSAFE — STAR LOST\nPHD2 ha perso la stella di guida in modo persistente. La sequenza resta sospesa finché la guida non torna operativa.",
-  },
-  CLOUD: {
-    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · NUBI',
-    tip: "UNSAFE — NUBI\nDegrado di trasparenza persistente misurato sul conteggio stelle della camera di ripresa. Il rientro richiede evidenza di cielo realmente tornato limpido.",
-  },
-  STALE_TELEMETRY: {
-    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · TELEMETRIA STANTIA',
-    tip: "UNSAFE — TELEMETRIA STANTIA\nLa telemetria di NINA si è fermata mentre l'ultimo cielo noto era degradato: senza osservazione affidabile non si dichiara sicuro.",
-  },
-  AGENT_LOST: {
-    cls: 'unsafe', dot: '🔴', label: 'UNSAFE · AGENTE PERSO',
-    tip: "UNSAFE — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio.",
-  },
-  GUIDE_UNOBSERVABLE: {
-    cls: 'guide', dot: '⚫', label: 'GUIDE UNOBSERVABLE',
-    tip: "GUIDE UNOBSERVABLE\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). La sequenza resta sospesa fino al ripristino dell'osservabilità: controlla camera di guida, cavo e USB.",
-  },
-  UNKNOWN: {
-    cls: 'unknown', dot: '⚪', label: 'MONITOR —',
-    tip: "STATO SCONOSCIUTO\nIl Safety Monitor non sta pubblicando il proprio stato: non è connesso in NINA, oppure il plugin non è attivo. Assenza di notizie non significa 'sicuro'.",
-  },
+  SAFE: { glyph: 'scudoOk', tone: 'tone-green', title: 'Autorizzata', cause: 'SAFE',
+    tip: "SESSIONE AUTORIZZATA\nNessuna condizione di rischio rilevata: la sequenza può procedere normalmente." },
+  MERIDIAN_PROTECTION: { glyph: 'scudoFlip', tone: 'tone-blue', title: 'Finestra meridiano', cause: 'FLIP AUTORIZZATO',
+    tip: "FINESTRA MERIDIANO\nStato transitorio: autorizza la sola manovra meccanica di meridian flip mentre la valutazione di sicurezza resta internamente invariata. Terminato il flip riprende il controllo normale." },
+  STAR_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'STELLA PERSA',
+    tip: "SOSPESA — STELLA PERSA\nPHD2 ha perso la stella di guida in modo persistente. La sequenza resta sospesa finché la guida non torna operativa." },
+  CLOUD: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'NUBI',
+    tip: "SOSPESA — NUBI\nDegrado di trasparenza persistente misurato sul conteggio stelle della camera di ripresa. Il rientro richiede evidenza di cielo realmente tornato limpido." },
+  STALE_TELEMETRY: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'TELEMETRIA FERMA',
+    tip: "SOSPESA — TELEMETRIA FERMA\nLa telemetria di NINA si è fermata mentre l'ultimo cielo noto era degradato: senza osservazione affidabile non si dichiara sicuro." },
+  AGENT_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'AGENTE PERSO',
+    tip: "SOSPESA — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio." },
+  GUIDE_UNOBSERVABLE: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'CANALE GUIDA CIECO',
+    tip: "SOSPESA — CANALE GUIDA CIECO\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). Controlla camera di guida, cavo e USB." },
+  UNKNOWN: { glyph: 'scudoIgn', tone: '', title: 'Sconosciuta', cause: 'NESSUNA NOTIZIA',
+    tip: "STATO SCONOSCIUTO\nIl monitor delle Condizioni del Cielo non sta pubblicando il proprio stato: non è connesso in NINA, oppure il plugin non è attivo. Assenza di notizie non significa 'sicuro'." },
 };
+
+// ---------------------------------------------------------------------------
+//  §81 — LIVELLO 1. Cinque slot fissi. La regola che li governa: il livello 1
+//  non RIASSUME, ELEGGE. Nessuna icona nuova qui sopra — ogni slot mostra una
+//  delle icone del vocabolario, promossa perché è quella che adesso conta di
+//  più. Così una macro-condizione non diventa mai uno stato inventato (§73).
+// ---------------------------------------------------------------------------
+const GUIDA_UI = {
+  NORMAL:     ['mirino',     'tone-green',  'Stabile'],
+  DEGRADED:   ['mirino',     'tone-yellow', 'In degrado'],
+  CRITICAL:   ['mirino',     'tone-orange', 'Critico'],
+  RECOVERING: ['mirinoRec',  'tone-blue',   'In recupero'],
+  STAR_LOST:  ['mirinoLost', 'tone-red',    'Stella persa'],
+  INACTIVE:   ['mirinoOff',  '',            'Ferma'],
+};
+const CIELO_UI = {
+  CLEAR: ['sole',     'tone-green',  'Limpido'],
+  HAZE:  ['soleNube', 'tone-yellow', 'Velatura'],
+  CLOUD: ['nube',     'tone-orange', 'Coperto'],
+};
+const DIAG_UI = {
+  NOMINAL:           ['diagStabile', 'tone-green'],
+  SEEING:            ['diagSeeing',  'tone-yellow'],
+  OVERCORRECTION:    ['diagOver',    'tone-orange'],
+  DRIFT:             ['diagDrift',   'tone-purple'],
+  UNCERTAIN:         ['diagIgn',     ''],
+  INSUFFICIENT_DATA: ['diagIgn',     ''],
+};
+const VERDICT_IT = { CONFIRM: 'confermata', ATTENUATE: 'attenuata', BLOCK: 'bloccata' };
+
+// §81 — scambia il glifo di un contenitore <svg><use>. Un solo punto di
+// verita' per tutte le icone della dashboard: il vocabolario e' quello.
+function setGlyph(id, glyph) {
+  const u = el(id + '-u');
+  if (u) { u.setAttribute('href', '#i-' + glyph); }
+}
+
+function l1(key, glyph, tone, title, val, tip) {
+  const slot = el('l1-' + key);
+  if (!slot) { return; }
+  slot.className = 'l1-slot' + (key === 'ctrl' ? ' l1-primary' : '') + (tone ? ' ' + tone : '');
+  el('l1-' + key + '-u').setAttribute('href', '#i-' + glyph);
+  el('l1-' + key + '-t').textContent = title;
+  el('l1-' + key + '-v').textContent = val || '';
+  slot.title = tip || '';
+}
+
+function hhmm(iso) {
+  if (!iso) { return ''; }
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ---------------------------------------------------------------------------
+//  §82 — LIVELLO 2: "perché / cosa sta intervenendo".
+//
+//  Tre vincoli, tutti e tre posti in revisione e tutti e tre verificabili
+//  leggendo questa funzione:
+//    1. SOLO campi già esposti su /status — nessuna metrica nuova, nessuno
+//       stato sintetico. Ogni voce nasce da un booleano che esiste già.
+//    2. SOLO icone del vocabolario (§81). Nessuna forma nuova.
+//    3. Compare SOLO in deviazione. Il verde lo mostra il livello 1, che è
+//       quello che rassicura; qui si parla solo quando c'è da capire.
+//
+//  Rapporto col livello 1: lo slot RECUPERO lassù ELEGGE una fase sola.
+//  Qui si vede anche ciò che l'elezione ha dovuto lasciare fuori — ed è
+//  esattamente il compito del livello: spiegare, non riassumere.
+// ---------------------------------------------------------------------------
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                  .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+let _l2Signature = null;
+
+function updateLevel2(data) {
+  const row = el('l2-row');
+  if (!row) { return; }
+
+  const ctrl = data.controller || {};
+  const rh = data.recovery_hint || {};
+  const gh = data.guide_health || {};
+  const de = ctrl.diagnostic_engine || {};
+  const chips = [];
+  const add = (glyph, tone, label, val, tip) => chips.push([glyph, tone, label, val, tip]);
+
+  // --- COSA RILEVO -------------------------------------------------------
+  if (rh.degrading) {
+    add('ondaGiu', 'tone-orange', 'Sensore rapido',
+        `cielo in peggioramento · ${Math.round(rh.degrade_s || 0)} s`,
+        "Il canale di guida vede il segnale della stella calare rispetto al sereno recente" +
+        (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} contro ${rh.snr_ref})` : '') +
+        ".\nLa camera di ripresa se ne accorgerebbe solo a fine posa.");
+  }
+  if (gh.enabled && gh.channel_ready === false) {
+    const why = (gh.channel_not_ready_reasons || []).join(', ');
+    add('segnaleDebole', 'tone-yellow', 'Canale guida', 'non pronto',
+        (why ? why + ".\n\n" : '') +
+        "Finché la stella non è tracciata in modo stabile, una posa di verifica misurerebbe " +
+        "il nostro problema invece del cielo: le sonde di recupero, se attive, restano differite.");
+  }
+
+  // --- COSA STO FACENDO --------------------------------------------------
+  const mm = ctrl.minmove_cap || {};
+  if (mm.enabled && mm.clamping_active === true) {
+    add('bandaStringe', 'tone-yellow', 'Adaptive MinMove', 'sta limitando',
+        "La banda morta sta effettivamente trattenendo correzioni: il seeing chiede di non " +
+        "inseguire il rumore." +
+        (mm.cap_arcsec != null ? `\n\nTetto corrente ${mm.cap_arcsec}"` : '') +
+        (mm.winning ? ` (vince il termine ${mm.winning}).` : '.'));
+  }
+  if (rh.active) {
+    add('nubeSu', 'tone-blue', 'Suggerimento recupero', 'possibile schiarita',
+        "La stella di guida è risalita vicino al livello del sereno recente" +
+        (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} su ${rh.snr_ref})` : '') +
+        ".\nNon è una conferma: a dire se il campo di ripresa è tornato utilizzabile " +
+        "può essere solo la posa di verifica.");
+  }
+  const probes = Array.isArray(rh.probes) ? rh.probes : [];
+  if (probes.length) {
+    const last = probes[probes.length - 1];
+    const ok = last.outcome_state === 'CLEAR';
+    add(ok ? 'lenteSi' : 'lenteNo', ok ? 'tone-green' : 'tone-orange',
+        'Verifica del campo',
+        `${probes.length} · ${ok ? 'campo tornato' : 'ancora chiuso'}`,
+        (ok ? "L'ultima posa di verifica ha ritrovato le stelle al livello del sereno recente."
+            : "L'ultima posa di verifica ha trovato il campo ancora sotto le nubi.") +
+        "\n\nÈ l'esito di una verifica CONCLUSA: la sonda vive nella sequenza di NINA e " +
+        "l'Agente ne conosce solo le tracce, mai il momento in cui scatta.");
+  }
+
+  // --- COSA HO DECISO ----------------------------------------------------
+  // §80 — l'anello che chiude la catena rilevo -> diagnostico -> decido.
+  // Solo quando la decisione ha CAMBIATO qualcosa: un CONFIRM è la norma e tace.
+  const lv = de.last_verdict;
+  if (lv && lv.verdict !== 'CONFIRM') {
+    const att = lv.verdict === 'ATTENUATE';
+    add(att ? 'gAttenua' : 'gBlocca', att ? 'tone-yellow' : 'tone-red',
+        'Ultimo verdetto',
+        (att ? `attenuata ×${lv.factor}` : 'bloccata') +
+        (lv.context ? ` · ${lv.context}` : ''),
+        `L'ultima azione proposta è stata ${att ? 'ridotta' : 'fermata'} prima di toccare la leva` +
+        (lv.context ? ` (${lv.context})` : '') +
+        (hhmm(lv.ts_utc) ? `, alle ${hhmm(lv.ts_utc)}` : '') + '.' +
+        (lv.reason ? `\n\nMotivo: ${lv.reason}` : '') +
+        "\n\nÈ l'ultimo verdetto emesso, non lo stato corrente: il Guardian non ha uno stato, " +
+        "giudica una azione per volta.");
+  }
+
+  // Firma: si ridisegna solo se cambia davvero qualcosa, altrimenti il tooltip
+  // aperto sotto il puntatore sparirebbe a ogni refresh.
+  const sig = chips.map(c => c.slice(0, 4).join('|')).join('||');
+  if (sig === _l2Signature) { return; }
+  _l2Signature = sig;
+
+  row.hidden = chips.length === 0;
+  row.innerHTML = chips.map(([g, tone, lbl, val, tip]) =>
+    `<div class="l2-chip ${tone}" title="${escAttr(tip)}">` +
+    `<svg class="l2-ico" aria-hidden="true"><use href="#i-${g}"/></svg>` +
+    `<span class="l2-lbl">${lbl}</span>` +
+    `<span class="l2-val">${val}</span></div>`).join('');
+}
+
+function updateLevel1(data) {
+  const ctrl = data.controller || {};
+
+  // --- 1. CONTROLLO ADATTIVO: la DIAGNOSI, cioè la causa. Gli effetti sulle
+  //        leve (MinMove che stringe, esposizione alzata, gate saturo) vivono
+  //        al livello 2, dove compaiono solo se stanno accadendo.
+  const de = ctrl.diagnostic_engine || {};
+  if (de.enabled !== true) {
+    l1('ctrl', 'diagIgn', '', 'Motore spento', 'v2.3 pura',
+       "CONTROLLO ADATTIVO — SPENTO\nIl motore diagnostico è disattivato: le leve seguono le sole regole di base, senza interpretazione del comportamento della guida.");
+  } else {
+    const [g, tone] = DIAG_UI[de.state] || DIAG_UI.INSUFFICIENT_DATA;
+    let tip = (de.label || 'DATI INSUFFICIENTI') + "\n" + (de.suggestion || '');
+    const m = de.metrics || {};
+    if (m.nina_penalty != null && m.nina_penalty > 0 && m.confidence_phd2 != null) {
+      tip += `\n\nConfidenza ${de.confidence}% = PHD2 ${m.confidence_phd2} − NINA ${m.nina_penalty}` +
+             " (il cielo degradato abbassa la fiducia nella diagnosi).";
+    }
+    // §80 — ULTIMO verdetto, non "stato del Guardian": porta istante e leva
+    // proprio per non poter essere letto come condizione corrente.
+    const lv = de.last_verdict;
+    if (lv) {
+      tip += `\n\nUltimo verdetto: azione ${VERDICT_IT[lv.verdict] || lv.verdict}` +
+             (lv.context ? ` su ${lv.context}` : '') +
+             (lv.verdict === 'ATTENUATE' ? ` (ampiezza ×${lv.factor})` : '') +
+             (hhmm(lv.ts_utc) ? ` alle ${hhmm(lv.ts_utc)}` : '') +
+             (lv.reason ? ` — ${lv.reason}` : '');
+    }
+    const gc = de.guardian_counts || {};
+    if (gc.CONFIRM || gc.ATTENUATE || gc.BLOCK) {
+      tip += `\n\nIn questa sessione: ${gc.CONFIRM || 0} confermate, ` +
+             `${gc.ATTENUATE || 0} attenuate, ${gc.BLOCK || 0} bloccate.`;
+    }
+    l1('ctrl', g, tone, de.label || 'DATI INSUFFICIENTI',
+       de.confidence != null ? `confidenza ${de.confidence}%` : '', tip);
+  }
+
+  // --- 2. GUIDA: stato diretto, nessuna derivazione.
+  const gs = ctrl.guiding_state || 'INACTIVE';
+  const [gg, gt, gl] = GUIDA_UI[gs] || GUIDA_UI.INACTIVE;
+  l1('guida', gg, gt, gl, gs.replace(/_/g, ' '),
+     `GUIDA — ${gl.toUpperCase()}\nStato riportato da PHD2: ${gs}.`);
+
+  // --- 3. CIELO: stato diretto. Senza pose non c'è indice, e l'assenza di dati
+  //        non è mai "sereno" (stessa disciplina del §55).
+  const t = (data.nina || {}).transparency || {};
+  if (t.state && CIELO_UI[t.state]) {
+    const [cg, ct, cl] = CIELO_UI[t.state];
+    const idx = t.index != null ? Number(t.index).toFixed(2) : '—';
+    let tip = `CIELO — ${cl.toUpperCase()}\nIndice di trasparenza ${idx}` +
+      (t.base_stars != null ? ` sul riferimento di ${t.base_stars} stelle.` : '.');
+    if (t.state === 'HAZE') {
+      tip += "\nZona neutra: il cielo è calato ma non abbastanza da contare come nube. Non accumula né drena.";
+    }
+    l1('cielo', cg, ct, cl, `${t.state} · ${idx}`, tip);
+  } else {
+    l1('cielo', 'nubeIgn', '', 'Nessuna misura', '—',
+       "CIELO — NESSUNA MISURA\nNon arrivano pose da NINA: senza immagini non c'è indice di trasparenza. L'assenza di dati non è mai «sereno».");
+  }
+
+  // --- 4. SESSIONE: la CONSEGUENZA operativa. Titolo = cosa accade alla
+  //        sequenza; riga sotto = la causa, che è l'azione operativa distinta.
+  updateSafetyState(data.safety, data.guide_health);
+
+  // --- 5. RECUPERO: elezione per fase. A riposo resta uno slot muto, non
+  //        sparisce: le posizioni fisse sono ciò che rende leggibile la striscia.
+  const rh = data.recovery_hint || {};
+  const probes = Array.isArray(rh.probes) ? rh.probes : [];
+  const last = probes.length ? probes[probes.length - 1] : null;
+  if (rh.degrading) {
+    l1('recup', 'ondaGiu', 'tone-orange', 'Cielo in peggioramento',
+       `${Math.round(rh.degrade_s || 0)} s`,
+       "RECUPERO — CIELO IN PEGGIORAMENTO\nIl canale di guida vede il segnale della stella crollare rispetto al sereno recente" +
+       (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} contro ${rh.snr_ref})` : '') +
+       ".\nLa camera di ripresa se ne accorgerebbe solo a fine posa: qui si accumula evidenza senza aspettarla.");
+  } else if (rh.active) {
+    l1('recup', 'nubeSu', 'tone-blue', 'Possibile schiarita',
+       rh.snr != null && rh.snr_ref != null ? `${rh.snr} / ${rh.snr_ref}` : '',
+       "RECUPERO — POSSIBILE SCHIARITA\nLa stella di guida è risalita vicino al livello del sereno recente: vale la pena verificare.\nNon è una conferma — a dire se il campo di ripresa è tornato utilizzabile può essere solo la posa di controllo.");
+  } else if (last) {
+    const ok = last.outcome_state === 'CLEAR';
+    l1('recup', ok ? 'lenteSi' : 'lenteNo', ok ? 'tone-green' : 'tone-orange',
+       ok ? 'Campo tornato' : 'Ancora chiuso',
+       `${probes.length} verifiche`,
+       (ok ? "RECUPERO — ULTIMA VERIFICA POSITIVA\nLa posa di controllo ha ritrovato le stelle al livello del sereno recente."
+           : "RECUPERO — ULTIMA VERIFICA NEGATIVA\nLa posa di controllo ha trovato il campo ancora sotto le nubi. Si riprova al giro successivo.") +
+       "\n\nÈ l'esito dell'ultima verifica conclusa: la sonda vive nella sequenza di NINA e l'Agente ne conosce solo le tracce, mai il momento in cui scatta.");
+  } else {
+    l1('recup', 'nubeFerma', '', 'Nessuno', '—',
+       "RECUPERO — NESSUNO IN CORSO\nNessun degrado in atto e nessuna verifica del campo registrata. È lo stato normale di una notte buona.");
+  }
+}
 
 // ===========================================================================
 //  §74 — PANNELLI DINAMICI
@@ -686,7 +926,7 @@ const SAFETY_UI = {
 //  restano una barra finché non lavorano davvero; quando intervengono si aprono
 //  da soli e si richiudono dopo un periodo di quiete.
 //
-//  Restano SEMPRE visibili i pannelli di STATO GENERALE (Safety Monitor,
+//  Restano SEMPRE visibili i pannelli di STATO GENERALE (Condizioni del Cielo,
 //  Trasparenza, Recovery, grafico guida, stato Agente): sono quelli che
 //  l'operatore deve poter consultare in qualsiasi momento.
 //
@@ -904,13 +1144,13 @@ function updateSkyStory(data) {
   // suo insieme, in prima persona: chi legge vuole sapere cosa sta facendo il
   // sistema, non quale sottocomponente ha prodotto quale valore. I nomi interni
   // (hint, sonda, N1, latch) non compaiono mai; i numeri stanno nel tooltip.
-  let cls = '', icon = '🌙';
+  let cls = '', icon = 'nubeIgn';
   let seeing = 'In attesa dei primi dati…';
   let doing = '';
   let detail = '';
 
   if (rh.degrading) {
-    cls = 'worsening'; icon = '☁️';
+    cls = 'worsening'; icon = 'ondaGiu';
     seeing = 'Il cielo sta peggiorando rapidamente.';
     doing = 'Sto accumulando evidenze senza aspettare la prossima posa.';
     detail = `Segnale della stella di guida in calo da ${Math.round(rh.degrade_s || 0)}s` +
@@ -918,7 +1158,7 @@ function updateSkyStory(data) {
                ? ` (${rh.snr} contro ${rh.snr_ref} del cielo sereno recente).` : '.');
   } else if (state === 'CLOUD' || state === 'HAZE') {
     if (rh.active) {
-      cls = 'recovering'; icon = '🌤️';
+      cls = 'recovering'; icon = 'nubeSu';
       seeing = 'Vedo un recupero stabile del cielo.';
       doing = 'Attendo la conferma dalla posa di verifica.';
       detail = (rh.snr != null && rh.snr_ref != null
@@ -926,13 +1166,13 @@ function updateSkyStory(data) {
                'La stella di guida è una sola: a dire se il campo di ripresa è ' +
                'tornato utilizzabile può essere solo la camera di ripresa.';
     } else if (unsafe) {
-      cls = 'probing'; icon = '🔍';
+      cls = 'probing'; icon = 'lenteVuota';
       seeing = 'Cielo coperto.';
       doing = 'Verifico periodicamente il campo di ripresa.';
       detail = 'Scatto pose di controllo finché il cielo non torna davvero ' +
                'utilizzabile; la sequenza resta sospesa fino ad allora.';
     } else {
-      cls = 'clouded'; icon = '☁️';
+      cls = 'clouded'; icon = 'nube';
       seeing = 'Cielo coperto.';
       doing = 'Il campo di ripresa non è utilizzabile.';
     }
@@ -940,93 +1180,53 @@ function updateSkyStory(data) {
     const lastProbe = (Array.isArray(rh.probes) && rh.probes.length)
       ? rh.probes[rh.probes.length - 1] : null;
     if (unsafe && lastProbe && lastProbe.outcome_state === 'CLEAR') {
-      cls = 'confirmed'; icon = '✅';
+      cls = 'confirmed'; icon = 'lenteSi';
       seeing = 'Recupero confermato.';
       doing = 'Completo le verifiche, poi la sequenza riprende.';
       detail = 'La posa di controllo ha ritrovato il campo al livello del sereno ' +
                'recente: servono ancora alcune conferme prima di riautorizzare.';
     } else {
-      cls = 'clear'; icon = '☀️';
+      cls = 'clear'; icon = 'sole';
       seeing = 'Cielo limpido.';
       doing = 'Il campo è al livello del sereno recente.';
     }
   }
 
   box.className = `sky-story ${cls}`;
-  el('sky-story-icon').textContent = icon;
+  el('sky-story-use').setAttribute('href', '#i-' + icon);
   el('sky-story-text').textContent = seeing;
   el('sky-story-action').textContent = doing;
   box.title = detail || `${seeing} ${doing}`.trim();
 }
 
 function updateSafetyState(safety, guideHealth) {
-  const chip = el('safety-chip');
-  if (!chip) { return; }
-
   const state = (safety && safety.state) || 'UNKNOWN';
   const cause = (safety && safety.cause) || null;
   // Per l'UNSAFE è la CAUSA a fare lo stato visibile (azione operativa distinta).
   const key = state === 'UNSAFE' ? (SAFETY_UI[cause] ? cause : 'STAR_LOST') : state;
   const ui = SAFETY_UI[key] || SAFETY_UI.UNKNOWN;
 
-  chip.className = `safety-chip ${ui.cls}`;
-  el('safety-dot').textContent = ui.dot;
-  el('safety-state').textContent = ui.label;
-
-  // §73-bis — badge ACCESSORIO del canale guida (§71). Il gate NON è uno stato
-  // del monitor: il monitor non cambia stato, cambia il comportamento della sonda.
-  // Contenuto ONESTO: si dichiara ciò che l'Agente MISURA (lo stato del canale),
-  // non ciò che non può sapere (se una sonda sia in corso, o se esista affatto
-  // nella sequenza). La conseguenza sulla sonda vive nel tooltip, al condizionale.
-  const gate = el('safety-gate');
-  let gateTip = '';
-  if (gate) {
-    const gh = guideHealth || {};
-    const showGate = state === 'UNSAFE' && gh.enabled && gh.channel_ready != null;
-    gate.hidden = !showGate;
-    if (showGate) {
-      if (gh.channel_ready === false) {
-        gate.className = 'safety-gate closed';
-        gate.textContent = 'CANALE NON PRONTO';
-        gateTip = "\n\nCanale guida: NON PRONTO — " +
-          (gh.channel_not_ready_reasons || []).join(', ') +
-          ".\nLe pose-sonda di recupero, se attive, restano differite finché il canale non è stabile (mai oltre 15 minuti).";
-      } else {
-        gate.className = 'safety-gate ready';
-        gate.textContent = 'CANALE PRONTO';
-        gateTip = "\n\nCanale guida: PRONTO (stella tracciata in modo stabile). " +
-          "Nessun rinvio in corso sulle pose-sonda di recupero.";
-      }
-    }
-  }
-
-  // Dettaglio: il fatto misurato dall'Agente dietro la decisione del monitor.
+  // Dettaglio: il fatto MISURATO dall'Agente dietro la decisione del monitor.
+  // Mai affermazioni su ciò che l'Agente non può sapere (§73-bis).
   let detail = (safety && safety.detail) || '';
   if (!detail && state === 'UNSAFE' && guideHealth && guideHealth.enabled) {
     if (guideHealth.channel_ready === false) {
-      const why = (guideHealth.channel_not_ready_reasons || [])[0];
-      detail = why || 'canale guida non ancora affidabile';
+      detail = (guideHealth.channel_not_ready_reasons || [])[0] || 'canale guida non ancora affidabile';
     } else if (guideHealth.channel_ready === true) {
       detail = 'canale guida stabile';
     }
   }
-  if (!detail && state === 'MERIDIAN_PROTECTION') {
-    detail = 'flip meccanico autorizzato — cielo ancora da verificare';
-  }
-  if (!detail && state === 'SAFE') { detail = 'sequenza autorizzata'; }
-  if (!detail && state === 'UNKNOWN') { detail = 'in attesa del Safety Monitor'; }
-  el('safety-detail').textContent = detail;
 
-  // §72 — dentro la finestra il riportato diverge dall'interno: dirlo esplicitamente.
   let tip = ui.tip;
+  if (detail) { tip += "\n\n" + detail + "."; }
+  // §72 — dentro la finestra il riportato diverge dall'interno: dirlo esplicitamente.
   if (safety && safety.internal_safe === false && state === 'MERIDIAN_PROTECTION') {
     tip += "\n\nValutazione interna: ancora UNSAFE — al termine del flip la sequenza torna sospesa.";
   }
   if (safety && safety.age_s != null && safety.fresh === false) {
     tip += `\n\nUltimo aggiornamento ${Math.round(safety.age_s)} s fa.`;
   }
-  if (gateTip) { tip += gateTip; }
-  chip.title = detail ? `${tip}\n\n${detail}` : tip;
+  l1('sess', ui.glyph, ui.tone, ui.title, ui.cause, tip);
 }
 
 function updateRecoveryHint(rh) {
@@ -1041,11 +1241,11 @@ function updateRecoveryHint(rh) {
   card.style.display = '';
   const stateEl = el('recovery-state');
   if (rh.active) {
-    el('recovery-icon').textContent = '🌤️';
+    setGlyph('recovery-icon', 'nubeSu');
     stateEl.textContent = 'CIELO IN RECUPERO?';
     stateEl.style.color = '#34d399';
   } else {
-    el('recovery-icon').textContent = '⏳';
+    setGlyph('recovery-icon', 'lenteVuota');
     stateEl.textContent = 'IN OSSERVAZIONE';
     stateEl.style.color = '#9ca3af';
   }

@@ -191,14 +191,14 @@ Architettura a 3 livelli: **telemetria → riconoscitori → consumatori.**
 - **Telemetria (Step 0, §41):** il plugin invia per-posa (conteggio stelle, fondo, HFR, ADU, filtro…) a `/nina/telemetry`.
 - **N1 — trasparenza (§45/§48):** `TransparencyTracker` produce un indice continuo + stato discreto (incluso CLOUD) con flag di freschezza. **Unico riconoscitore delle nubi.**
 - **N8 — fusione confidence (§46):** primo consumatore di N1; usa il contesto per modulare la confidence della diagnosi SEEING (nubi = non lever-fixable → non inseguire).
-- **N6 — sicurezza nubi (§49):** consumatore di N1 nel **plugin NINA** (`SafetyDecisionEngine`): su nubi persistenti porta il Safety Monitor a **UNSAFE**, fermando la ripresa **prima** di STAR_LOST. Isteresi propria; fail-safe su telemetria non fresca. Lato sequenza NINA si integra con il trigger **Trigger On Unsafe** (NINA 3.3): ferma la posa **senza muovere il telescopio** e riprende al ritorno del sereno (per NINA 3.2: `Wait Until Safe` nel loop).
+- **N6 — sicurezza nubi (§49):** consumatore di N1 nel **plugin NINA** (`SafetyDecisionEngine`): su nubi persistenti porta il monitor Condizioni del Cielo a **UNSAFE**, fermando la ripresa **prima** di STAR_LOST. Isteresi propria; fail-safe su telemetria non fresca. Lato sequenza NINA si integra con il trigger **Trigger On Unsafe** (NINA 3.3): ferma la posa **senza muovere il telescopio** e riprende al ritorno del sereno (per NINA 3.2: `Wait Until Safe` nel loop).
 - **Futuri:** **N2** contesto di acquisizione (frame di riferimento per confronti like-with-like), **N4** eccentricità/FWHM del light frame (verifica dell'esito reale = stelle tonde), **N7** qualità immagine.
 
 **N1 è definito una volta;** N6/N8 (e in futuro N4) consumano lo stesso stato, ciascuno con la propria decisione/isteresi. Nessuna duplicazione del riconoscitore nubi.
 
 ## 8. Modello di sicurezza
 
-- **N6 / Safety Monitor:** ferma la ripresa su nubi persistenti (vedi §7).
+- **N6 / Condizioni del Cielo:** ferma la ripresa su nubi persistenti (vedi §7).
 - **Baseline Guardian:** orphan recovery + ripristino valori utente su shutdown pulito.
 - **Emergency / StarLost:** `star_finder.py` per la riselezione della stella; recovery automatico configurabile.
 - **Ampiezza limitata + kill-switch:** ogni feature che tocca le leve è a gradini limitati, reversibile via kill-switch, e nata operativa ma osservabile in diretta.
@@ -423,14 +423,14 @@ The guide-camera HFD is **blind to seeing** and since §37 is demoted to informa
 - **Telemetry (Step 0, §41):** the plugin sends per-exposure data (star count, background, HFR, ADU, filter…) to `/nina/telemetry`.
 - **N1 — transparency (§45/§48):** `TransparencyTracker` produces a continuous index + discrete state (including CLOUD) with a freshness flag. **The only cloud recognizer.**
 - **N8 — confidence fusion (§46):** first consumer of N1; uses the context to modulate the SEEING diagnosis confidence (clouds = not lever-fixable → don't chase).
-- **N6 — cloud safety (§49):** consumer of N1 in the **NINA plugin** (`SafetyDecisionEngine`): on persistent clouds it drives the Safety Monitor to **UNSAFE**, stopping capture **before** STAR_LOST. Own hysteresis; fail-safe on stale telemetry. On the NINA sequence side it integrates with the **Trigger On Unsafe** trigger (NINA 3.3): stops the exposure **without moving the mount** and resumes when safe (for NINA 3.2: `Wait Until Safe` in the loop).
+- **N6 — cloud safety (§49):** consumer of N1 in the **NINA plugin** (`SafetyDecisionEngine`): on persistent clouds it drives the Sky Conditions monitor to **UNSAFE**, stopping capture **before** STAR_LOST. Own hysteresis; fail-safe on stale telemetry. On the NINA sequence side it integrates with the **Trigger On Unsafe** trigger (NINA 3.3): stops the exposure **without moving the mount** and resumes when safe (for NINA 3.2: `Wait Until Safe` in the loop).
 - **Future:** **N2** acquisition context (reference frame for like-with-like comparisons), **N4** light-frame eccentricity/FWHM (verification of the real outcome = round stars), **N7** image quality.
 
 **N1 is defined once;** N6/N8 (and later N4) consume the same state, each with its own decision/hysteresis. No duplication of the cloud recognizer.
 
 ## 8. Safety model
 
-- **N6 / Safety Monitor:** stops capture on persistent clouds (see §7).
+- **N6 / Sky Conditions:** stops capture on persistent clouds (see §7).
 - **Baseline Guardian:** orphan recovery + restore of user values on clean shutdown.
 - **Emergency / StarLost:** `star_finder.py` for star re-selection; configurable auto-recovery.
 - **Bounded amplitude + kill-switches:** every lever-touching feature is stepped and bounded, reversible via kill-switch, and born operational but live-observable.

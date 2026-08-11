@@ -13,6 +13,9 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- §81 — vocabolario icone. Definito una volta, riusato con <use>:
+       le stesse forme approvate in revisione, non copie ridisegnate. -->
+  <svg style="display:none" aria-hidden="true"><symbol id="i-mirino" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 1.6v3.6M12 18.8v3.6M1.6 12h3.6M18.8 12h3.6"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/></symbol><symbol id="i-mirinoRec" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.6-5.4"/><path d="M19 4.4V8h-3.6"/><path d="M12 1.6v3.6M12 18.8v3.6M1.6 12h3.6"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/></symbol><symbol id="i-mirinoLost" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke-dasharray="2.6 2.8"/><path d="M12 1.6v3.6M12 18.8v3.6M1.6 12h3.6M18.8 12h3.6"/><path d="M9.6 9.6l4.8 4.8M14.4 9.6l-4.8 4.8"/></symbol><symbol id="i-mirinoOff" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke-dasharray="2 3.4"/></symbol><symbol id="i-sole" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.4"/><path d="M12 2.4v2.6M12 19v2.6M4.2 4.2l1.9 1.9M17.9 17.9l1.9 1.9M2.4 12h2.6M19 12h2.6M4.2 19.8l1.9-1.9M17.9 6.1l1.9-1.9"/></symbol><symbol id="i-soleNube" viewBox="0 0 24 24"><path d="M8 5.2V3M4.1 6.5L2.6 5M4.4 11H2.2M12.2 6.5L13.7 5"/><path d="M5.2 12.4a3.6 3.6 0 1 1 4.6-4.4"/><path d="M8.4 19.4a3.4 3.4 0 0 1 .5-6.8 4.8 4.8 0 0 1 9.1 1.2 3 3 0 0 1-.6 5.6z"/></symbol><symbol id="i-nube" viewBox="0 0 24 24"><path d="M7.4 19.6a4 4 0 0 1 .6-8 5.6 5.6 0 0 1 10.7 1.4 3.5 3.5 0 0 1-.7 6.6z"/></symbol><symbol id="i-nubeIgn" viewBox="0 0 24 24"><path d="M7.4 19.6a4 4 0 0 1 .6-8 5.6 5.6 0 0 1 10.7 1.4 3.5 3.5 0 0 1-.7 6.6z" stroke-dasharray="2.6 2.8"/><path d="M11 14.2a1.6 1.6 0 1 1 2 1.5v1"/></symbol><symbol id="i-scudoOk" viewBox="0 0 24 24"><path d="M12 2.4l7.6 3v6.1c0 4.4-3.1 8.4-7.6 10-4.5-1.6-7.6-5.6-7.6-10V5.4z"/><path d="M8.6 11.8l2.4 2.4 4.4-4.6"/></symbol><symbol id="i-scudoAlert" viewBox="0 0 24 24"><path d="M12 2.4l7.6 3v6.1c0 4.4-3.1 8.4-7.6 10-4.5-1.6-7.6-5.6-7.6-10V5.4z"/><path d="M12 8v4.4"/><circle cx="12" cy="15.6" r="1" fill="currentColor" stroke="none"/></symbol><symbol id="i-scudoFlip" viewBox="0 0 24 24"><path d="M12 2.4l7.6 3v6.1c0 4.4-3.1 8.4-7.6 10-4.5-1.6-7.6-5.6-7.6-10V5.4z"/><path d="M8.4 13.4a3.8 3.8 0 0 1 6.8-2.2"/><path d="M15.6 8.4v2.9h-2.9"/></symbol><symbol id="i-scudoIgn" viewBox="0 0 24 24"><path d="M12 2.4l7.6 3v6.1c0 4.4-3.1 8.4-7.6 10-4.5-1.6-7.6-5.6-7.6-10V5.4z" stroke-dasharray="2.6 2.8"/><path d="M10.6 10.4a1.6 1.6 0 1 1 2 1.6v1.2"/></symbol><symbol id="i-ondaCalma" viewBox="0 0 24 24"><path d="M2.4 12h3l2-3 2.6 6 2.6-6 2 3h6.4"/></symbol><symbol id="i-ondaGiu" viewBox="0 0 24 24"><path d="M2.4 7.2h2.8l1.8-2.4 2.2 4.6 2-3.4 1.8 3.4"/><path d="M14.6 13.6h6.6"/><path d="M18 10.4v6.4l-2.4-2.4M18 16.8l2.4-2.4"/></symbol><symbol id="i-nubeSu" viewBox="0 0 24 24"><path d="M7.4 16.4a3.7 3.7 0 0 1 .6-7.4 5.2 5.2 0 0 1 9.9 1.3 3.2 3.2 0 0 1-.7 6.1"/><path d="M12 21.4v-7.6M9.4 16.4L12 13.7l2.6 2.7"/></symbol><symbol id="i-nubeFerma" viewBox="0 0 24 24"><path d="M7.4 16.4a3.7 3.7 0 0 1 .6-7.4 5.2 5.2 0 0 1 9.9 1.3 3.2 3.2 0 0 1-.7 6.1" stroke-dasharray="2.6 2.8"/><path d="M9.6 20.4h4.8"/></symbol><symbol id="i-lenteVuota" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="15" rx="2" stroke-dasharray="2.6 2.8"/><circle cx="11" cy="11" r="3.4" stroke-dasharray="2.6 2.8"/></symbol><symbol id="i-lenteNo" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="15" rx="2"/><circle cx="10.6" cy="10.8" r="3.6"/><path d="M13.4 13.6l4 4"/><path d="M8.8 10.8h3.6"/></symbol><symbol id="i-lenteSi" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="15" rx="2"/><circle cx="10.6" cy="10.8" r="3.6"/><path d="M13.4 13.6l4 4"/><path d="M9 10.9l1.3 1.3 2.2-2.4"/></symbol><symbol id="i-bandaOff" viewBox="0 0 24 24"><path d="M6 5.4v13.2M18 5.4v13.2" stroke-dasharray="2.6 2.8"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/></symbol><symbol id="i-bandaPronta" viewBox="0 0 24 24"><path d="M6 5.4v13.2M18 5.4v13.2"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/></symbol><symbol id="i-bandaStringe" viewBox="0 0 24 24"><path d="M8.4 5.4v13.2M15.6 5.4v13.2"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><path d="M2.8 12h3.2M6 12l-1.6-1.6M6 12l-1.6 1.6"/><path d="M21.2 12H18M18 12l1.6-1.6M18 12l1.6 1.6"/></symbol><symbol id="i-diagStabile" viewBox="0 0 24 24"><rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.4"/><path d="M6 12h3l1.4-2 1.6 4 1.4-2H18"/></symbol><symbol id="i-diagSeeing" viewBox="0 0 24 24"><rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.4"/><path d="M6 12l1.4-3.4L8.8 14l1.6-5.4L12 15l1.4-5.6L14.8 14l1.4-3.2L18 12"/></symbol><symbol id="i-diagOver" viewBox="0 0 24 24"><rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.4"/><path d="M6 12h1.8l1.6-4.4 2 8.6 2-6.4 1.6 3.4H18"/></symbol><symbol id="i-diagDrift" viewBox="0 0 24 24"><rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.4"/><path d="M6 15.6L18 8.4"/><path d="M14.6 8.4H18v3.4"/></symbol><symbol id="i-diagIgn" viewBox="0 0 24 24"><rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.4" stroke-dasharray="2.6 2.8"/><path d="M10.4 10.4a1.7 1.7 0 1 1 2 1.7v1.2"/><circle cx="12" cy="15.8" r=".9" fill="currentColor" stroke="none"/></symbol><symbol id="i-gConferma" viewBox="0 0 24 24"><path d="M12 3l6 2.4v4.8c0 3.5-2.5 6.6-6 7.8-3.5-1.2-6-4.3-6-7.8V5.4z"/><path d="M9.4 11l1.9 1.9 3.4-3.6"/></symbol><symbol id="i-gAttenua" viewBox="0 0 24 24"><path d="M12 3l6 2.4v4.8c0 3.5-2.5 6.6-6 7.8-3.5-1.2-6-4.3-6-7.8V5.4z"/><path d="M8.8 9.6l3.2 3.2 3.2-3.2"/></symbol><symbol id="i-gBlocca" viewBox="0 0 24 24"><path d="M12 3l6 2.4v4.8c0 3.5-2.5 6.6-6 7.8-3.5-1.2-6-4.3-6-7.8V5.4z"/><path d="M8.8 11.4h6.4"/></symbol><symbol id="i-segnaleOk" viewBox="0 0 24 24"><path d="M5 17.4v-3M10.2 17.4v-6.6M15.4 17.4v-9.8M20.6 17.4V4.6"/></symbol><symbol id="i-segnaleDebole" viewBox="0 0 24 24"><path d="M5 17.4v-3M10.2 17.4v-6.6"/><path d="M15.4 17.4v-9.8M20.6 17.4V4.6" stroke-dasharray="2.2 2.4" opacity=".55"/></symbol><symbol id="i-segnaleNo" viewBox="0 0 24 24"><path d="M5 17.4v-3M10.2 17.4v-6.6M15.4 17.4v-9.8M20.6 17.4V4.6" opacity=".45"/><path d="M3.6 20.4L21.4 2.6"/></symbol></svg>
   <!-- Header -->
   <header class="header">
     <div class="header-left">
@@ -30,26 +33,24 @@
         <span class="status-dot disconnected"></span>
         <span id="conn-label">Disconnesso</span>
       </div>
-      <div class="header-toggles" style="display: flex; gap: 1.5rem; align-items: center;">
-        <!-- §73 — stato del Safety Monitor: uno solo alla volta, quello realmente
-             attivo. Il monitor non e' piu' una funzione interna ma un protagonista
-             della sessione: il suo stato merita il colpo d'occhio. -->
-        <div class="safety-chip unknown" id="safety-chip" title="">
-          <span class="safety-dot" id="safety-dot">⚪</span>
-          <div class="safety-text">
-            <span class="safety-state" id="safety-state">MONITOR —</span>
-            <span class="safety-sub">
-              <span class="safety-gate" id="safety-gate" hidden></span>
-              <span class="safety-detail" id="safety-detail">in attesa del Safety Monitor</span>
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   </header>
 
   <!-- Main Grid -->
   <main class="main-grid">
+
+    <!-- §81 — LIVELLO 1: cinque posizioni FISSE, mai riordinate. Si legge in due
+         secondi perché l'occhio impara DOVE guardare, non cosa cercare. Il primo
+         slot è il più largo: il Controllo Adattivo è il cuore del progetto, non
+         una funzione accessoria di un monitor di sicurezza. La prominenza si fa
+         con lo SPAZIO, mai col colore — il colore qui significa condizione. -->
+    <section class="l1-strip"><div class="l1-slot l1-primary" id="l1-ctrl" title=""><div class="l1-head">Controllo adattivo</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-ctrl-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-ctrl-t">—</div><div class="l1-val" id="l1-ctrl-v"></div></div></div></div><div class="l1-slot " id="l1-guida" title=""><div class="l1-head">Guida</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-guida-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-guida-t">—</div><div class="l1-val" id="l1-guida-v"></div></div></div></div><div class="l1-slot " id="l1-cielo" title=""><div class="l1-head">Cielo</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-cielo-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-cielo-t">—</div><div class="l1-val" id="l1-cielo-v"></div></div></div></div><div class="l1-slot " id="l1-sess" title=""><div class="l1-head">Sessione</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-sess-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-sess-t">—</div><div class="l1-val" id="l1-sess-v"></div></div></div></div><div class="l1-slot " id="l1-recup" title=""><div class="l1-head">Recupero</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-recup-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-recup-t">—</div><div class="l1-val" id="l1-recup-v"></div></div></div></div></section>
+
+    <!-- §82 — LIVELLO 2: compare SOLO quando c'e' una deviazione. A sistema
+         quieto questa riga non esiste affatto: il normale tace. Il livello 1
+         ELEGGE una fase sola per lo slot Recupero; qui si vede tutto cio' che
+         l'elezione ha dovuto lasciare fuori, piu' l'azione decisa. -->
+    <section class="l2-row" id="l2-row" hidden></section>
 
     <!-- RMS Gauges Row -->
     <section class="gauges-row">
@@ -94,14 +95,14 @@
 
       <div class="condition-card">
         <div class="condition-label">Condizioni del Cielo</div>
-        <div class="condition-icon" id="condition-icon">🌙</div>
+        <svg class="condition-icon" id="condition-icon" aria-hidden="true"><use id="condition-icon-u" href="#i-mirinoOff"/></svg>
         <div class="condition-name" id="condition-name">In attesa…</div>
         <div class="condition-desc" id="condition-desc"></div>
         <!-- §77 — la riga che racconta cosa sta facendo il monitor: unisce ciò
              che vede il sensore VELOCE (canale guida, 3 s) e quello LENTO (posa
              di verifica, 300 s). Nessuna decisione qui: solo il racconto. -->
         <div class="sky-story" id="sky-story">
-          <span class="sky-story-icon" id="sky-story-icon">🌙</span>
+          <svg class="sky-story-icon" aria-hidden="true"><use id="sky-story-use" href="#i-nubeIgn"/></svg>
           <span class="sky-story-lines">
             <span class="sky-story-text" id="sky-story-text">In attesa dei primi dati…</span>
             <span class="sky-story-action" id="sky-story-action"></span>
@@ -128,7 +129,7 @@
       <!-- Trasparenza NINA (§45 N1) -->
       <div class="condition-card" id="transparency-card" style="display:none">
         <div class="condition-label">Trasparenza (NINA)</div>
-        <div class="condition-icon" id="transp-icon">🌌</div>
+        <svg class="condition-icon" id="transp-icon" aria-hidden="true"><use id="transp-icon-u" href="#i-nubeIgn"/></svg>
         <div class="condition-name" id="transp-state">In attesa…</div>
         <div class="condition-desc" id="transp-index-desc"></div>
         <div class="separator"></div>
@@ -158,7 +159,7 @@
       <div class="condition-card" id="recovery-card" style="display:none"
            title="§57 — recovery da UNSAFE-nubi. L'hint (SNR guida sostenuta) può solo ANTICIPARE la posa-sonda: la verità resta la camera di imaging (N1). Le sonde le scatta il sequencer (template S1).">
         <div class="condition-label">Recovery (§57)</div>
-        <div class="condition-icon" id="recovery-icon">⏳</div>
+        <svg class="condition-icon" id="recovery-icon" aria-hidden="true"><use id="recovery-icon-u" href="#i-nubeFerma"/></svg>
         <div class="condition-name" id="recovery-state">—</div>
         <div class="condition-desc" id="recovery-reason"></div>
         <div class="separator"></div>
