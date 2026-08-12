@@ -507,16 +507,22 @@ S(Paragraph(
     "resta una pura comodità, la dashboard funziona comunque."
     % (B("Novità v1.1: pulsante Avvia e badge stato."), B("«Avvia Adaptive Agent»")), body))
 S(Paragraph(
-    "%s Il plugin v1.2 espone anche un Safety Monitor virtuale che NINA può usare come driver di sicurezza "
-    "accanto al pannello dockable. Il driver appare nella tendina Equipment → Safety Monitor di NINA sotto la "
-    "categoria %s col nome «Adaptive Agent for PHD2 — Guide Safety». Selezionandolo e cliccando Connect, NINA "
-    "inizia a riflettere lo stato della guida dell'Agente come flag safe/unsafe: dichiara %s quando STAR_LOST "
-    "persiste oltre il timeout configurato (default 5 minuti), e torna %s quando la guida resta stabile per "
-    "~45 secondi consecutivi. Se l'Agente smette di rispondere mentre il driver è connesso, il driver si "
-    "auto-disconnette: NINA tratta la perdita di comunicazione come «safety scollegato» e applica la policy "
-    "che hai impostato; quando l'Agente torna disponibile, riconnetti manualmente il driver dalla tendina. "
-    "La feature è opt-in: chi vuole solo il pannello dashboard o il pulsante Avvia + badge non è toccato."
-    % (B("Novità v1.2: Safety Monitor virtuale (opzionale)."), B("N.I.N.A."), B("unsafe"), B("safe")), body))
+    "%s Il cuore del plugin è un dispositivo virtuale che NINA usa come qualsiasi altro dispositivo di "
+    "sicurezza. Appare nella tendina Equipment → Safety Monitor di NINA — che è il nome dello SLOT, non il "
+    "ruolo del monitor — sotto la categoria %s col nome «Adaptive Agent for PHD2 — Condizioni del Cielo» "
+    "(fino alla v1.11 si chiamava «Guide Safety»: NINA salva il dispositivo per identificativo, quindi il "
+    "profilo esistente non si rompe). Selezionandolo e cliccando Connect, NINA riflette le condizioni di "
+    "osservazione come flag safe/unsafe. Il driver dichiara %s in sei casi indipendenti: STAR_LOST persistente "
+    "oltre il timeout configurato (default 5 minuti); trasparenza del cielo degradata a lungo, misurata sul "
+    "conteggio stelle delle pose; crollo sostenuto del segnale della stella di guida, che il canale di guida "
+    "vede minuti prima di quanto potrebbe la camera di ripresa; telemetria diventata stantia con l'ultimo "
+    "cielo noto degradato; Agente irraggiungibile durante una sessione attiva; canale di guida ammutolito "
+    "mentre la guida era attesa. Torna %s solo con evidenza positiva dalla camera di ripresa: una stella di "
+    "guida sola può testimoniare che il cielo è peggiorato, non che il campo è tornato buono. Principio dalla "
+    "v1.5, dopo una notte di validazione sul campo: perdere l'osservazione affidabile non è mai «sicuro» — il "
+    "driver RESTA connesso anche se l'Agente sparisce, ed escala verso unsafe invece di disconnettersi in "
+    "silenzio."
+    % (B("Il monitor Condizioni del Cielo — il componente centrale."), B("N.I.N.A."), B("unsafe"), B("safe")), body))
 S(callout("IMPORTANTE", GOLD,
     "Il driver Safety %s cosa fare al verificarsi dell'unsafe — %s. Le reazioni concrete (pausa sequenza, "
     "parking, warm-up camera, ecc.) si configurano dentro NINA, in Options → Safety (policy globale) oppure "
@@ -613,7 +619,7 @@ tshoot_rows = [
                "falliscono ripetutamente entra in backoff e infine sospende, per non martellare una camera "
                "in difficoltà. Nel log compare \"find_star SUSPENDED dopo N fallimenti consecutivi\".", small),
      Paragraph("Quel messaggio indica un problema USB/camera, non dell'Agente: verifica cavo e alimentazione. "
-               "Il pannello Safety Monitor mostra GUIDE UNOBSERVABLE quando il canale di guida smette di "
+               "Il monitor Condizioni del Cielo mostra GUIDE UNOBSERVABLE quando il canale di guida smette di "
                "fornire informazioni affidabili.", small)],
     [Paragraph("Triangoli (giallo/verde) non appaiono mai sul grafico RMS", small),
      Paragraph("Escalation gate chiuso (le leve aggr/MinMove non sono ancora sature), oppure il cielo è troppo stabile per richiedere il path B.", small),

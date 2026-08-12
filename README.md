@@ -2,7 +2,7 @@
 
 **Adaptive tuning for PHD2 autoguiding, driven by measured outcomes.**
 
-Version 2.8 · License **BSD-3-Clause** · Windows · Python 3.11+
+Version **2.15.1** · N.I.N.A. plugin **1.12.1.0** · License **BSD-3-Clause** · Windows · Python 3.11+
 
 ---
 
@@ -47,7 +47,7 @@ Key elements of the adaptive guiding engine:
 
 ## N.I.N.A. integration (optional)
 
-A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/). Its centerpiece is a virtual **Sky Conditions monitor** (exposed through N.I.N.A.'s native `ISafetyMonitor` interface — the same role an ASCOM safety monitor plays): one continuously evaluated **SAFE/UNSAFE verdict on acquisition quality**, built from guiding (STAR_LOST), N1 sky transparency, telemetry freshness and Agent reachability — and it never fails *toward* safe. **N.I.N.A.'s Sequence Engine always remains the sole owner of the sequence lifecycle**: the monitor only reports, and the user's end-of-sequence criteria always win (verified down to N.I.N.A.'s cancellation chain). On top of that state the plugin ships the recommended recovery workflow — the self-contained **Recovery probe** instruction for *Trigger On Unsafe*, which lets a clouded-out session resume on its own — plus the dockable dashboard panel, per-exposure **N.I.N.A. telemetry** forwarding (HFR, star count, image statistics — what the Agent uses to recognize sky transparency), and, since v1.7.0.0, **Agent lifecycle management**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes. The Agent is fully functional without it.
+A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/). Its centerpiece is a virtual **Sky Conditions monitor** (exposed through N.I.N.A.'s native `ISafetyMonitor` interface — the same role an ASCOM safety monitor plays): one continuously evaluated **SAFE/UNSAFE verdict on acquisition quality**, built from six independent conditions: sustained STAR_LOST; persistent N1 sky-transparency degradation measured on the imaging camera; a sustained collapse of the guide-star signal, which the guide channel sees minutes before the next light frame could; stale telemetry under an already degraded sky; loss of the Agent during an active session; and a guide channel gone silent while guiding was expected. Fast evidence and persistent evidence carry independent thresholds, and recovery toward safe is granted only by the imaging camera — one guide star can testify that the sky went bad, never that the whole field came back. It never fails *toward* safe. **N.I.N.A.'s Sequence Engine always remains the sole owner of the sequence lifecycle**: the monitor only reports, and the user's end-of-sequence criteria always win (verified down to N.I.N.A.'s cancellation chain). On top of that state the plugin ships the recommended recovery workflow — the self-contained **Recovery probe** instruction for *Trigger On Unsafe*, which lets a clouded-out session resume on its own — plus the dockable dashboard panel, per-exposure **N.I.N.A. telemetry** forwarding (HFR, star count, image statistics — what the Agent uses to recognize sky transparency), a bounded **meridian-protection window** that lets the mechanical flip run at its deadline even under unsafe conditions and then restores the hold — without it N.I.N.A. stops tracking at the deadline and nothing ever restarts it — and **Agent lifecycle management**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes. The Agent is fully functional without it.
 
 ## Quick start
 
@@ -78,12 +78,12 @@ python main.py --config config.toml    # live control
 
 ## Observability
 
-- **Dashboard** (`http://localhost:8080`): live chart, RMS gauges, engine state, decision log, transparency and MinMove-cap panels.
+- **Dashboard** (`http://localhost:8080`) — built to be read in two seconds, not decoded. Five fixed slots across the top say what is happening (adaptive control, guiding, sky, session, recovery); contextual icons appear underneath only when something is actually intervening; the numbers and their provenance live in the tooltips. Underneath it all the detailed panels are unchanged: live chart, RMS gauges, engine state, decision log, transparency and MinMove-cap.
 - **Session logs** in `logs/`: per-frame CSV, per-decision JSONL, session summary JSON, plus the rotating `agent.log` — every decision can be audited offline.
 
 ## Validation philosophy
 
-The project is validated **primarily in real astrophotography sessions**, not only synthetic tests. New engine features ship behind kill-switches and are promoted only after field nights; the unit-test suite (297 tests) guards regressions. The first night on a new setup always runs in DRY_RUN.
+The project is validated **primarily in real astrophotography sessions**, not only synthetic tests. New engine features ship behind kill-switches and are promoted only after field nights; the unit-test suite (389 tests, plus 73 on the N.I.N.A. plugin) guards regressions. The first night on a new setup always runs in DRY_RUN.
 
 ## Documentation
 
