@@ -222,3 +222,61 @@ In questo modo ottieni frame ultra-nitidi perché PHD2 è aiutato dall'Agente, e
 * Le soglie si **adattano nel tempo**: la baseline viene ri-misurata periodicamente con la regola "tightest-wins" — l'Agente si stringe se il cielo migliora, ma non concede mai terreno se peggiora.
 * Se chiudi l'Agente o va in crash, un sistema di salvaguardia (*Baseline Guardian*) **ripristina i parametri originali** di PHD2, esposizione compresa.
 * L'Agente **non tocca** la compensazione del backlash né altri parametri di calibrazione delicati: lavora solo sulle leve "morbide" e reversibili.
+
+---
+
+## 🧰 Troubleshooting rapido
+
+Otto situazioni tipiche e cosa fare. Se non risolvi, riporta il caso sul gruppo Telegram della community (link in fondo) seguendo la sezione *Come dare feedback*.
+
+| Sintomo | Causa probabile | Cosa fare |
+|---|---|---|
+| La dashboard non si apre su `localhost:8080` | Il firewall di Windows blocca la porta 8080. | Esegui una volta `Sblocca_Firewall_8080.bat` nella cartella del pacchetto (richiede privilegi di amministratore). |
+| Pixel scale nella card Auto-calibrazione resta con badge **TOML** e non passa a **PHD2** | Nel profilo PHD2 in uso mancano focale di guida o dimensione pixel della camera. | Apri *Strumenti → Gestione profili* in PHD2, completa i campi mancanti, salva il profilo e riavvia l'Agente. |
+| Il badge **BASELINE RIFIUTATA** non sparisce dopo molti minuti | Seeing molto degradato o vento forte: l'Agente non riesce a campionare frame in condizione NOMINAL stabile. | È il comportamento atteso, non un bug: sta usando le soglie del `config.toml`. Se persiste su una nottata buona, segnala il caso. |
+| Il progresso baseline resta fermo a `0/60` o `n/60` a lungo | L'Agente raccoglie solo frame NOMINAL con SNR sufficiente: cielo turbolento, stella debole o implosion detector attivo. | Aspetta condizioni più stabili. Verifica nei log che la SNR sia sopra 8 e che non compaiano CRITICAL di tipo *RMS IMPLOSION*. |
+| Dopo la perdita della stella non viene riagganciato nulla | L'Agente chiede a PHD2 di riselezionare (`find_star`) a intervalli crescenti: se i tentativi falliscono ripetutamente entra in backoff e infine si sospende, per non martellare una camera in difficoltà. Nel log compare `find_star SUSPENDED dopo N fallimenti consecutivi`. | Quel messaggio indica un problema USB o della camera, non dell'Agente: verifica cavo e alimentazione. Il monitor *Condizioni del Cielo* mostra **GUIDE UNOBSERVABLE** quando il canale di guida smette di fornire informazioni affidabili. |
+| I triangoli (giallo/verde) non appaiono mai sul grafico RMS | Escalation gate chiuso — le leve aggressività e MinMove non sono ancora sature — oppure il cielo è troppo stabile per richiedere il path B. | Normale: il path B esposizione scatta solo dopo che le leve leggere sono al limite da almeno un cooldown. Su cieli buoni può non scattare mai. |
+| L'Agente si spegne da solo dopo un po' | Connessione JSON-RPC a PHD2 caduta, oppure errore in un componente. | Controlla `logs/controller_*.log` in cerca di righe ERROR o CRITICAL. Verifica che PHD2 sia attivo e che il server (porta 4400) sia abilitato. |
+| Tutti i parametri PHD2 tornano ai valori originali al riavvio | Non è un bug: è il *Baseline Guardian* che ripristina lo stato iniziale alla chiusura pulita o al rilevamento di una baseline orfana. | Comportamento corretto e voluto. L'Agente parte sempre da una base nota, mai da uno stato ereditato. |
+
+---
+
+## 💬 Come dare feedback
+
+Il tuo feedback serve a far evolvere l'Agente sui setup reali della community, non solo su quelli su cui è nato. Tutti i feedback transitano dal gruppo Telegram (link a fondo pagina). Per essere utile e veloce da diagnosticare, un buon report include alcune informazioni di base.
+
+**Cosa allegare a una segnalazione**
+
+* **Descrizione del setup**: telescopio, focale di guida, camera di guida (modello e dimensione dei pixel), montatura, eventuale riduttore.
+* **Nome del profilo PHD2** in uso e algoritmo di guida selezionato (per esempio Hysteresis su RA, Resist Switch su DEC).
+* **Screenshot** della card Auto-calibrazione e del pannello Esposizione al momento del problema.
+* **File di log** dalla cartella `logs/` — almeno il `decisions_*.jsonl` della sessione in cui è capitato il problema e il `controller_*.log` della stessa sessione; se c'è, anche `session_*.summary.json`. Sono file di testo e pesano pochi KB.
+
+> [!TIP]
+> Se usi anche il plugin NINA, allega **anche il log di NINA**: metà delle risposte su nubi, recupero e meridiano sta lì e non nei log dell'Agente.
+
+**Cosa invece è normale e non serve segnalare**
+
+* **BASELINE RIFIUTATA** con vento forte o seeing turbolento: è il comportamento corretto, l'Agente ti sta proteggendo da una calibrazione fatta su una nottata anomala.
+* **L'esposizione non si alza mai**: il path B scatta solo dopo la saturazione delle leve leggere e una persistenza di seeing degradato. Su cieli buoni può non scattare mai per ore.
+* **NINA non scatta finché l'RMS non scende sotto soglia**: NINA non riceve l'evento di settle finché non lo dichiara PHD2 stesso. L'Agente lavora sotto PHD2, non sopra NINA.
+* **Il refresh non applica mai una baseline più larga**: è la regola *tightest-wins* — l'Agente non concede mai reattività al peggioramento del cielo. È una scelta di progetto, non un limite.
+
+---
+
+## 📖 Glossario rapido
+
+I termini più ricorrenti che incontri nella dashboard, nei log e nelle conversazioni della community. Sono tutti definiti anche nel testo, ma averli riuniti qui è comodo.
+
+| Termine | Cosa significa |
+|---|---|
+| **Aggressività** | Quanto PHD2 reagisce a una correzione di guida. Alta significa molto reattivo: ottima in cielo perfetto, pericolosa in turbolenza perché rincorre il rumore. L'Agente la abbassa quando il seeing peggiora. |
+| **MinMove** | Soglia minima, in pixel, sotto la quale PHD2 ignora i movimenti della stella. Bassa corregge anche i micro-spostamenti, alta ignora più rumore. L'Agente la alza in seeing degradato per non rincorrere la turbolenza. |
+| **Baseline** | Mediana dell'RMS misurato in condizione NOMINAL stabile sui primi frame buoni. È il riferimento da cui l'Agente deriva le soglie della tua sessione. |
+| **Cap** | Tetto sulla soglia derivata dalla baseline: il riferimento di "guida pulita" indipendente dal setup, che sia OAG o cercatore-guida. Se la soglia derivata lo supera, viene tagliata al cap. |
+| **Escalation gate** | Il cancello che si apre solo quando aggressività e MinMove sono entrambe sature da almeno un cooldown. Finché è chiuso l'esposizione resta al valore base: è ciò che garantisce la gerarchia *prima le leve leggere, poi quella pesante*. |
+| **Tightest-wins** | Regola del refresh ciclico: la baseline viene ri-misurata periodicamente e applicata **solo se più stretta** della corrente. L'Agente si adatta se il cielo migliora, non concede terreno se peggiora. |
+| **NOMINAL / BOOSTED_FOR_SNR / BOOSTED_FOR_SEEING** | I tre stati della macchina esposizione: posa al valore base; posa allungata perché la stella è debole; posa alzata a gradini per mediare la turbolenza. |
+| **Baseline Guardian** | La salvaguardia che alla partenza salva i parametri PHD2 originali e li ripristina alla chiusura pulita, o quando rileva una sessione precedente terminata male. Garantisce che l'Agente non lasci mai PHD2 in uno stato che tu non hai voluto. |
+| **Condizioni del Cielo** | Il dispositivo virtuale che il plugin espone a NINA. Misura in continuo le condizioni di osservazione; dichiarare *unsafe* è una delle sue conseguenze, non il suo intero ruolo. |
