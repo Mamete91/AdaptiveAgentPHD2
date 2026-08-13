@@ -252,7 +252,7 @@ S(blist([
     "automatico la scala di campionamento. Se questi dati non ci sono, l'Agente userà un valore di "
     "fallback e la dashboard te lo segnalerà;"
     % (B("focale di guida"), B("dimensione pixel della camera di guida")),
-    "l'AI Star Finder possa scaricare le immagini di guida (serve per il recupero della stella persa).",
+    "l'Agente possa scaricare le immagini di guida (serve alla riselezione delle stelle sature al cambio esposizione).",
 ]))
 S(Paragraph(
     "E per tua tranquillità: l'Agente %s la calibrazione della montatura né la compensazione del "
@@ -337,15 +337,16 @@ S(Paragraph(
     "tranquillo, l'Agente riporta l'esposizione al valore base un gradino alla volta."
     % B("non scende mai sotto il valore base"), body))
 
-S(feature_head(3, "AI Star Finder (il superpotere visivo)", GREEN))
+S(feature_head(3, "Recupero della stella persa", GREEN))
 S(Paragraph(
-    "PHD2 ha un limite hard-coded: ignora o scarta per errore stelle valide se hanno pixel con intensità "
-    "altissima («palloni bianchi» causati da un leggero scostamento del fuoco di guida o da sensori molto "
-    "sensibili). Quando PHD2 stacca il tracciamento e mostra «Stella Persa», invece di restare lì a "
-    "strillare e piantare NINA, l'Agente:", body))
+    "Quando PHD2 stacca il tracciamento e mostra «Stella Persa», l'Agente non resta a guardare — ma non "
+    "prova nemmeno a fare il lavoro di PHD2 al posto suo. La selezione della stella di guida è competenza "
+    "di PHD2, che sul proprio sensore ha molte più informazioni di quante ne abbia l'Agente da fuori. "
+    "Quello che l'Agente aggiunge è il QUANDO e il QUANTO INSISTERE:", body))
 S(blist([
-    "Intercetta l'emergenza e scarica l'immagine FITS pura appena scattata dal telescopio di guida, in una frazione di secondo.",
-    "Usa un suo algoritmo matematico visivo, sganciato da PHD2, per ispezionare tutta l'inquadratura, bypassando il temuto blocco della saturazione massima.",
+    "Attende qualche secondo: molti STAR_LOST rientrano da soli (una folata di seeing, un satellite) e insistere subito non aiuta.",
+    "Chiede a PHD2 di riselezionare la stella con il suo stesso algoritmo, quello che conosce il sensore.",
+    "Se il tentativo fallisce, rallenta invece di accanirsi: dopo alcuni fallimenti dirada i tentativi, dopo altri si SOSPENDE. Nasce da un incidente reale — una camera di guida crashata via USB aveva ricevuto oltre 130 richieste in sei minuti, caricando proprio il bus che stava soffocando.",
     "Trova le coordinate della stella più consistente e ordina via RPC API a PHD2 di richiudersi su quel pixel, costringendolo a riprendere il tracciamento e recuperando il crollo in modo forzato.",
 ]))
 

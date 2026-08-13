@@ -23,14 +23,12 @@ The **Adaptive Agent** runs alongside PHD2 as an outer control loop. It observes
 
 This is **adaptive control, not machine learning**: no training, no black box. Every decision is inspectable in the logs and on the live dashboard.
 
-<details>
-<summary><b>📊 The whole project in one picture</b> — infographic (Italian)</summary>
+<p align="center">
+  <img src="docs/img/poster.png" width="600" alt="Adaptive Agent for PHD2 — how it works, at a glance">
+</p>
 
-<br>
-
-<img src="docs/img/poster.png" width="620" alt="Adaptive Agent for PHD2 — infographic">
-
-</details>
+<sub><i>The whole project in one picture (Italian): what the engine reads, how it decides, how
+the two degradation paths differ, and how a clouded-out session recovers on its own.</i></sub>
 
 ```
       ┌────────────── context & safety ────────────────┐
@@ -77,7 +75,7 @@ themselves, so nothing has to be taken on trust.</sub>
 
 ### With N.I.N.A. — recommended, and nothing to start by hand
 
-1. Install the plugin, then extract the Agent package wherever you like.
+1. Install the plugin: extract the plugin ZIP into `%LOCALAPPDATA%\NINA\Plugins\3.0.0`, then restart N.I.N.A. Extract the Agent package wherever you like.
 2. In N.I.N.A., open the plugin settings and point **Agent launcher path** at the `Avvia.bat` you just extracted.
 3. Connect **Adaptive Agent for PHD2 — Sky Conditions** under *Equipment → Safety Monitor*.
 

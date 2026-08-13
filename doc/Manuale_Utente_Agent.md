@@ -34,7 +34,7 @@ L'Agente è un **assistente**, non un sistema di guida completo. Non calibra e n
 * PHD2 stia già guidando correttamente su una stella;
 * in PHD2 sia attivo il server (menu **Strumenti → Abilita Server**, porta 4400): è il canale con cui l'Agente comunica;
 * nel profilo PHD2 in uso siano impostate correttamente **focale di guida** e **dimensione pixel della camera di guida**: da qui l'Agente ricava in automatico la scala di campionamento. Se questi dati non ci sono, l'Agente userà un valore di fallback e la dashboard te lo segnalerà;
-* l'AI Star Finder possa scaricare le immagini di guida (serve per il recupero della stella persa).
+* l'Agente possa scaricare le immagini di guida (serve alla riselezione delle stelle sature quando cambia l'esposizione).
 
 E per tua tranquillità: l'Agente **non tocca mai** la calibrazione della montatura né la compensazione del backlash. Lavora solo su leve "morbide" e reversibili.
 
@@ -80,15 +80,15 @@ Questa è la leva che entra in gioco **quando le manopole di cui sopra non basta
 
 Per sicurezza l'esposizione **non scende mai sotto il valore base** che hai impostato tu, e ha un tetto massimo. Quando il cielo torna tranquillo, l'Agente riporta l'esposizione al valore base un gradino alla volta.
 
-### 3. 👁️ AI Star Finder (Il Superpotere Visivo)
+### 3. 👁️ Recupero della stella persa
 
 PHD2 ha un limite hard-coded: ignora o scarta per errore stelle valide se hanno pixel con intensità altissima ("palloni bianchi" causati da un leggero scostamento del fuoco di guida o da sensori molto sensibili).
-L'**AI Star Finder** è un sistema di intelligenza visiva dell'Agente.
-Quando PHD2 stacca il tracciamento e mostra "Stella Persa", invece di restare lì a strillare e piantare NINA, l'Agente:
+Quando PHD2 stacca il tracciamento e mostra "Stella Persa", l'Agente non resta a guardare — ma non prova nemmeno a fare il lavoro di PHD2 al posto suo. **La selezione della stella di guida è competenza di PHD2**, che ha molte più informazioni sul proprio sensore di quante ne abbia l'Agente da fuori. Quello che l'Agente aggiunge è il *quando* e il *quanto insistere*:
 
-1. Intercetta l'emergenza e richiede il download dell'immagine FITS pura appena scattata dal telescopio di guida in una frazione di secondo.
-2. Usa un suo algoritmo matematico visivo, sganciato da PHD2, per ispezionare tutta l'inquadratura, bypassando il temuto *blocco della saturazione massima*.
-3. Trova le coordinate della stella più consistente e ordina via RPC API a PHD2: *"Chiuditi su queste coordinate al pixel x,y!"*, costringendo PHD2 a riprendere il tracciamento e recuperando il crollo in modo forzato.
+
+1. **Aspetta qualche secondo.** Molti STAR_LOST rientrano da soli — una folata di seeing, un satellite di passaggio — e insistere subito non aiuta nessuno.
+2. **Chiede a PHD2 di riselezionare la stella**, con l'algoritmo di PHD2 stesso: è quello che conosce il sensore, la saturazione e la maschera dei pixel caldi.
+3. **Se fallisce, rallenta invece di accanirsi.** Dopo alcuni tentativi a vuoto dirada le richieste, dopo altri si sospende del tutto. Questa prudenza nasce da un incidente reale: una camera di guida crashata via USB aveva ricevuto oltre 130 richieste in sei minuti, caricando proprio il bus che stava già soffocando. Nel log compare `find_star SUSPENDED dopo N fallimenti consecutivi` — se lo vedi, il problema è il cavo o l'alimentazione, non l'Agente.
 
 ---
 
