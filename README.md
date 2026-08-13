@@ -73,15 +73,23 @@ themselves, so nothing has to be taken on trust.</sub>
 
 ## Quick start
 
-**Requirements:** Python 3.11+ (packaged build needs none), PHD2 2.6.x with **Tools → Enable Server** activated.
+**Requirements:** PHD2 2.6.x with **Tools → Enable Server** activated. The packaged build carries its own runtime — no Python needed; from source you need Python 3.11+.
 
-### Packaged build (recommended)
+### With N.I.N.A. — recommended, and nothing to start by hand
+
+1. Install the plugin, then extract the Agent package wherever you like.
+2. In N.I.N.A., open the plugin settings and point **Agent launcher path** at the `Avvia.bat` you just extracted.
+3. Connect **Adaptive Agent for PHD2 — Sky Conditions** under *Equipment → Safety Monitor*.
+
+That is the whole setup. From then on the Agent **starts by itself when N.I.N.A. starts** and **shuts down gracefully when N.I.N.A. closes**, restoring your PHD2 parameters — you never touch a `.bat` again. The dashboard lives in its own dockable panel, and a *Launch Adaptive Agent* button stays available as a fallback. For unattended cloud recovery, add the **Recovery probe** instruction inside a *Trigger On Unsafe* (see the section above).
+
+### Standalone — without N.I.N.A.
 
 1. Open PHD2, select your telescope profile, enable the server and start guiding.
 2. Run **`Avvia.bat`** from the distribution package — the Agent starts **in the background** (no console window).
 3. Open the dashboard at `http://localhost:8080`.
 
-To stop the Agent gracefully (with PHD2 baseline restore) run **`Arresta.bat`**; to watch the live log run **`Mostra_Log.bat`** (the same log persists in `logs/agent.log`). If you use the N.I.N.A. plugin, start/stop is automatic.
+Stop it gracefully — PHD2 parameters restored — with **`Arresta.bat`**; watch the live log with **`Mostra_Log.bat`** (it also persists in `logs/agent.log`).
 
 Switching telescopes = switching PHD2 profiles: the Agent reads the guide pixel scale from PHD2 and derives its RMS thresholds from a measured baseline. **No per-setup configuration files.**
 

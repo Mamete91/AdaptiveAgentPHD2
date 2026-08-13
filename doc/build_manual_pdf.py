@@ -505,7 +505,7 @@ S(Paragraph(
     "Per usarlo, imposta una sola volta il percorso del .bat in Options → Plugins → Adaptive Agent for "
     "PHD2 — Dashboard (pulsante «Sfoglia...»). Quando l'Agente è già online il pulsante si disabilita: "
     "resta una pura comodità, la dashboard funziona comunque."
-    % (B("Novità v1.1: pulsante Avvia e badge stato."), B("«Avvia Adaptive Agent»")), body))
+    % (B("Pulsante Avvia e badge di stato."), B("«Avvia Adaptive Agent»")), body))
 S(Paragraph(
     "%s Il cuore del plugin è un dispositivo virtuale che NINA usa come qualsiasi altro dispositivo di "
     "sicurezza. Appare nella tendina Equipment → Safety Monitor di NINA — che è il nome dello SLOT, non il "

@@ -218,7 +218,7 @@ Architettura a 3 livelli: **telemetria → riconoscitori → consumatori.**
 | §44 baseline bidirezionale | ✅ Attivo, validato (più sessioni) |
 | §38/§39 formazione/persistenza riferimenti | ✅ Validato sul campo (71F: jitter_ref 12%→87%) |
 | N1/N8 (§45/§46/§48) trasparenza + fusione | ✅ Implementati; telemetria validata sul campo (Step 0) |
-| N6 (§49) sicurezza nubi (plugin) | ✅ Implementato (plugin v1.4), verificato sul sorgente NINA |
+| N6 (§49) sicurezza nubi (plugin) | ✅ Implementato nel plugin, verificato sul sorgente NINA |
 | §50 INIT standard | ✅ Implementato; validato (stato iniziale deterministico) |
 | §51 cap MinMove adattivo | ✅ Implementato; osservato in campo |
 | **§53 recupero simmetrico** | ⚠️ **Validato sul campo — solo percorso felice** (1 sessione, 2026-07-03): l'Aggressività recupera, converge a RMS ottimo. **Da verificare:** il percorso STOP (irrigidimento che peggiora) e la conferma su più sessioni/setup. |
@@ -450,7 +450,7 @@ The guide-camera HFD is **blind to seeing** and since §37 is demoted to informa
 | §44 bidirectional baseline | ✅ Active, validated (multiple sessions) |
 | §38/§39 reference formation/persistence | ✅ Field-validated (71F: jitter_ref 12%→87%) |
 | N1/N8 (§45/§46/§48) transparency + fusion | ✅ Implemented; telemetry field-validated (Step 0) |
-| N6 (§49) cloud safety (plugin) | ✅ Implemented (plugin v1.4), verified against NINA source |
+| N6 (§49) cloud safety (plugin) | ✅ Implemented in the plugin, verified against NINA source |
 | §50 INIT standard | ✅ Implemented; validated (deterministic initial state) |
 | §51 adaptive MinMove cap | ✅ Implemented; observed in the field |
 | **§53 symmetric recovery** | ⚠️ **Field-validated — happy path only** (1 session, 2026-07-03): Aggressiveness recovers, converges to good RMS. **To verify:** the STOP path (stiffening that worsens) and confirmation across sessions/setups. |
