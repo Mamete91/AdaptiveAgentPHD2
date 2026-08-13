@@ -2,7 +2,14 @@
 
 **Adaptive tuning for PHD2 autoguiding, driven by measured outcomes.**
 
-Version **2.15.1** · N.I.N.A. plugin **1.12.1.0** · License **BSD-3-Clause** · Windows · Python 3.11+
+Version **2.15.1** · N.I.N.A. plugin **1.12.2.0** · License **BSD-3-Clause** · Windows · Python 3.11+
+
+![The Adaptive Agent dashboard during a real session](docs/img/dashboard.png)
+
+<sub>A real session on **Abell 61**: guiding at 0.74″ total, clear sky, 349 of 349 reference
+stars. The five slots across the top — adaptive control, guiding, sky, session, recovery —
+are the whole state of the system at a glance; every number and its provenance is one hover
+away.</sub>
 
 ---
 
@@ -15,6 +22,15 @@ PHD2 is an excellent autoguider, but it optimizes the *single correction pulse*:
 The **Adaptive Agent** runs alongside PHD2 as an outer control loop. It observes guiding over minutes, maintains a continuously measured RMS **baseline**, and adjusts **only two PHD2 guide-algorithm parameters: Aggressiveness and MinMove**. The defining rule of its **Outcome-First controller**: after every adjustment the Agent **measures the outcome** — an adjustment is kept only if guiding RMS holds or improves, and is reverted otherwise.
 
 This is **adaptive control, not machine learning**: no training, no black box. Every decision is inspectable in the logs and on the live dashboard.
+
+<details>
+<summary><b>📊 The whole project in one picture</b> — infographic (Italian)</summary>
+
+<br>
+
+<img src="docs/img/poster.png" width="620" alt="Adaptive Agent for PHD2 — infographic">
+
+</details>
 
 ```
       ┌────────────── context & safety ────────────────┐
@@ -48,6 +64,12 @@ Key elements of the adaptive guiding engine:
 ## N.I.N.A. integration (optional)
 
 A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/). Its centerpiece is a virtual **Sky Conditions monitor** (exposed through N.I.N.A.'s native `ISafetyMonitor` interface — the same role an ASCOM safety monitor plays): one continuously evaluated **SAFE/UNSAFE verdict on acquisition quality**, built from six independent conditions: sustained STAR_LOST; persistent N1 sky-transparency degradation measured on the imaging camera; a sustained collapse of the guide-star signal, which the guide channel sees minutes before the next light frame could; stale telemetry under an already degraded sky; loss of the Agent during an active session; and a guide channel gone silent while guiding was expected. Fast evidence and persistent evidence carry independent thresholds, and recovery toward safe is granted only by the imaging camera — one guide star can testify that the sky went bad, never that the whole field came back. It never fails *toward* safe. **N.I.N.A.'s Sequence Engine always remains the sole owner of the sequence lifecycle**: the monitor only reports, and the user's end-of-sequence criteria always win (verified down to N.I.N.A.'s cancellation chain). On top of that state the plugin ships the recommended recovery workflow — the self-contained **Recovery probe** instruction for *Trigger On Unsafe*, which lets a clouded-out session resume on its own — plus the dockable dashboard panel, per-exposure **N.I.N.A. telemetry** forwarding (HFR, star count, image statistics — what the Agent uses to recognize sky transparency), a bounded **meridian-protection window** that lets the mechanical flip run at its deadline even under unsafe conditions and then restores the hold — without it N.I.N.A. stops tracking at the deadline and nothing ever restarts it — and **Agent lifecycle management**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes. The Agent is fully functional without it.
+
+![The plugin settings inside N.I.N.A.](docs/img/nina-plugin.jpg)
+
+<sub>The plugin page in N.I.N.A.'s Plugin Manager. Every safety condition sits behind its own
+switch, each with the reasoning behind its default written next to it — the settings explain
+themselves, so nothing has to be taken on trust.</sub>
 
 ## Quick start
 
