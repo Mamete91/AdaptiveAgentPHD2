@@ -222,29 +222,28 @@ PER DISINSTALLARLO: chiudi NINA, cancella la cartella
 Nessuna traccia residua nel sistema.
 
 NOVITA' v1.1 (Launch Agent + badge stato):
-Il plugin v1.1 aggiunge sopra la dashboard:
- - un badge "Agente online vX.Y" (verde) / "Agente offline" (grigio)
-   che si aggiorna ogni 15 secondi;
- - un pulsante "Avvia Adaptive Agent" che lancia Avvia.bat con un
-   click senza dover aprire Esplora Risorse.
-Per usare il pulsante, vai in Options -> Plugins -> Adaptive Agent
-for PHD2 - Dashboard, e nelle settings imposta una sola volta il
-percorso del file Avvia.bat (es. clicca "Sfoglia..." e selezionalo).
-Quando l'Agente e' gia' online il pulsante e' disabilitato (no-op),
-quando e' offline e il path e' configurato e' attivo. Non serve per
-usare il plugin: la dashboard funziona comunque, e' solo comodita'.
+INSTALLAZIONE CON NINA (consigliata: non serve avviare nulla a mano)
 
-NOVITA' v1.2 (Safety Monitor virtuale opzionale):
-Il plugin v1.2 espone anche un Safety Monitor virtuale che NINA puo'
-usare come driver di sicurezza. Si attiva in NINA andando in Equipment
--> Safety Monitor, selezionando dalla tendina (sotto categoria N.I.N.A.)
-"Adaptive Agent for PHD2 - Condizioni del Cielo" e cliccando Connect. Il driver
-segnala unsafe quando la guida resta in STAR_LOST oltre 5 minuti (valore
-configurabile nelle impostazioni del plugin). Le reazioni concrete
-(pausa sequenza, parking, ecc.) si configurano dentro NINA in
-Options -> Safety o nell'Advanced Sequencer. Per uso domestico la
-configurazione consigliata e' "Pause on unsafe" + "Resume on safe".
-La funzione e' opzionale: chi non la usa non e' impattato.
+Servono due download: questo pacchetto e il plugin per NINA.
+
+ 1. Estrai il contenuto dello ZIP del plugin in
+    %LOCALAPPDATA%\NINA\Plugins\3.0.0 e riavvia NINA.
+ 2. Estrai questo pacchetto nella cartella che preferisci.
+ 3. In NINA apri le impostazioni del plugin Adaptive Agent e cerca
+    "Percorso del launcher dell'Agente (Avvia.bat)". Con "Sfoglia..."
+    seleziona il file Avvia.bat nella cartella appena estratta.
+ 4. In Equipaggiamento -> Safety Monitor scegli il dispositivo
+    "Adaptive Agent for PHD2 - Condizioni del Cielo" e premi Connetti.
+ 5. Impostato il percorso, l'Agente parte DA SOLO al successivo avvio
+    di NINA e si chiude con grazia alla chiusura, ripristinando i
+    parametri PHD2. Il pulsante "Avvia Adaptive Agent" nel pannello
+    resta come riserva per lanciarlo subito.
+ 6. Nella dashboard deve comparire "Connesso"; avviata la guida
+    cominciano ad arrivare i dati di PHD2 e del monitoraggio cielo.
+
+ATTENZIONE QUANDO AGGIORNI: il percorso salvato punta ancora alla
+cartella della versione VECCHIA. Torna al passo 3 e riseleziona
+Avvia.bat nella cartella nuova.
 
 NOTA: il plugin e' opzionale. La dashboard via browser su
 http://localhost:8080 funziona sempre, anche senza plugin.

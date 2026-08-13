@@ -75,11 +75,18 @@ themselves, so nothing has to be taken on trust.</sub>
 
 ### With N.I.N.A. — recommended, and nothing to start by hand
 
-1. Install the plugin: extract the plugin ZIP into `%LOCALAPPDATA%\NINA\Plugins\3.0.0`, then restart N.I.N.A. Extract the Agent package wherever you like.
-2. In N.I.N.A., open the plugin settings and point **Agent launcher path** at the `Avvia.bat` you just extracted.
-3. Connect **Adaptive Agent for PHD2 — Sky Conditions** under *Equipment → Safety Monitor*.
+Two downloads: the **Agent** package and the **N.I.N.A. plugin**. You need both.
 
-That is the whole setup. From then on the Agent **starts by itself when N.I.N.A. starts** and **shuts down gracefully when N.I.N.A. closes**, restoring your PHD2 parameters — you never touch a `.bat` again. The dashboard lives in its own dockable panel, and a *Launch Adaptive Agent* button stays available as a fallback. For unattended cloud recovery, add the **Recovery probe** instruction inside a *Trigger On Unsafe* (see the section above).
+1. **Install the plugin.** Extract the plugin ZIP into `%LOCALAPPDATA%\NINA\Plugins\3.0.0`, then restart N.I.N.A.
+2. **Install the Agent.** Extract the Agent ZIP into any folder you like.
+3. **Tell N.I.N.A. where the Agent is.** Open the plugin settings, find *Agent launcher path (Avvia.bat)* and use **Browse…** to select the `Avvia.bat` inside the folder you just extracted.
+4. **Connect the device.** Under *Equipment → Safety Monitor*, pick **Adaptive Agent for PHD2 — Sky Conditions** and connect it.
+5. **Start.** With the path set, the Agent launches by itself the next time N.I.N.A. starts. To start it right now, the *Launch Adaptive Agent* button in the panel does the same thing.
+6. **Check.** The dashboard should show **Connected**; once guiding is running, PHD2 data and sky monitoring start flowing in.
+
+That is the whole setup — from then on the Agent starts with N.I.N.A. and **shuts down gracefully when N.I.N.A. closes**, restoring your PHD2 parameters. You never touch a `.bat` again. For unattended cloud recovery, add the **Recovery probe** instruction inside a *Trigger On Unsafe* (see the section above).
+
+> **Upgrading?** The launcher path points at the *old* version's folder. After extracting a new Agent build, go back to step 3 and re-select `Avvia.bat` in the new folder.
 
 ### Standalone — without N.I.N.A.
 

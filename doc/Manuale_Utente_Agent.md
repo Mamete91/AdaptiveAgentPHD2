@@ -116,7 +116,21 @@ Tutta la configurazione vive in **un solo file** e si lancia con **un solo esegu
 * **`config.toml`** — l'unico file di configurazione, lo stesso per qualsiasi setup.
 * **`Avvia.bat`** — l'unico file di avvio, lo stesso per qualsiasi setup.
 
-Il workflow è in tre passi:
+### Se usi NINA (consigliato): niente da avviare a mano
+
+Servono **due download**: il pacchetto dell'Agente e il plugin per NINA.
+
+1. **Installa il plugin.** Estrai il contenuto dello ZIP del plugin in `%LOCALAPPDATA%\NINA\Plugins\3.0.0`, poi riavvia NINA.
+2. **Installa l'Agente.** Estrai lo ZIP dell'Agente nella cartella che preferisci.
+3. **Di' a NINA dov'è l'Agente.** In NINA apri le impostazioni del plugin Adaptive Agent e cerca *Percorso del launcher dell'Agente (Avvia.bat)*. Con **Sfoglia…** seleziona il file `Avvia.bat` nella cartella appena estratta.
+4. **Collega il dispositivo.** In *Equipaggiamento → Safety Monitor* scegli **Adaptive Agent for PHD2 — Condizioni del Cielo** e premi Connetti.
+5. **Avvia.** Impostato il percorso, l'Agente parte da solo al successivo avvio di NINA. Se vuoi lanciarlo subito, il pulsante *Avvia Adaptive Agent* nel pannello fa la stessa cosa.
+6. **Verifica.** Nella dashboard deve comparire **Connesso**; avviata la guida, cominciano ad arrivare i dati di PHD2 e del monitoraggio del cielo.
+
+> [!IMPORTANT]
+> Quando aggiorni a una versione nuova dell'Agente, il percorso salvato punta ancora alla **cartella vecchia**. Torna al passo 3 e riseleziona `Avvia.bat` nella cartella nuova.
+
+### Senza NINA
 
 1. Apri PHD2 e seleziona il **profilo del telescopio** che stai usando (con focale di guida e dimensione pixel camera corrette).
 2. Avvia la guida su una stella in PHD2.
