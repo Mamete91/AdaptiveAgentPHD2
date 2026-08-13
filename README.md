@@ -69,6 +69,17 @@ A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.
 switch, each with the reasoning behind its default written next to it — the settings explain
 themselves, so nothing has to be taken on trust.</sub>
 
+**The whole unattended-recovery setup is one instruction, and what matters is where it goes:**
+
+![The Recovery probe nested inside Trigger On Unsafe](docs/img/recovery-probe.png)
+
+<sub>`Trigger On Unsafe` → `Before Waiting For Safety` → **Recovery probe (Adaptive Agent)**.
+Nested there, the probe runs *before* N.I.N.A. parks itself on the safety wait: while conditions
+are unsafe it takes verification exposures replicating the interrupted light, and the moment the
+monitor returns SAFE the wait ends and the sequence resumes on its own. No extra containers, no
+Camera instructions — and *After Waiting For Safety* stays free for anything you want to run on
+the way back.</sub>
+
 ## Quick start
 
 **Requirements:** PHD2 2.6.x with **Tools → Enable Server** activated. The packaged build carries its own runtime — no Python needed; from source you need Python 3.11+.
