@@ -577,9 +577,9 @@ function fmtDelta(v) {
 }
 
 const TRANSP_STATE = {
-  CLEAR: { icon: 'sole',     color: '#4ade80', label: 'CIELO LIMPIDO' },
-  HAZE:  { icon: 'soleNube', color: '#fbbf24', label: 'VELATURE' },
-  CLOUD: { icon: 'nube',     color: '#f87171', label: 'NUVOLE' },
+  CLEAR: { icon: '\u{1F30C}', color: '#4ade80', label: 'CIELO LIMPIDO' },
+  HAZE:  { icon: '\u{1F32B}\uFE0F', color: '#fbbf24', label: 'VELATURE' },
+  CLOUD: { icon: '\u2601\uFE0F', color: '#f87171', label: 'NUVOLE' },
 };
 
 // §45 — card Transparency Index (NINA). Graceful: senza telemetria la card è nascosta.
@@ -592,7 +592,7 @@ function updateTransparency(nina) {
     return;
   }
   card.style.display = '';
-  const cfg = TRANSP_STATE[t.state] || { icon: 'nubeIgn', color: '#9ca3af', label: t.state || '—' };
+  const cfg = TRANSP_STATE[t.state] || { icon: '\u2754', color: '#9ca3af', label: t.state || '—' };
   setGlyph('transp-icon', cfg.icon);
   el('transp-state').textContent = cfg.label;
   el('transp-state').style.color = cfg.color;
@@ -678,10 +678,13 @@ const GUIDA_UI = {
   STAR_LOST:  ['mirinoLost', 'tone-red',    'Stella persa'],
   INACTIVE:   ['mirinoOff',  '',            'Ferma'],
 };
+// §94 — emoji, non glifi: il cielo ha un vocabolario che tutti conoscono gia'.
+// CLEAR e' la Via Lattea e non un sole: qui si riprende di notte, e "limpido"
+// significa stelle visibili.
 const CIELO_UI = {
-  CLEAR: ['sole',     'tone-green',  'Limpido'],
-  HAZE:  ['soleNube', 'tone-yellow', 'Velatura'],
-  CLOUD: ['nube',     'tone-orange', 'Coperto'],
+  CLEAR: ['\u{1F30C}', 'tone-green',  'Limpido'],
+  HAZE:  ['\u{1F32B}\uFE0F', 'tone-yellow', 'Velatura'],
+  CLOUD: ['\u2601\uFE0F', 'tone-orange', 'Coperto'],
 };
 const DIAG_UI = {
   NOMINAL:           ['diagStabile', 'tone-green'],
@@ -696,15 +699,22 @@ const VERDICT_IT = { CONFIRM: 'confermata', ATTENUATE: 'attenuata', BLOCK: 'bloc
 // §81 — scambia il glifo di un contenitore <svg><use>. Un solo punto di
 // verita' per tutte le icone della dashboard: il vocabolario e' quello.
 function setGlyph(id, glyph) {
+  // Due modalità decise dal DOM: contenitore con <use> = icona disegnata,
+  // contenitore semplice = emoji come testo. Cosi' il chiamante non deve
+  // sapere quale dei due sta usando.
   const u = el(id + '-u');
-  if (u) { u.setAttribute('href', '#i-' + glyph); }
+  if (u) { u.setAttribute('href', '#i-' + glyph); return; }
+  const e = el(id);
+  if (e) { e.textContent = glyph; }
 }
 
 function l1(key, glyph, tone, title, val, tip) {
   const slot = el('l1-' + key);
   if (!slot) { return; }
   slot.className = 'l1-slot' + (key === 'ctrl' ? ' l1-primary' : '') + (tone ? ' ' + tone : '');
-  el('l1-' + key + '-u').setAttribute('href', '#i-' + glyph);
+  const em = el('l1-' + key + '-e');          // presente solo dove usiamo le emoji
+  if (em) { em.textContent = glyph; }
+  else { el('l1-' + key + '-u').setAttribute('href', '#i-' + glyph); }
   el('l1-' + key + '-t').textContent = title;
   el('l1-' + key + '-v').textContent = val || '';
   slot.title = tip || '';
@@ -882,7 +892,9 @@ function updateLevel1(data) {
     }
     l1('cielo', cg, ct, cl, `${t.state} · ${idx}`, tip);
   } else {
-    l1('cielo', 'nubeIgn', '', 'Nessuna misura', '—',
+    // Ignoranza dichiarata: prima ricadeva sull'icona del sereno in grigio,
+    // cioe' mostrava "limpido" quando non sappiamo nulla.
+    l1('cielo', '\u2754', '', 'Nessuna misura', '—',
        "CIELO — NESSUNA MISURA\nNon arrivano pose da NINA: senza immagini non c'è indice di trasparenza. L'assenza di dati non è mai «sereno».");
   }
 
@@ -1144,13 +1156,13 @@ function updateSkyStory(data) {
   // suo insieme, in prima persona: chi legge vuole sapere cosa sta facendo il
   // sistema, non quale sottocomponente ha prodotto quale valore. I nomi interni
   // (hint, sonda, N1, latch) non compaiono mai; i numeri stanno nel tooltip.
-  let cls = '', icon = 'nubeIgn';
+  let cls = '', icon = '\u{1F319}';
   let seeing = 'In attesa dei primi dati…';
   let doing = '';
   let detail = '';
 
   if (rh.degrading) {
-    cls = 'worsening'; icon = 'ondaGiu';
+    cls = 'worsening'; icon = '\u2601\uFE0F';
     seeing = 'Il cielo sta peggiorando rapidamente.';
     doing = 'Sto accumulando evidenze senza aspettare la prossima posa.';
     detail = `Segnale della stella di guida in calo da ${Math.round(rh.degrade_s || 0)}s` +
@@ -1158,7 +1170,7 @@ function updateSkyStory(data) {
                ? ` (${rh.snr} contro ${rh.snr_ref} del cielo sereno recente).` : '.');
   } else if (state === 'CLOUD' || state === 'HAZE') {
     if (rh.active) {
-      cls = 'recovering'; icon = 'nubeSu';
+      cls = 'recovering'; icon = '\u{1F324}\uFE0F';
       seeing = 'Vedo un recupero stabile del cielo.';
       doing = 'Attendo la conferma dalla posa di verifica.';
       detail = (rh.snr != null && rh.snr_ref != null
@@ -1166,13 +1178,13 @@ function updateSkyStory(data) {
                'La stella di guida è una sola: a dire se il campo di ripresa è ' +
                'tornato utilizzabile può essere solo la camera di ripresa.';
     } else if (unsafe) {
-      cls = 'probing'; icon = 'lenteVuota';
+      cls = 'probing'; icon = '\u{1F50D}';
       seeing = 'Cielo coperto.';
       doing = 'Verifico periodicamente il campo di ripresa.';
       detail = 'Scatto pose di controllo finché il cielo non torna davvero ' +
                'utilizzabile; la sequenza resta sospesa fino ad allora.';
     } else {
-      cls = 'clouded'; icon = 'nube';
+      cls = 'clouded'; icon = '\u2601\uFE0F';
       seeing = 'Cielo coperto.';
       doing = 'Il campo di ripresa non è utilizzabile.';
     }
@@ -1180,20 +1192,20 @@ function updateSkyStory(data) {
     const lastProbe = (Array.isArray(rh.probes) && rh.probes.length)
       ? rh.probes[rh.probes.length - 1] : null;
     if (unsafe && lastProbe && lastProbe.outcome_state === 'CLEAR') {
-      cls = 'confirmed'; icon = 'lenteSi';
+      cls = 'confirmed'; icon = '\u2705';
       seeing = 'Recupero confermato.';
       doing = 'Completo le verifiche, poi la sequenza riprende.';
       detail = 'La posa di controllo ha ritrovato il campo al livello del sereno ' +
                'recente: servono ancora alcune conferme prima di riautorizzare.';
     } else {
-      cls = 'clear'; icon = 'sole';
+      cls = 'clear'; icon = '\u{1F30C}';
       seeing = 'Cielo limpido.';
       doing = 'Il campo è al livello del sereno recente.';
     }
   }
 
   box.className = `sky-story ${cls}`;
-  el('sky-story-use').setAttribute('href', '#i-' + icon);
+  el('sky-story-icon').textContent = icon;
   el('sky-story-text').textContent = seeing;
   el('sky-story-action').textContent = doing;
   box.title = detail || `${seeing} ${doing}`.trim();

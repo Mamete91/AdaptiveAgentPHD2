@@ -227,7 +227,7 @@ INSTALLAZIONE CON NINA (consigliata: non serve avviare nulla a mano)
 Servono due download: questo pacchetto e il plugin per NINA.
 
  1. Estrai il contenuto dello ZIP del plugin in
-    %LOCALAPPDATA%\NINA\Plugins\3.0.0 e riavvia NINA.
+    %LOCALAPPDATA%\\NINA\\Plugins\\3.0.0 e riavvia NINA.
  2. Estrai questo pacchetto nella cartella che preferisci.
  3. In NINA apri le impostazioni del plugin Adaptive Agent e cerca
     "Percorso del launcher dell'Agente (Avvia.bat)". Con "Sfoglia..."

@@ -1236,3 +1236,19 @@ svg.condition-icon {
 .l2-chip.tone-orange .l2-ico, .l2-chip.tone-orange .l2-lbl { color: var(--orange); }
 .l2-chip.tone-red    .l2-ico, .l2-chip.tone-red    .l2-lbl { color: var(--red); }
 .l2-chip.tone-blue   .l2-ico, .l2-chip.tone-blue   .l2-lbl { color: var(--blue); }
+
+/* §94 — il cielo torna alle emoji: hanno un vocabolario che nessuno deve
+   imparare. Le icone disegnate restano ai sottosistemi, che un vocabolario
+   condiviso non ce l'hanno. Qui serve solo dimensionarle come i glifi che
+   sostituiscono. */
+.l1-emoji {
+  font-size: 26px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  flex: none;
+}
+span.sky-story-icon { font-size: 19px; line-height: 1; flex: none; }
+div.condition-icon  { font-size: 30px; line-height: 1.1; }

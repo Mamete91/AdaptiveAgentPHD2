@@ -19,7 +19,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Dipendenze SOLO-BUILD, mai importate a runtime dall'Agente: reportlab e
+    # matplotlib servono a generare il PDF del manuale (matplotlib solo per i
+    # font DejaVu). Senza questa esclusione PyInstaller le trova comunque e le
+    # imbarca: +44 MB di pacchetto spedito agli utenti per codice mai eseguito.
+    excludes=[
+        'matplotlib', 'reportlab', 'PIL', 'pytest', 'tkinter',
+    ],
     noarchive=False,
     optimize=0,
 )
