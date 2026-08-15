@@ -50,6 +50,11 @@ _CSV_FIELDS = [
     "lag1_dec",
     "rms_high_active",
     "rms_low_active",
+    "jitter_anchor",
+    "rms_anchor",
+    "hfr_nina",
+    "star_count",
+    "airmass",
     "diag_state",
     "diag_confidence",
     # §45/§46 — Layer-2 NINA: indice di trasparenza + stato + penalità N8 applicata al
@@ -192,6 +197,12 @@ class SessionLogger:
             "lag1_dec": round(snapshot.lag1_dec, 3),
             "rms_high_active": rms_high_active,
             "rms_low_active": rms_low_active,
+            # §94 — misura in ombra: nessuna decisione legge queste colonne.
+            "jitter_anchor": getattr(snapshot, "jitter_anchor", None),
+            "rms_anchor": getattr(snapshot, "rms_anchor", None),
+            "hfr_nina": getattr(snapshot, "hfr_nina", None),
+            "star_count": getattr(snapshot, "star_count", None),
+            "airmass": getattr(snapshot, "airmass", None),
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
             "transparency_index": transparency_index,   # §45
@@ -226,7 +237,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 5,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty
+            "schema_version": 6,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

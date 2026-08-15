@@ -882,7 +882,7 @@ class TestResetDiscipline(unittest.TestCase):
             lg.log_snapshot(snap, [])   # primo frame post-reset
             lg.log_snapshot(snap, [])   # secondo frame
             summary = lg.close()
-            self.assertEqual(summary["schema_version"], 5)   # §45/§46: colonne trasparenza + nina_penalty
+            self.assertEqual(summary["schema_version"], 6)   # §45/§46: colonne trasparenza + nina_penalty
             rows = list(_csv.DictReader(open(lg._csv_path, encoding="utf-8")))
         self.assertEqual(rows[0]["reset_cause"], "dither")
         self.assertEqual(rows[1]["reset_cause"], "")

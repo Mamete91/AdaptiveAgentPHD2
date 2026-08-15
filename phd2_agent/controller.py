@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Optional
 
 from .analyzer import AnalysisSnapshot, SeeingCondition, StatisticsAnalyzer
+from .shadow_refs import ShadowRefs
 from .client import PHD2Client, PHD2RPCError
 from .config import AgentConfig, AxisLimits, ExposureDynamicConfig
 from .diagnostic_engine import GuardianVerdict, SeeingDiagnosticEngine
@@ -228,6 +229,9 @@ class AdaptiveController:
         # Collegati da main.py (duck-typed). None => motore PHD2-only (graceful, pre-N8).
         self.nina_store = None
         self.transparency_tracker = None
+        # §94 — ancore di sessione in OMBRA: nessun ramo decisionale le legge,
+        # finiscono solo nel CSV accanto ai riferimenti veri.
+        self._shadow = ShadowRefs()
         # §47 — breakdown sorgenti di softening della sessione (per /status + dashboard).
         self._softening_source_counts: dict[str, int] = {}
         self._diag_last_state = None
@@ -537,6 +541,19 @@ class AdaptiveController:
                                        if not self._rms_baseline_rejected else None),
             transparency_provider=self._nina_confidence_input,   # §46 N8
         )
+
+    def _nina_shadow_block(self) -> dict:
+        """§94 — ultimi valori per-posa da NINA, per la sola osservazione.
+        Volutamente SENZA il gate di freschezza del §46: qui non si decide
+        nulla, e un valore vecchio (che il timestamp della riga rende
+        riconoscibile) e' piu' utile di una colonna vuota."""
+        t = self.transparency_tracker
+        if t is None:
+            return {}
+        try:
+            return t.status_block() or {}
+        except Exception:
+            return {}
 
     def _nina_confidence_input(self) -> Optional[dict]:
         """§46 — input trasparenza per il motore. Graceful: None (nessuna modulazione)
@@ -1165,6 +1182,18 @@ class AdaptiveController:
             return
         # exposure reale su OGNI riga loggata
         snapshot.exposure_ms = int(self.current_exposure_ms or self.base_exposure_ms or 0)
+        # §94 — ancore in ombra: si alimentano su OGNI frame e non decidono nulla.
+        # Stanno qui, e non in evaluate(), perche' devono vedere l'intera serie e
+        # non solo i tick: un'ancora costruita su un frame ogni quattro non e' una
+        # memoria del meglio, e' un campione.
+        self._shadow.update(getattr(snapshot, "jitter_rms", None),
+                            getattr(snapshot, "rms_total", None))
+        snapshot.jitter_anchor = self._shadow.jitter_anchor
+        snapshot.rms_anchor = self._shadow.rms_anchor
+        nb = self._nina_shadow_block()
+        snapshot.hfr_nina = nb.get("hfr")
+        snapshot.star_count = nb.get("star_count")
+        snapshot.airmass = nb.get("airmass")
         # accumulo baseline per guide-frame reale (sostituisce quello in evaluate)
         self._maybe_start_refresh()
         self._update_rms_baseline(snapshot)

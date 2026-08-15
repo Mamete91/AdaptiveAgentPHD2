@@ -82,6 +82,11 @@ class TransparencyTracker:
         self._confirmed_subs: int = 0
         self._base_stars: Optional[float] = None
         self._last_star: Optional[float] = None
+        # §94 — HFR dell'immagine di RIPRESA: testimone del seeing che NON
+        # soffre di auto-riferimento (altro sensore, altra scala). Il payload
+        # prevede anche `fwhm`, ma il plugin oggi invia solo `hfr`: la FWHM nei
+        # nomi file la calcola Hocus Focus, non l'analisi standard di NINA.
+        self._last_hfr: Optional[float] = None
         self._last_bkg: Optional[float] = None
 
     # ------------------------------------------------------------------ #
@@ -202,6 +207,9 @@ class TransparencyTracker:
             self._deficit = deficit
             self._base_stars = base_stars
             self._last_star = sc
+            hfr = img.get("hfr")
+            if isinstance(hfr, (int, float)) and hfr > 0:
+                self._last_hfr = float(hfr)
             self._last_bkg = bkg
 
     def _ref_drift_pct(self) -> Optional[float]:
@@ -324,6 +332,7 @@ class TransparencyTracker:
                 "target": self._target,
                 "airmass": round(self._last_airmass, 3) if self._last_airmass is not None else None,
                 "star_count": self._last_star,
+                "hfr": self._last_hfr,
                 "bkg": self._last_bkg,
                 "background": self._last_bkg,   # §48 — alias del contratto consumatori (N6)
                 "filter": self._filter,
