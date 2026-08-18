@@ -4062,3 +4062,73 @@ all'architettura: non si inventa una struttura che non esiste solo perché il di
 
 **383 test verdi** (invariati: il pannello è presentazione), controllo id orfani + controllo nomi interni,
 ZIP **v2.14.1**. Plugin invariato (1.11.0.0). NO commit.
+
+---
+
+## 95. La Base dell'esposizione si dichiara, non si eredita — agente v2.17.0 (2026-08-18)
+
+**La domanda.** «Perche' la sessione del 17-18 agosto e' partita con Base 4000 ms? Non ricostruire la
+teoria: dimmi dai log la sequenza reale degli eventi e quale variabile determina ciascun valore.»
+
+**La sequenza, riga per riga.**
+
+    16/08 03:04  la stella di guida collassa. SNR 6.1 < snr_low 8.0 -> Path A alza 2000 -> 4000 ms.
+                 Un salto solo: la formula era `base * 2`, e con tetto 4000 il primo gradino
+                 era anche l'ultimo.
+    16/08 03:0x  la sessione si interrompe di colpo. Quattro tentativi di ripristino trovano
+                 PHD2 gia' chiuso. I 4000 ms restano scritti nel profilo.
+    17/08 22:51  nuova sessione. La baseline orfana viene trovata ma scartata: "vecchia di 48.2
+                 ore - skip restore". Poi `controller.py:368` fa `base = client.get_exposure()`
+                 e adotta i 4000 ms residui come riferimento della notte.
+    17-18/08     quattro ore, ZERO interventi sull'esposizione. Non per prudenza: con base 4000
+                 e tetto 4000 il controller non poteva salire (era al tetto) ne' scendere
+                 (il pavimento della discesa E' la base). Paralizzato in entrambe le direzioni.
+
+**Il difetto non e' "4 secondi".** E' che nessuno aveva scelto 4 secondi, e che una volta li' il
+controller non aveva piu' gradi di liberta'. Il boiling frog per la sesta volta: un riferimento che
+assorbe uno stato di emergenza e lo promuove a normalita' (dopo il riferimento N1 §66, snr_ref §76-bis,
+jitter_ref, baseline RMS).
+
+**Cio' che NON e' stato deciso.** Il confronto 4 s contro 2/2.5 s **resta aperto**. Il test manuale del
+17-18 non isola nulla: venti minuti, condizioni in caduta, e nel confronto precedente i 2982 frame a
+4000 ms erano quasi tutti a inizio notte (N1 1.00, airmass 1.00) contro 356 frame a 2500 ms tutti a fine
+notte (N1 0.76-0.82, airmass 1.31-1.34). Non c'e' una sola regola in questo intervento che penalizzi le
+pose lunghe: 4000 ms resta pienamente raggiungibile, in due gradini invece che con un salto.
+
+**Tre vettori di ereditarieta', tutti chiusi.**
+
+1. `initialize()` leggeva PHD2 a ogni re-init — e la notte del 17 i re-init sono stati 11. Ora la Base
+   e' `target_exposure_ms` (2000, dichiarato in config) e a `full=True` PHD2 viene **riportato** li'.
+   Al ri-aggancio la Base **non si rinegozia**: prende atto del gradino corrente e basta.
+2. `restore_baseline()` riscriveva la base salvata su file — che il 16/8 valeva 4000 proprio perche'
+   ereditata. Con un target dichiarato, comanda il target.
+3. `target_exposure_ms = 0` (o riga assente) mantiene **esattamente** il comportamento storico, per chi
+   non vuole che l'Agente tocchi l'esposizione.
+
+**Path A sale e scende a gradini**, come Path B faceva gia'. E qui i test hanno trovato un difetto che il
+ragionamento a mente non vedeva: `cur * 1.5` in salita e `cur / 1.5` in discesa **non percorrono la stessa
+strada**, perche' in mezzo c'e' lo snap ai valori validi di PHD2. Da base 2000 la salita atterra su 3000
+(esatto), ma la discesa da 4000 da' 2666, che snappa su 2500 — un ciclo su-e-giu' non tornava al punto di
+partenza. Correzione: `_exposure_ladder()` costruisce la scala **una volta sola** dalla base al tetto, e
+salita e discesa si muovono di un gradino su quella stessa scala. 2000 -> 3000 -> 4000 e ritorno.
+`snr_step_cooldown_s = 45` fra un gradino e l'altro: piu' corto dei 90 s di Path B perche' con la SNR che
+crolla la stella si perde in fretta, ma non zero perche' il cambio di posa azzera analyzer e motore
+diagnostico e il gradino dopo va deciso su dati nuovi.
+
+**La diagnostica che sarebbe bastata.** `/status` espone ora `target_ms` (il riferimento dichiarato) e
+`phd2_ms` (cosa fa la camera **davvero**), e la dashboard mostra "PHD2 reale" in arancio quando diverge
+dal valore interno. La notte del 17 l'Agente ragionava su una base che nessuno aveva scelto e dalla
+dashboard non c'era modo di accorgersene: una riga sarebbe bastata a chiudere la domanda in dieci secondi.
+
+**Perche' 2 s come partenza.** A 2 s il periodo della vite (348 s sulla CEM70) e' campionato 174 volte —
+abbondante. Il margine di SNR resta ampio anche nella notte peggiore (6.1 era il **collasso**, non la
+norma). E a 1624 mm la posa piu' lunga media il seeing invece di inseguirlo. 1 s resta configurabile ma
+non e' la partenza predefinita.
+
+**Deliberatamente NON toccato:** la normalizzazione del jitter grezzo. La correlazione +0.35 fra jitter
+grezzo e FWHM nella notte con jet stream a 32 m/s e' un risultato interessante e va **studiato prima** di
+cambiare il metro — stessa disciplina del §94: prima si misura in ombra, poi si decide.
+
+**412 test verdi** (+16: eredita' da PHD2, dal file di baseline, ri-aggancio, snap del target, tetto,
+comando rifiutato, scala in salita e in discesa, cooldown, stato incoerente, scenario completo della
+notte 17-18). ZIP **v2.17.0**. Plugin invariato (1.11.0.0).

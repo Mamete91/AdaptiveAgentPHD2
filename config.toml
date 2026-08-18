@@ -126,6 +126,14 @@ auto_import = true
 
 [exposure_dynamic]
 enabled               = true
+# §95 — esposizione di RIFERIMENTO della sessione. E' un valore DICHIARATO: a
+# ogni avvio l'Agente riporta PHD2 qui, invece di adottare come base cio' che vi
+# trova. Senza, una posa alzata per emergenza e mai ripristinata (sessione
+# interrotta, PHD2 chiuso) diventa la base della notte dopo — ed e' successo:
+# 17-18/8 base ereditata a 4000ms = tetto, Exposure Controller bloccato 4 ore.
+# Metti a 0 (o togli la riga) per il comportamento storico "adotto cio' che c'e'".
+target_exposure_ms    = 2000   # 2 s: 174 campioni per periodo della vite (348 s)
+snr_step_cooldown_s   = 45     # attesa fra due gradini di Path A (SNR)
 step_factor           = 1.5
 max_steps_above_base  = 2
 cooldown_s            = 90

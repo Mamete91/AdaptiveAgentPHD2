@@ -245,6 +245,7 @@ class AdaptiveController:
         # Emergency state
         self.base_exposure_ms: Optional[int] = None
         self.current_exposure_ms: Optional[int] = None
+        self._phd2_exposure_ms: Optional[int] = None   # §95: cosa ha PHD2 davvero
         self.exposure_state: ExposureState = ExposureState.NOMINAL
         self.exposure_steps_above_base: int = 0
         self.last_exposure_action_time: float = 0.0
@@ -365,8 +366,19 @@ class AdaptiveController:
                 self._check_orphan_baseline()
 
             self._valid_exposures = self.client.get_exposure_durations()
-            self.base_exposure_ms = self.client.get_exposure()
-            self.current_exposure_ms = self.base_exposure_ms
+            self._reconcile_base_exposure(full)
+            # §95 — la paralisi non si annuncia da sola: "nessuna azione" e' anche
+            # il comportamento di una notte tranquilla. Se base e tetto coincidono
+            # l'Exposure Controller non ha nessun grado di liberta' (non sale, ed
+            # e' gia' sul pavimento della discesa) e va detto subito.
+            if (self.base_exposure_ms
+                    and self.base_exposure_ms >= self.cfg.emergency.max_exposure_ms):
+                logger.warning(
+                    "[esposizione] base %sms coincide con il tetto %sms: "
+                    "l'Exposure Controller non potra' ne' salire ne' scendere. "
+                    "Abbassa [exposure_dynamic] target_exposure_ms oppure alza "
+                    "[emergency] max_exposure_ms.",
+                    self.base_exposure_ms, self.cfg.emergency.max_exposure_ms)
 
             # Controllo euristico Auto Exposure: se il valore letto non è nella
             # lista valida, PHD2 potrebbe avere Auto Exposure attivo.
@@ -1115,6 +1127,15 @@ class AdaptiveController:
                 )
 
             base_exp = baseline.get("base_exposure_ms")
+            # §95 — il riferimento dichiarato comanda anche qui. Il file di
+            # baseline puo' contenere un valore che nessuno ha mai scelto: la
+            # baseline salvata il 16/8 riportava base=4000ms solo perche' era
+            # stata letta da un PHD2 lasciato boostato. Ripristinarla la
+            # rimetterebbe in circolo alla sessione dopo.
+            _target = self.cfg.exposure_dynamic.target_exposure_ms
+            if _target:
+                base_exp = self._snap_exposure(int(_target))
+                self.base_exposure_ms = base_exp
             if base_exp:
                 self.client.set_exposure(base_exp)
 
@@ -2162,6 +2183,14 @@ class AdaptiveController:
         if self.base_exposure_ms is None or self.base_exposure_ms <= 0:
             return actions
 
+        # §95 — si rilegge PHD2 a cadenza di tick (non di frame) per poter
+        # mostrare in dashboard un eventuale disallineamento fra cio' che
+        # l'Agente crede e cio' che la camera fa davvero.
+        try:
+            self._phd2_exposure_ms = self.client.get_exposure()
+        except Exception:
+            pass
+
         # Path A: LOW_SNR (priorità più alta)
         actions.extend(self._evaluate_exposure_snr(snapshot))
 
@@ -2172,53 +2201,90 @@ class AdaptiveController:
         return actions
 
     def _evaluate_exposure_snr(self, snapshot: AnalysisSnapshot) -> list[ControlAction]:
-        """Path A — gestione LOW_SNR (refattorizzazione logica preesistente)."""
+        """Path A — SNR bassa. §95: si sale e si scende A GRADINI.
+
+        Prima era binario: `base * 2` in un colpo solo, e ritorno alla base in un
+        colpo solo. Con base 2000 e tetto 4000 il primo gradino era anche
+        l'ultimo: il 16/8 alle 03:04 e' bastato un minuto di SNR 6.1 durante il
+        collasso della stella per portare PHD2 a 4000 ms e lasciarcelo.
+
+        Ora il passo e' lo stesso di Path B (x1.5 in salita, :1.5 in discesa):
+        2000 -> 3000 -> 4000 salendo, 4000 -> 3000 -> 2000 scendendo. Ogni
+        gradino richiede `snr_step_cooldown_s`, perche' il cambio di posa azzera
+        analyzer e motore diagnostico e la decisione successiva va presa su dati
+        nuovi, non sul transitorio.
+
+        Cosa NON cambia: 4000 ms resta pienamente raggiungibile. Il campo non ha
+        ancora dimostrato che 2/2.5 s guidino meglio di 4 s — il test del 17-18/8
+        durava venti minuti con le condizioni in caduta — e qui non c'e' nessuna
+        regola che penalizzi le pose lunghe. C'e' solo il divieto di arrivarci
+        con un salto unico e di ereditarle dalla sessione precedente.
+        """
         actions: list[ControlAction] = []
+        ed = self.cfg.exposure_dynamic
+        base = self.base_exposure_ms
+        cur = self.current_exposure_ms or base
+        scala = self._exposure_ladder()
+        # Dove siamo sulla scala. Si cerca il gradino piu' vicino invece di
+        # pretendere una corrispondenza esatta: `cur` puo' arrivare da Path B o
+        # da un cambio manuale in PHD2 e non essere su un gradino.
+        idx = min(range(len(scala)), key=lambda i: abs(scala[i] - cur)) if scala else 0
+        pronto = (time.monotonic() - self.last_exposure_action_time) >= ed.snr_step_cooldown_s
 
-        if (snapshot.condition == SeeingCondition.LOW_SNR
-                and self.exposure_state == ExposureState.NOMINAL):
-            new_exp = self._snap_exposure(self.base_exposure_ms * 2)
-            cur = self.current_exposure_ms or self.base_exposure_ms
-            if new_exp > cur:
-                reason = (
-                    f"SNR basso ({snapshot.snr_avg:.1f} < "
-                    f"{self.cfg.thresholds.snr_low}) - aumento esposizione. "
-                    f"NOTA: i primi frame post-cambio possono mostrare transitorio "
-                    f"nell'algoritmo di guida (stato interno non svuotato senza "
-                    f"GuidingPaused/Resumed)."
-                )
-                action = self._apply_exposure(cur, new_exp, reason,
-                                              param="exposure_snr")
-                if not action.dry_run:
-                    self.exposure_state = ExposureState.BOOSTED_FOR_SNR
-                    self.current_exposure_ms = new_exp
-                    self.last_exposure_action_time = time.monotonic()
-                    if self.analyzer is not None:
-                        self.analyzer.reset()
-                    if self.diagnostic_engine is not None:
-                        self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
-                actions.append(action)
-
-        elif (snapshot.condition != SeeingCondition.LOW_SNR
-              and self.exposure_state == ExposureState.BOOSTED_FOR_SNR):
-            cur = self.current_exposure_ms or self.base_exposure_ms
-            reason = (
-                f"SNR ristabilito ({snapshot.snr_avg:.1f}) - "
-                f"ripristino esposizione base. "
-                f"NOTA: i primi frame post-cambio possono mostrare transitorio "
-                f"nell'algoritmo di guida."
-            )
-            action = self._apply_exposure(cur, self.base_exposure_ms, reason,
-                                          param="exposure_snr")
+        def _consolida(nuovo: int, stato: ExposureState, motivo: str) -> None:
+            action = self._apply_exposure(cur, nuovo, motivo, param="exposure_snr")
             if not action.dry_run:
-                self.exposure_state = ExposureState.NOMINAL
-                self.current_exposure_ms = self.base_exposure_ms
+                self.exposure_state = stato
+                self.current_exposure_ms = nuovo
                 self.last_exposure_action_time = time.monotonic()
                 if self.analyzer is not None:
                     self.analyzer.reset()
                 if self.diagnostic_engine is not None:
                     self.diagnostic_engine.reset("exposure_change")  # §39: il jitter scala col tempo di posa -> azzera
             actions.append(action)
+
+        # -- salita: un gradino per volta finche' la SNR resta bassa ----------
+        if (snapshot.condition == SeeingCondition.LOW_SNR
+                and self.exposure_state in (ExposureState.NOMINAL,
+                                            ExposureState.BOOSTED_FOR_SNR)):
+            if not pronto:
+                return actions
+            new_exp = scala[idx + 1] if idx + 1 < len(scala) else cur
+            if new_exp > cur:
+                _consolida(new_exp, ExposureState.BOOSTED_FOR_SNR, (
+                    f"SNR basso ({snapshot.snr_avg:.1f} < "
+                    f"{self.cfg.thresholds.snr_low}) - gradino di esposizione "
+                    f"{cur} -> {new_exp} ms (base di sessione {base} ms). "
+                    f"NOTA: i primi frame post-cambio possono mostrare transitorio "
+                    f"nell'algoritmo di guida (stato interno non svuotato senza "
+                    f"GuidingPaused/Resumed)."
+                ))
+            # new_exp == cur: siamo al tetto. Nessuna azione, lo stato resta
+            # BOOSTED cosi' la discesa parte da qui quando la SNR si riprende.
+
+        # -- discesa: simmetrica, un gradino per volta fino alla base ---------
+        elif (snapshot.condition != SeeingCondition.LOW_SNR
+              and self.exposure_state == ExposureState.BOOSTED_FOR_SNR):
+            if cur <= base:
+                # Gia' alla base (o sotto): la salita non ha mai preso piede.
+                self.exposure_state = ExposureState.NOMINAL
+                self.current_exposure_ms = base
+                return actions
+            if not pronto:
+                return actions
+            new_exp = max(scala[idx - 1] if idx > 0 else base, base)
+            if new_exp >= cur:
+                # Nessun gradino piu' basso disponibile: si torna alla base in un
+                # passo, altrimenti lo stato resterebbe BOOSTED per sempre.
+                new_exp = base
+            _consolida(
+                new_exp,
+                ExposureState.NOMINAL if new_exp <= base else ExposureState.BOOSTED_FOR_SNR,
+                (f"SNR ristabilito ({snapshot.snr_avg:.1f}) - rientro graduale "
+                 f"{cur} -> {new_exp} ms (base di sessione {base} ms). "
+                 f"NOTA: i primi frame post-cambio possono mostrare transitorio "
+                 f"nell'algoritmo di guida.")
+            )
 
         return actions
 
@@ -2338,6 +2404,82 @@ class AdaptiveController:
                     actions.append(action)
 
         return actions
+
+    def _reconcile_base_exposure(self, full: bool) -> None:
+        """§95 — stabilisce la Base della sessione. Prima si leggeva e basta:
+        `base = client.get_exposure()`, cioe' "quello che trovo in PHD2". Un
+        boost lasciato da una sessione interrotta diventava cosi' il riferimento
+        della successiva, e con Base al tetto il controller non poteva piu'
+        muoversi in nessuna direzione (notte 17-18/8: zero interventi in 4 ore).
+
+        Tre casi, in ordine:
+          • ri-aggancio (guida ripartita): la Base NON si rinegozia. Quella notte
+            gli initialize() sono stati 11: una Base che si ricontratta a ogni
+            ripartenza rimangia i gradini appena conquistati.
+          • nessun target dichiarato: comportamento storico invariato, per chi
+            non vuole che l'Agente tocchi l'esposizione.
+          • target dichiarato: e' LUI la Base, e PHD2 viene riportato li'.
+        """
+        letta = self.client.get_exposure()
+        target = self.cfg.exposure_dynamic.target_exposure_ms
+
+        # Ri-aggancio a sessione in corso: si conserva la Base gia' stabilita e
+        # si prende atto di dove PHD2 e' davvero (puo' essere su un gradino).
+        if not full and self.base_exposure_ms:
+            self.current_exposure_ms = letta or self.base_exposure_ms
+            return
+
+        if not target:
+            self.base_exposure_ms = letta
+            self.current_exposure_ms = letta
+            return
+
+        target = self._snap_exposure(int(target))
+        self.base_exposure_ms = target
+        if letta != target:
+            logger.warning(
+                "[esposizione] PHD2 era a %sms, riferimento di sessione %sms — "
+                "riporto PHD2 al riferimento. (Un valore residuo di una sessione "
+                "precedente non deve diventare la base di questa.)", letta, target)
+            try:
+                self.client.set_exposure(target)
+            except Exception as e:
+                # La Base resta il target: e' il riferimento dichiarato, non una
+                # misura. Se PHD2 non accetta il comando lo dice il log, ma il
+                # controller non torna a inseguire il valore residuo.
+                logger.warning("[esposizione] set_exposure(%s) fallito: %s", target, e)
+        else:
+            logger.info("[esposizione] riferimento di sessione %sms (PHD2 concorde)", target)
+        self.current_exposure_ms = target
+        self._phd2_exposure_ms = target
+
+    def _exposure_ladder(self) -> list[int]:
+        """§95 — i gradini dell'esposizione, dalla base al tetto.
+
+        Costruita una volta sola moltiplicando per `step_factor` e snappando ai
+        valori che PHD2 accetta davvero. Salita e discesa percorrono QUESTA
+        scala, non due formule speculari: `cur * 1.5` e `cur / 1.5` sembrano
+        simmetriche ma non lo sono una volta passate dallo snap. Da base 2000 e
+        tetto 4000 la salita darebbe 3000, la discesa da 4000 darebbe 2666 ->
+        2500, e un ciclo su-e-giu' non tornerebbe al punto di partenza.
+
+        Con la scala: 2000 -> 3000 -> 4000 salendo, 4000 -> 3000 -> 2000
+        scendendo. Esattamente la progressione richiesta.
+        """
+        base = self.base_exposure_ms
+        if not base or base <= 0:
+            return []
+        ed = self.cfg.exposure_dynamic
+        step = ed.step_factor if ed.step_factor > 1.0 else 1.5
+        scala = [base]
+        cur = base
+        for _ in range(8):          # guardia: sopra il tetto la scala finisce
+            nxt = self._snap_exposure(int(cur * step))
+            if nxt <= cur:
+                break
+            scala.append(nxt)
+            cur = nxt
+        return scala
 
     def _snap_exposure(self, target_ms: int) -> int:
         """Snap al valore valido più vicino ≤ max_exposure_ms."""
@@ -2720,6 +2862,11 @@ class AdaptiveController:
                 "state": self.exposure_state.name,
                 "current_ms": self.current_exposure_ms,
                 "base_ms": self.base_exposure_ms,
+                # §95 — cosa ha PHD2 DAVVERO, e da dove viene la base. Nella
+                # notte 17-18/8 l'Agente diceva "base 4000" e nessuno poteva
+                # vedere se fosse una scelta o un residuo: ora si distingue.
+                "target_ms": self.cfg.exposure_dynamic.target_exposure_ms,
+                "phd2_ms": self._phd2_exposure_ms,
                 "steps_above_base": self.exposure_steps_above_base,
                 "cooldown_total_s": self.cfg.exposure_dynamic.cooldown_s,
                 "cooldown_residuo_s": round(max(

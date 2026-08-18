@@ -454,6 +454,28 @@ function updateExposureEscalation(ctrl) {
     const base = exp.base_ms;
     el('exp-current-ms').textContent = cur != null ? `${cur} ms` : '—';
     el('exp-base-ms').textContent = base != null ? `${base} ms` : '—';
+
+    // §95 — la Base e' un riferimento dichiarato o e' stata adottata da PHD2?
+    const baseEl = el('exp-base-ms');
+    if (baseEl) {
+      baseEl.title = exp.target_ms
+        ? `Riferimento dichiarato in configurazione: ${exp.target_ms} ms`
+        : 'Nessun riferimento dichiarato: base adottata da PHD2 all\'avvio';
+    }
+
+    // §95 — cosa espone PHD2 davvero. Se diverge dal valore interno e' un dato
+    // diagnostico, non un dettaglio: la notte 17-18/8 l'Agente ragionava su una
+    // base che nessuno aveva scelto e dalla dashboard non si poteva vedere.
+    const phd2El = el('exp-phd2-ms');
+    if (phd2El) {
+      const phd2 = exp.phd2_ms;
+      const diverge = phd2 != null && cur != null && phd2 !== cur;
+      phd2El.textContent = phd2 != null ? `${phd2} ms` : '—';
+      phd2El.classList.toggle('divergent', diverge);
+      phd2El.title = diverge
+        ? `Disallineamento: l'Agente crede ${cur} ms, PHD2 espone ${phd2} ms`
+        : '';
+    }
     el('exp-steps').textContent = exp.steps_above_base != null ? exp.steps_above_base : '—';
 
     // Cooldown bar

@@ -156,6 +156,15 @@ class PHD2LogConfig:
 @dataclass
 class ExposureDynamicConfig:
     enabled: bool = False
+    # §95 — esposizione di RIFERIMENTO della sessione. None/0 = comportamento
+    # storico (si adotta cio' che PHD2 ha all'avvio), mantenuto per chi non
+    # vuole che l'Agente tocchi l'esposizione. Con un valore dichiarato, la
+    # Base non puo' piu' essere ereditata da un boost della sessione prima.
+    target_exposure_ms: Optional[int] = None
+    # §95 — attesa fra due gradini di Path A (SNR). Piu' corta di cooldown_s
+    # perche' con la SNR che crolla la stella si perde in fretta: aspettare 90 s
+    # fra un gradino e l'altro puo' costare la stella.
+    snr_step_cooldown_s: float = 45.0
     step_factor: float = 1.5
     max_steps_above_base: int = 2
     cooldown_s: float = 90.0
@@ -639,6 +648,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             )
         cfg.exposure_dynamic = ExposureDynamicConfig(
             enabled=bool(ed.get("enabled", False)),
+            target_exposure_ms=(int(ed["target_exposure_ms"])
+                                if ed.get("target_exposure_ms") else None),
+            snr_step_cooldown_s=float(ed.get("snr_step_cooldown_s", 45.0)),
             step_factor=float(ed.get("step_factor", 1.5)),
             max_steps_above_base=int(ed.get("max_steps_above_base", 2)),
             cooldown_s=float(ed.get("cooldown_s", 90.0)),
