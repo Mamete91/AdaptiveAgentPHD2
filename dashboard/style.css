@@ -191,6 +191,16 @@ input:checked + .toggle-slider::after { transform: translateX(20px); background:
   gap: 16px;
 }
 
+/* §96 — riga OPERATIVA (Trasparenza NINA, Recovery). auto-fit e non colonne
+   fisse: le due card compaiono in modo indipendente l'una dall'altra, e una
+   sola card non deve restare larga un quarto con tre buchi accanto. */
+.ops-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+.ops-row[hidden] { display: none; }
+
 .gauge-card {
   background: var(--bg-card);
   border: 1px solid var(--border);

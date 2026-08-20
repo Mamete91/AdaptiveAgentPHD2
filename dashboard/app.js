@@ -291,6 +291,7 @@ function applyFullStatus(data) {
   // §45 — Transparency Index (NINA, Layer-2)
   updateTransparency(data.nina);
   updateRecoveryHint(data.recovery_hint);
+  syncOpsRow();            // §96 — la riga operativa esiste solo se ha contenuto
   updateLevel1(data);      // §81 — include lo slot SESSIONE
   updateLevel2(data);      // §82 — solo in deviazione
   updateSkyStory(data);
@@ -474,7 +475,7 @@ function updateExposureEscalation(ctrl) {
       phd2El.classList.toggle('divergent', diverge);
       phd2El.title = diverge
         ? `Disallineamento: l'Agente crede ${cur} ms, PHD2 espone ${phd2} ms`
-        : '';
+        : "L'esposizione che la camera sta usando davvero, letta da PHD2.";
     }
     el('exp-steps').textContent = exp.steps_above_base != null ? exp.steps_above_base : '—';
 
@@ -603,6 +604,18 @@ const TRANSP_STATE = {
   HAZE:  { icon: '\u{1F32B}\uFE0F', color: '#fbbf24', label: 'VELATURE' },
   CLOUD: { icon: '\u2601\uFE0F', color: '#f87171', label: 'NUVOLE' },
 };
+
+// §96 — una sezione vuota in un contenitore flex con gap lascia comunque un
+// buco verticale: la riga operativa va nascosta esplicitamente, non solo svuotata.
+function syncOpsRow() {
+  const row = el('ops-row');
+  if (!row) { return; }
+  const qualcosaDaDire = ['transparency-card', 'recovery-card'].some(id => {
+    const c = el(id);
+    return c && c.style.display !== 'none';
+  });
+  row.hidden = !qualcosaDaDire;
+}
 
 // §45 — card Transparency Index (NINA). Graceful: senza telemetria la card è nascosta.
 function updateTransparency(nina) {
@@ -1015,6 +1028,9 @@ const DYNAMIC_PANELS = [
   {
     key: 'escalation',
     find: () => document.querySelector('.escalation-card'),
+    chipTip: "Il cancello autorizza gli interventi più incisivi solo quando le leve "
+           + "normali sono esaurite. Chiuso significa che aggressività e MinMove hanno "
+           + "ancora margine, e l'Agente preferisce usare quelli.",
     // Attività STATO: un asse è al limite -> il gate è APERTO (path B può agire).
     read: (d) => {
       const g = (d.controller || {}).escalation_gate;
@@ -1091,6 +1107,7 @@ function setupDynamicPanels() {
       chip = document.createElement('span');
       chip.className = 'panel-chip';
       chip.textContent = '—';
+      if (spec.chipTip) { chip.title = spec.chipTip; }   // §97
       head.appendChild(chip);
     }
 

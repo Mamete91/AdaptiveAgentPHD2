@@ -39,19 +39,6 @@
   <!-- Main Grid -->
   <main class="main-grid">
 
-    <!-- §81 — LIVELLO 1: cinque posizioni FISSE, mai riordinate. Si legge in due
-         secondi perché l'occhio impara DOVE guardare, non cosa cercare. Il primo
-         slot è il più largo: il Controllo Adattivo è il cuore del progetto, non
-         una funzione accessoria di un monitor di sicurezza. La prominenza si fa
-         con lo SPAZIO, mai col colore — il colore qui significa condizione. -->
-    <section class="l1-strip"><div class="l1-slot l1-primary" id="l1-ctrl" title=""><div class="l1-head">Controllo adattivo</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-ctrl-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-ctrl-t">—</div><div class="l1-val" id="l1-ctrl-v"></div></div></div></div><div class="l1-slot " id="l1-guida" title=""><div class="l1-head">Guida</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-guida-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-guida-t">—</div><div class="l1-val" id="l1-guida-v"></div></div></div></div><div class="l1-slot " id="l1-cielo" title=""><div class="l1-head">Cielo</div><div class="l1-body"><span class="l1-ico l1-emoji" id="l1-cielo-e">❔</span><div class="l1-txt"><div class="l1-title" id="l1-cielo-t">—</div><div class="l1-val" id="l1-cielo-v"></div></div></div></div><div class="l1-slot " id="l1-sess" title=""><div class="l1-head">Sessione</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-sess-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-sess-t">—</div><div class="l1-val" id="l1-sess-v"></div></div></div></div><div class="l1-slot " id="l1-recup" title=""><div class="l1-head">Recupero</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-recup-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-recup-t">—</div><div class="l1-val" id="l1-recup-v"></div></div></div></div></section>
-
-    <!-- §82 — LIVELLO 2: compare SOLO quando c'e' una deviazione. A sistema
-         quieto questa riga non esiste affatto: il normale tace. Il livello 1
-         ELEGGE una fase sola per lo slot Recupero; qui si vede tutto cio' che
-         l'elezione ha dovuto lasciare fuori, piu' l'azione decisa. -->
-    <section class="l2-row" id="l2-row" hidden></section>
-
     <!-- RMS Gauges Row -->
     <section class="gauges-row">
       <div class="gauge-card" id="gauge-ra">
@@ -93,7 +80,7 @@
         </div>
       </div>
 
-      <div class="condition-card">
+      <div class="condition-card" title="Lo stato della guida ricavato dai fotogrammi di PHD2 — segnale della stella, sua larghezza, scatti improvvisi. La riga in basso unisce questa lettura veloce alla conferma dalle pose di NINA, quando la sua telemetria è disponibile.">
         <div class="condition-label">Condizioni del Cielo</div>
         <svg class="condition-icon" id="condition-icon" aria-hidden="true"><use id="condition-icon-u" href="#i-mirinoOff"/></svg>
         <div class="condition-name" id="condition-name">In attesa…</div>
@@ -111,21 +98,40 @@
 
         <div class="separator"></div>
         <div class="mini-stats">
-          <div class="mini-stat">
+          <div class="mini-stat" title="Quanto la stella di guida si stacca dal fondo cielo, secondo PHD2. È il primo segnale di velature: se cala, l'Agente può allungare l'esposizione per non perdere la stella.">
             <span class="mini-label">SNR</span>
             <span class="mini-val" id="snr-val">—</span>
           </div>
-          <div class="mini-stat">
+          <div class="mini-stat" title="Quanto appare larga la stella di guida secondo PHD2. Aiuta l'Agente a riconoscere variazioni della qualità della stella, come quelle associate al seeing o alla messa a fuoco.">
             <span class="mini-label">HFD</span>
             <span class="mini-val" id="hfd-val">—</span>
           </div>
-          <div class="mini-stat">
+          <div class="mini-stat" title="Indica quanto l'errore di guida presenta variazioni improvvise rispetto al movimento regolare. È uno degli indizi usati dall'Agente per distinguere eventi impulsivi da derive o oscillazioni più regolari.">
             <span class="mini-label">Spike</span>
             <span class="mini-val" id="spike-val">—</span>
           </div>
         </div>
       </div>
+    </section>
 
+    <!-- §81 — LIVELLO 1: cinque posizioni FISSE, mai riordinate. Si legge in due
+         secondi perché l'occhio impara DOVE guardare, non cosa cercare. Il primo
+         slot è il più largo: il Controllo Adattivo è il cuore del progetto, non
+         una funzione accessoria di un monitor di sicurezza. La prominenza si fa
+         con lo SPAZIO, mai col colore — il colore qui significa condizione. -->
+    <section class="l1-strip"><div class="l1-slot l1-primary" id="l1-ctrl" title=""><div class="l1-head">Controllo adattivo</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-ctrl-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-ctrl-t">—</div><div class="l1-val" id="l1-ctrl-v"></div></div></div></div><div class="l1-slot " id="l1-guida" title=""><div class="l1-head">Guida</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-guida-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-guida-t">—</div><div class="l1-val" id="l1-guida-v"></div></div></div></div><div class="l1-slot " id="l1-cielo" title=""><div class="l1-head">Cielo</div><div class="l1-body"><span class="l1-ico l1-emoji" id="l1-cielo-e">❔</span><div class="l1-txt"><div class="l1-title" id="l1-cielo-t">—</div><div class="l1-val" id="l1-cielo-v"></div></div></div></div><div class="l1-slot " id="l1-sess" title=""><div class="l1-head">Sessione</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-sess-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-sess-t">—</div><div class="l1-val" id="l1-sess-v"></div></div></div></div><div class="l1-slot " id="l1-recup" title=""><div class="l1-head">Recupero</div><div class="l1-body"><svg class="l1-ico" aria-hidden="true"><use id="l1-recup-u" href="#i-nubeIgn"/></svg><div class="l1-txt"><div class="l1-title" id="l1-recup-t">—</div><div class="l1-val" id="l1-recup-v"></div></div></div></div></section>
+
+    <!-- §82 — LIVELLO 2: compare SOLO quando c'e' una deviazione. A sistema
+         quieto questa riga non esiste affatto: il normale tace. Il livello 1
+         ELEGGE una fase sola per lo slot Recupero; qui si vede tutto cio' che
+         l'elezione ha dovuto lasciare fuori, piu' l'azione decisa. -->
+    <section class="l2-row" id="l2-row" hidden></section>
+
+    <!-- §96 — informazioni OPERATIVE. Stavano dentro gauges-row, che pero'
+         dichiara quattro colonne: con NINA collegato finivano a capo su una
+         riga spaiata. Qui si auto-dispongono, e la riga sparisce del tutto
+         quando nessuna delle due ha qualcosa da dire. -->
+    <section class="ops-row" id="ops-row" hidden>
       <!-- Trasparenza NINA (§45 N1) -->
       <div class="condition-card" id="transparency-card" style="display:none">
         <div class="condition-label">Trasparenza (NINA)</div>
@@ -246,7 +252,7 @@
       <!-- Esposizione Dinamica -->
       <div class="exposure-card">
         <h2>Esposizione Dinamica</h2>
-        <div class="exposure-state-badge" id="exp-state-badge">
+        <div class="exposure-state-badge" id="exp-state-badge" title="L'esposizione è al riferimento di sessione: nessun motivo per allungarla. Cambia quando l'Agente la alza per segnale debole o per seeing, e torna qui appena le condizioni lo permettono.">
           <span id="exp-state-label">—</span>
         </div>
         <div class="param-group">
@@ -262,12 +268,12 @@
             <span class="param-label">PHD2 reale</span>
             <span class="param-val mono" id="exp-phd2-ms">—</span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="Quanti gradini di allungamento ha applicato il percorso legato al seeing, e quanti ne restano prima del limite. Gli allungamenti decisi per segnale debole non entrano in questo conteggio.">
             <span class="param-label">Steps sopra base</span>
             <span class="param-val" id="exp-steps">—</span>
           </div>
         </div>
-        <div class="cooldown-section">
+        <div class="cooldown-section" title="Attesa prima che l'esposizione possa cambiare di nuovo. Ogni cambio azzera le statistiche della guida: la decisione successiva va presa su fotogrammi nuovi, non sul transitorio.">
           <div class="cooldown-label-row">
             <span class="param-label">Cooldown</span>
             <span class="param-val mono" id="exp-cooldown-text">—</span>
@@ -283,7 +289,7 @@
         <h2>Escalation Gate</h2>
         <div class="gate-enabled-row">
           <span class="param-label">Path B</span>
-          <span class="gate-enabled-badge" id="gate-enabled-badge">—</span>
+          <span class="gate-enabled-badge" id="gate-enabled-badge" title="Path B è l'esposizione allungata per seeing degradato. Attivo significa che l'Agente ha lo strumento a disposizione; lo usa solo quando il cancello si apre.">—</span>
         </div>
         <div class="gate-axes">
           <div class="gate-axis-block">
@@ -302,18 +308,18 @@
       <div class="exposure-card">
         <h2>Auto-calibrazione</h2>
         <div class="param-group">
-          <div class="param-row">
+          <div class="param-row" title="Quanti arcosecondi vale un pixel della camera di guida. Converte gli errori misurati in pixel nella misura reale su cui l'Agente ragiona: se è sbagliata, lo sono tutte le soglie.">
             <span class="param-label">Pixel scale</span>
             <span class="param-val mono">
               <span id="autocal-scale">—</span>
-              <span class="gate-status-badge" id="autocal-source">—</span>
+              <span class="gate-status-badge" id="autocal-source" title="Da dove arriva la scala. PHD2 significa letta dalla guida, ed è la condizione normale. TOML è un ripiego dalla configurazione perché PHD2 non l'ha fornita: vale la pena controllarlo, perché le soglie dipendono da questo valore.">—</span>
             </span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="L'RMS tipico di questo setup, misurato all'inizio della sessione. È il metro con cui l'Agente giudica se la guida sta peggiorando davvero o si sta comportando come al solito.">
             <span class="param-label">Baseline RMS</span>
             <span class="param-val mono" id="autocal-baseline">—</span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="Quanti campioni sono stati raccolti su quelli necessari per fidarsi della misura. Finché non è completa, l'Agente lavora con le soglie di configurazione invece che con quelle misurate.">
             <span class="param-label">Progresso baseline</span>
             <span class="param-val mono" id="autocal-progress">—</span>
           </div>
@@ -355,11 +361,11 @@
           <span class="gate-status-badge" id="mmcap-status-badge">—</span>
         </div>
         <div class="param-group">
-          <div class="param-row">
+          <div class="param-row" title="Il tetto che l'Agente impone al MinMove. Serve a impedire che, inseguendo il rumore, la guida finisca per ignorare movimenti veri della montatura.">
             <span class="param-label">Cap corrente</span>
             <span class="param-val mono" id="mmcap-cap">—</span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="Il rumore di fondo della guida ripulito dai picchi occasionali. È il valore da cui si ricava il tetto: filtrarlo evita che un singolo momento agitato allarghi la soglia per tutta la notte.">
             <span class="param-label">Baseline filtrata</span>
             <span class="param-val mono" id="mmcap-baseline">—</span>
           </div>
@@ -369,11 +375,11 @@
               <span class="gate-status-badge" id="mmcap-winner-badge" style="display:none">—</span>
             </span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="Il MinMove realmente in vigore sui due assi: sotto questa soglia PHD2 non corregge. È il risultato finale, dopo che il tetto adattivo ha eventualmente limitato la richiesta del controllore.">
             <span class="param-label">MinMove eff. RA / DEC</span>
             <span class="param-val mono" id="mmcap-minmove">—</span>
           </div>
-          <div class="param-row">
+          <div class="param-row" title="I due limiti del calcolo: quanto il tetto può crescere rispetto al rumore misurato, e il massimo comunque consentito dalle esigenze della ripresa.">
             <span class="param-label">k / soffitto imaging</span>
             <span class="param-val mono" id="mmcap-params">—</span>
           </div>
@@ -435,7 +441,8 @@
         <div class="diag-controls">
           <span class="param-label">Modalità</span>
           <div class="diag-switcher" id="diag-switcher">
-            <button class="diag-btn" data-mode="off" id="diag-btn-off">OFF</button>
+            <button class="diag-btn" data-mode="off" id="diag-btn-off"
+                    title="Spegne il motore: la guida usa solo le regole di base. GUARDIAN è la modalità normale di lavoro.">OFF</button>
             <button class="diag-btn" data-mode="guardian" id="diag-btn-guardian" title="Assistito: la v2.3 pilota, il motore conferma/attenua/blocca e micro-corregge">GUARDIAN</button>
             <!-- §54: JITTER deprecata (mai validata, scavalca §44/§50/§51/§53) — rimossa dal toggle; attivabile solo con allow_experimental_jitter=true nel config -->
             <!-- <button class="diag-btn" data-mode="jitter" id="diag-btn-jitter" title="DEPRECATO">JITTER</button> -->

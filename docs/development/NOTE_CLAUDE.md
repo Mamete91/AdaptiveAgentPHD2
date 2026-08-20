@@ -4132,3 +4132,99 @@ cambiare il metro — stessa disciplina del §94: prima si misura in ombra, poi 
 **412 test verdi** (+16: eredita' da PHD2, dal file di baseline, ri-aggancio, snap del target, tetto,
 comando rifiutato, scala in salita e in discesa, cooldown, stato incoerente, scenario completo della
 notte 17-18). ZIP **v2.17.0**. Plugin invariato (1.11.0.0).
+
+---
+
+## 96. La gerarchia visiva: prima il dato, poi l'interpretazione — agente v2.17.0 (2026-08-20)
+
+**Richiesta di Alessandro**, con uno screenshot della v2.6 come riferimento: entrando in dashboard l'ordine di
+lettura deve essere *"Come sta guidando? -> Quali sono le condizioni? -> Qual e' lo stato adattivo? -> solo dopo
+la diagnostica"*. Oggi la striscia del Livello 1 (§81) sta **sopra** i valori RMS, quindi la prima cosa che si
+legge e' l'interpretazione invece della misura.
+
+**Cosa NON e' stato fatto, ed e' la parte importante.** Lo screenshot di riferimento e' della v2.6 e non ha il
+Livello 1 perche' allora non esisteva: prendere "questa impaginazione" alla lettera avrebbe significato buttare
+via §81 e §82. Ho chiesto prima di toccare qualcosa, e la risposta e' stata netta — *"il Livello 1 ha una
+funzione informativa e diagnostica diversa dalla riga RMS, quindi non voglio eliminarlo"*. **Ricollocazione,
+non rimozione:** i cinque slot restano cinque, nello stesso ordine, con gli stessi tooltip. Cambia il posto,
+non la funzione.
+
+Nuovo ordine: RMS + Condizioni del Cielo -> Livello 1 -> Livello 2 (solo in deviazione) -> informazioni
+operative -> diagnostica approfondita -> log.
+
+**Secondo difetto, trovato leggendo il CSS mentre cercavo dipendenze di posizione.** `.gauges-row` dichiara
+**quattro** colonne (`1fr 1fr 1fr 1.2fr`) ma l'HTML ci infilava **sei** card: RMS x3, Condizioni, Trasparenza
+NINA e Recovery. Con NINA collegato le ultime due andavano a capo su una seconda riga spaiata — larghe un
+quarto, con due buchi accanto. Non era un difetto teorico: misurato nel browser, la card Trasparenza da sola
+occupava **279 px**, esattamente la larghezza di un riquadro RMS. Le due card sono andate dove la gerarchia di
+Alessandro le colloca — fra le informazioni operative — in una riga `auto-fit` che si adatta: **1219 px** (tutta
+la larghezza) quando e' sola, meta' ciascuna quando sono due.
+
+La riga operativa **sparisce del tutto** quando nessuna delle due ha qualcosa da dire. Serve codice, non solo
+CSS: `main-grid` e' un flex con `gap: 20px`, e una sezione vuota lascia comunque un buco verticale di 40 px.
+`syncOpsRow()` la nasconde esplicitamente; sta nel ciclo di aggiornamento e non in coda alle due funzioni,
+perche' entrambe hanno un `return` anticipato proprio nel caso in cui non c'e' niente da mostrare.
+
+**Sui tooltip avevo sbagliato bersaglio, e la correzione e' nel §97.** In prima battuta ne avevo aggiunti sei,
+scegliendoli fra i controlli *azionabili* scoperti: i due "Pulisci", il comando OFF, l'intestazione dei pannelli,
+lo spillo e "PHD2 reale". Il criterio era "cio' che e' cliccabile e non si spiega". Alessandro ne ha imposto uno
+migliore — *"il tooltip deve fornire il secondo livello di informazione quando un indicatore non e'
+autoesplicativo"* — e con quel metro quattro dei sei erano rumore: chevron, spillo e i due Pulisci si capiscono
+da soli. Sono stati rimossi nel §97. **Sopravvivono solo i due che rispondono a una domanda vera:** il comando
+**OFF** (perche' la parola compare due volte nella stessa card con due significati) e **PHD2 reale** (§95), che
+aveva tooltip solo in caso di disallineamento e a notte normale restava muto.
+
+**Nessuna modifica all'architettura del motore.** AI Finder resta rimosso (§75: scavalcava il backoff §17, e
+`test_star_lost_recovery.py:45` fallisce se l'interruttore torna); Modalita' Test resta fuori dalla testata
+(§73), configurabile da TOML e visibile nel badge; `star_finder.py` resta al suo posto per il Path B.
+
+**Verifica nel browser sulla pagina viva**, non solo sul sorgente: ordine renderizzato delle sette sezioni,
+comparsa e scomparsa della riga operativa, larghezze misurate nei tre casi (due card / una sola / nessuna),
+console senza errori JS. **412 test verdi** (invariati: la dashboard e' presentazione). ZIP **v2.17.0**
+ricostruito e verificato dall'interno. Plugin invariato (1.11.0.0). NO commit.
+
+---
+
+## 97. La seconda profondita': non piu' informazioni a video, piu' significato — agente v2.17.0 (2026-08-20)
+
+**Il criterio, dettato da Alessandro** dopo che nel §96 avevo scelto i tooltip col metro sbagliato: *"la dashboard
+deve rimanere immediatamente leggibile a colpo d'occhio; il tooltip deve fornire il secondo livello di
+informazione quando un indicatore non e' autoesplicativo"*. Non su ogni elemento cliccabile — sui **segnalatori
+funzionali** che si vedono ma non si capiscono senza conoscere l'architettura dell'Agente. Le tre domande a cui
+il testo deve rispondere, in quest'ordine: *che cos'e' -> a cosa serve -> che ruolo ha nelle decisioni*.
+
+**Il metodo, e conta piu' del risultato.** Prima di scrivere una riga ho prodotto l'inventario completo di cio'
+che gia' esisteva, distinguendo i tooltip statici nell'HTML da quelli assegnati a runtime in `app.js` — perche'
+un `title` messo in pagina su un elemento che JS riscrive sarebbe stato silenziosamente inutile. Dall'inventario
+sono uscite 23 proposte; Alessandro ne ha approvate 17, tagliando *Esposizione corrente*, `rms_high`/`rms_low`,
+*Cap rms_high*, *Refresh* e i badge RA/DEC del cancello — questi ultimi perche' **la nota sotto la card li
+spiega gia' a schermo**, e un tooltip che ripete e' rumore.
+
+**Un testo e' cambiato per un controllo sul codice, non per stile.** Avevo scritto che "Steps sopra base" conta i
+gradini di allungamento. Falso: `exposure_steps_above_base` viene toccato **solo dentro Path B** (righe 2351 e
+2391). Se e' Path A ad alzare l'esposizione per segnale debole, quel contatore resta a zero. Il tooltip ora lo
+dichiara — *"gli allungamenti decisi per segnale debole non entrano in questo conteggio"* — invece di far credere
+che sia una vista completa. E' esattamente il tipo di bugia che un tooltip descrittivo produce quando lo si
+scrive guardando l'etichetta invece del codice.
+
+**Nessun numero nei testi.** Vincolo esplicito, e ha una ragione precisa: e' la lezione del §83, dove esistevano
+tre copie della descrizione del monitor, ne erano state aggiornate due, e il difetto era emerso solo da uno
+screenshot. Tutti i tooltip dicono "sopra questo valore", "il limite", "il massimo consentito": una ritaratura
+della configurazione non puo' renderli bugiardi.
+
+**Dove sono finiti.** Sulla **riga** (`param-row`, `mini-stat`), non sul solo numero: si legge passando
+sull'etichetta, che e' il bersaglio naturale, ed e' la pratica gia' adottata dalle mini-stat di Recovery e
+Trasparenza. Due eccezioni obbligate: il badge della fonte pixel scale (TOML/PHD2) e il chip **GATE CHIUSO**, che
+**non esiste nell'HTML** — lo genera `setupDynamicPanels` (§74), quindi ha richiesto un campo `chipTip` nella
+specifica del pannello.
+
+Riepilogo: **17 aggiunti** (Condizioni del Cielo con la provenienza dei dati — PHD2 per la guida, NINA quando la
+sua telemetria c'e' — piu' SNR/HFD/Spike; badge esposizione, Steps, Cooldown; Path B e il chip del cancello;
+pixel scale, fonte, baseline RMS e progresso; i quattro di Adaptive MinMove), **4 rimossi** (i banali del §96),
+**due conservati** (OFF e PHD2 reale), **nessun tooltip preesistente toccato**.
+
+**Verifica sul DOM vivo, non sul sorgente.** Un aggiornamento di stato simulato completo, poi la risoluzione del
+`title` **effettivo** risalendo gli antenati per ogni bersaglio — cosi' si prova che JS non li sovrascrive a
+runtime: 17/17 presenti, "Base" e "PHD2 reale" ancora funzionanti, e le esclusioni davvero senza tooltip
+(RA/DEC del cancello, i due Pulisci, l'intestazione dei pannelli). Zero errori JS in console, zero testi
+duplicati. **412 test verdi**, ZIP **v2.17.0** ricostruito e verificato dall'interno. Plugin invariato (1.11.0.0).
