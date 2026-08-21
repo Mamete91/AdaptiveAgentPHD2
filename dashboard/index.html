@@ -41,7 +41,7 @@
 
     <!-- RMS Gauges Row -->
     <section class="gauges-row">
-      <div class="gauge-card" id="gauge-ra">
+      <div class="gauge-card" id="gauge-ra" title="Errore di guida in ascensione retta, misurato dall'Agente sugli ultimi frame per poter reagire in fretta. Non coincide con il valore di PHD2, che media su una finestra molto piu' lunga e ignora la deriva: sono due misure diverse, entrambe corrette.">
         <div class="gauge-title">RMS RA</div>
         <div class="gauge-value" id="rms-ra-val">—</div>
         <div class="gauge-unit">arcsec</div>
@@ -54,7 +54,7 @@
         </div>
       </div>
 
-      <div class="gauge-card" id="gauge-dec">
+      <div class="gauge-card" id="gauge-dec" title="Errore di guida in declinazione, sulla stessa finestra breve usata dall'Agente per decidere. Anche qui il numero di PHD2 e' diverso perche' guarda molto piu' indietro nel tempo e misura solo quanto l'errore e' disperso, non quanto e' grande.">
         <div class="gauge-title">RMS Dec</div>
         <div class="gauge-value" id="rms-dec-val">—</div>
         <div class="gauge-unit">arcsec</div>
@@ -67,7 +67,7 @@
         </div>
       </div>
 
-      <div class="gauge-card" id="gauge-total">
+      <div class="gauge-card" id="gauge-total" title="I due assi combinati: e' il valore che l'Agente confronta con le proprie soglie per decidere se intervenire. Essendo calcolato su pochi frame si muove piu' del corrispondente di PHD2, che ne media molti di piu'.">
         <div class="gauge-title">RMS Totale</div>
         <div class="gauge-value" id="rms-total-val">—</div>
         <div class="gauge-unit">arcsec</div>

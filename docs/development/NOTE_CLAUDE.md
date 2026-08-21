@@ -4228,3 +4228,135 @@ pixel scale, fonte, baseline RMS e progresso; i quattro di Adaptive MinMove), **
 runtime: 17/17 presenti, "Base" e "PHD2 reale" ancora funzionanti, e le esclusioni davvero senza tooltip
 (RA/DEC del cancello, i due Pulisci, l'intestazione dei pannelli). Zero errori JS in console, zero testi
 duplicati. **412 test verdi**, ZIP **v2.17.0** ricostruito e verificato dall'interno. Plugin invariato (1.11.0.0).
+
+---
+
+## 98. Una sola scala, esplicita, per tutti e due i Path — agente v2.17.0 (2026-08-21)
+
+**Come e' venuto fuori.** Alessandro chiede una verifica prima di chiudere il changelog: *"qual e' il valore di
+partenza a ogni nuova sessione? la progressione e' davvero 2->3->4? la discesa arriva a 1 s o si ferma a 2?"*
+Cinque domande secche, con la richiesta di mostrare le righe che determinano scala e valore iniziale.
+
+**La verifica ha trovato un difetto che avevo lasciato aperto io nel §95.** La scala (`_exposure_ladder`) era
+stata data **solo a Path A**. Path B era rimasto sulla formula moltiplicativa (righe 2333 e 2377), e `x1.5` /
+`:1.5` **non sono simmetriche** una volta passate dallo snap ai tempi che PHD2 accetta: salita 2000 -> 3000, ma
+discesa 4000 -> 2666 -> **2500**, un valore che sulla scala non esiste. Due percorsi diversi sullo stesso
+parametro. Peggio: la mia nota §95 diceva *"Path A sale e scende a gradini come Path B faceva gia'"* — mezza
+verita', perche' Path B era progressivo ma non simmetrico. Un'imprecisione che nessun test copriva.
+
+Seconda cosa emersa dalla verifica: da base 1000 la scala moltiplicativa produceva **1 -> 1,5 -> 2 -> 3 -> 4**.
+Il gradino a 1,5 s non e' un errore, e' aritmetica: un moltiplicatore non puo' dare passi additivi. Se si vuole
+esattamente 1->2->3->4, il moltiplicatore va abbandonato.
+
+**Le quattro regole decise da Alessandro**, dopo che gli ho presentato le decisioni aperte:
+
+1. `max_steps_above_base = 2` resta **solo su Path B**. Con base 1 s Path B arriva a 3 s, con base 2 s a 4 s;
+   Path A raggiunge il tetto da entrambe. L'asimmetria e' voluta: **Path A e' emergenza** (non perdere la
+   stella), **Path B e' ottimizzazione speculativa**, ed e' giusto che il secondo sia piu' prudente.
+2. La Base e' ammessa **solo sui due gradini piu' bassi** della scala. Niente valori intermedi trasformati in
+   silenzio in una base diversa da quella scritta.
+3. Scala **esplicita** in configurazione, comune ai due Path, in salita e in discesa.
+4. Un gradino che PHD2 non offre **ferma** la progressione, non viene saltato.
+
+La regola 4 e' quella che conta di piu' e non era ovvia: se la scala si limitasse a intersecare i tempi validi,
+una camera senza i 3 s produrrebbe `[2000, 4000]` e **il salto 2 -> 4 rientrerebbe dalla finestra** — esattamente
+il difetto che il §95 e questo §98 esistono per impedire. Meglio non salire che saltare.
+
+**Verifica prima del codice.** Ho simulato le quattro regole in isolamento prima di toccare il controller, e le
+sequenze richieste escono esatte: `1->2->3->4->3->2->1` da base 1 s, `2->3->4->3->2` da base 2 s. Poi ho
+controllato la compatibilita' con cooldown (invariato: 2,2 min al tetto per Path A da 1 s), tetto (taglia la
+scala), e i tre punti che assegnano la base — sono esattamente tre, tutti gia' coperti dal §95.
+
+**Una previsione sbagliata, e vale la pena registrarla.** Avevo stimato che un test si sarebbe rotto
+(`test_target_non_valido_viene_snappato`, che si aspetta 2600 -> 2500). Non e' successo: **la validazione vive
+nel loader**, e quel test costruisce la configurazione a mano, aggirandolo. Il che ha rivelato una conseguenza
+vera — una base fuori scala fa ricadere `_exposure_ladder()` sul vecchio comportamento moltiplicativo, **in
+silenzio**, riportando i valori intermedi (2500 -> 3500). Il loader lo impedisce in pratica, ma una degradazione
+silenziosa non si lascia in piedi: ora c'e' un WARNING all'avvio, accanto a quello del §95 sulla base che
+coincide col tetto. Stesso principio: **una condizione che paralizza o degrada il controller deve dirlo, perche'
+"nessuna azione" e' anche il comportamento di una notte tranquilla.**
+
+**Coda del §98 — il test riallineato e l'audit dei tooltip.** `test_target_non_valido_viene_snappato`
+documentava lo snap di 2600 -> 2500: non e' piu' la regola, e 2500 era per giunta proprio uno dei valori
+intermedi che la scala elimina. Passava solo perche' costruiva la configurazione a mano, aggirando il loader.
+Sostituito da `test_una_base_non_ammessa_viene_rifiutata_senza_degradare`, che segue la catena vera — TOML,
+loader, controller, scala — e verifica le due cose che contano: che il rifiuto sia **esplicito** (ERROR nel log)
+e che a valle **non resti nessuna degradazione silenziosa**, cioe' che nella scala non ricompaiano 2500 o 3500.
+
+**Audit dei tooltip alla luce della nuova scala: nessuno e' diventato fuorviante, nessuno e' stato toccato.**
+Verificati uno per uno Base, NOMINAL, Steps sopra base e PHD2 reale, piu' SNR, Cooldown e Path B. Il motivo per
+cui reggono e' la regola che il §97 si era imposto: **parlare della funzione e mai del meccanismo, senza numeri
+hard-coded**. Qui il meccanismo e' stato sostituito da cima a fondo — da moltiplicatore a scala esplicita — e
+non una riga di testo ha dovuto cambiare. Gli unici numeri che compaiono nei tooltip dell'esposizione (`Base`,
+`PHD2 reale`) sono interpolati dallo stato vivo, quindi non possono invecchiare.
+
+**426 test verdi** (+14: scala esplicita dalle due basi, nessun valore intermedio, tetto che accorcia, gradino
+mancante che ferma da entrambe le basi, le due sequenze complete di Path A, pavimento alla base, andata/ritorno
+simmetrici di Path B come regressione sul 2500, limite di gradini solo su Path B, e le tre prove sulla base
+ammessa). ZIP **v2.17.0** ricostruito e verificato dall'interno. Plugin invariato (1.11.0.0). NO commit.
+
+---
+
+## 99. Due misure diverse dello stesso errore — agente v2.17.0 (2026-08-22)
+
+**Osservazione di Alessandro:** *"l'RMS che indica l'Agente spesso e' diverso da quello di PHD2, non capisco"*.
+Screenshot a confronto: PHD2 0,62 / 0,43 / 0,75 arcsec, Agente 0,558 / 0,418 / 0,697. Vicini, ma non uguali.
+
+**Le due formule, dal sorgente.** PHD2 non calcola un RMS: calcola una **deviazione standard**.
+
+    PHD2    graph.cpp:986        m_stats.rms_ra = m_noDitherRA.GetPopulationSigma()
+            guiding_stats.cpp:451  variance = (n*sumYSq - sumY^2)/n^2 = E[Y^2] - E[Y]^2
+            finestra = selettore x della Storia (50/100/200/400)
+
+    Agente  analyzer.py:344      _rms(vals) = sqrt(sum(v^2)/n)      <- attorno allo ZERO
+            window_frames = 30
+
+Entrambi partono dallo **stesso campo grezzo** (`RADistanceRaw`); l'Agente lo converte in arcosecondi con la
+pixel scale che **legge da PHD2** (`use_phd2_pixel_scale = true`). La conversione non c'entra.
+
+**Il risultato ribalta l'ipotesi di partenza.** Su 3796 frame reali della notte 17-18/8, scorrendo tutta la
+sessione: PHD2 mediana **1,161"**, Agente mediana **1,164"**. Bias sistematico **+0,002"** — praticamente zero.
+Non e' vero che l'Agente mostri "un numero piu' bello". I due effetti si compensano quasi esattamente:
+
+| contributo | effetto |
+|---|---|
+| finestra 200 -> 30 (a formula uguale) | −0,057" |
+| formula sigma -> rms (a finestra uguale) | +0,059" |
+| **netto** | **+0,002"** |
+
+Cio' che si vede non e' bias ma **dispersione**: escursione 1,272" per l'Agente contro 0,554" per PHD2, scarto
+istantaneo da −0,549" a +0,584", e i due coincidono entro 0,05" **solo il 20% del tempo**. Due screenshot presi
+a pochi secondi di distanza cadono comodamente dentro quella banda.
+
+**Perche' NON si deve far coincidere le due misure.** Sottraendo la media, sigma rende **invisibile la deriva**:
+una guida costantemente sbilanciata sembra stretta. Sul log la |media| su 30 frame in RA e' mediana 0,213" con
+punte a **1,043"** — non e' rumore trascurabile, ed e' proprio il segnale che un agente che diagnostica DRIFT non
+puo' buttare via. **sigma e' la misura giusta per un display** (quanto e' stretta la guida), **RMS attorno a zero
+e' quella giusta per un controllore** (quanto e' grande l'errore, deriva inclusa). In piu' `rms_high`, `rms_low` e
+la baseline auto-calibrata sono tarate su questa metrica: cambiarla invaliderebbe soglie e baseline apprese.
+
+**Sul nome: non rinominato, ed e' una scelta.** "RMS RA" e' corretto — semmai e' PHD2 a chiamare "RMS Error" una
+deviazione standard. Un nome proprietario tipo "RMS operativo" aggiungerebbe gergo e violerebbe la regola del
+§81 (i nomi indicano cose reali, non etichette sintetiche). Serviva spiegare la metrica, non ribattezzarla: tre
+tooltip, uno per card, che rispondono alla domanda vera — *perche' non e' il numero di PHD2* — ciascuno
+specifico al proprio asse e nessuno copia letterale di un altro.
+
+**Un mio errore, corretto dai dati.** Avevo cercato "dither" in `analyzer.py` e `controller.py`, non l'avevo
+trovato, e avevo concluso che l'Agente includa i dither mentre PHD2 li esclude — stimando un gonfiamento di
++0,081" mediano fino a +0,616". **Falso.** La gestione c'e', sta in `main.py` ed e' agganciata agli eventi
+invece che alla parola:
+
+    main.py:399   if is_settling:  continue    # "Ignoriamo i GuideStep durante il dithering (falsi errori)"
+    main.py:580   SettleBegin  -> is_settling = True
+    main.py:588   SettleDone   -> analyzer.reset() + diagnostic_engine.reset("dither")
+    main.py:547   percorso di riserva su AppState=Guiding
+
+L'Agente **non ingerisce affatto** quei frame e in piu' azzera la finestra: difesa piu' forte di quella di PHD2,
+che li accumula e poi li rimuove. Verificato sui dati veri: su **220 decisioni applicate, UNA** cade entro 60 s
+da un dither, la diagnosi nella scia e' `INSUFFICIENT_DATA` al **98,6%** (contro 19% nel resto), e nel CSV si
+vede `frame_count` ripartire da 1 quindici secondi dopo il dither. **Lezione: cercare un concetto per nome e'
+un test debole** — la funzione esisteva, si chiamava con le parole di PHD2.
+
+**412+14 = 426 test verdi** (invariati: i tooltip sono presentazione). Verifica di non-sovrascrittura fatta sul
+codice invece che sul browser, ed e' conclusiva: `app.js` **non contiene un solo riferimento** a `gauge-card`,
+quindi quelle card non vengono mai riscritte a runtime. ZIP **v2.17.0**. Plugin invariato (1.11.0.0).

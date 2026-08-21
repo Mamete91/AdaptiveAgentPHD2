@@ -132,9 +132,18 @@ enabled               = true
 # interrotta, PHD2 chiuso) diventa la base della notte dopo — ed e' successo:
 # 17-18/8 base ereditata a 4000ms = tetto, Exposure Controller bloccato 4 ore.
 # Metti a 0 (o togli la riga) per il comportamento storico "adotto cio' che c'e'".
+# §98 — ammessi SOLO i due gradini piu' bassi della scala qui sotto (1000 o
+# 2000). 4 s deve essere una condizione RAGGIUNTA sulla base dei dati di guida,
+# mai un punto di partenza. Un valore diverso viene segnalato come errore.
 target_exposure_ms    = 2000   # 2 s: 174 campioni per periodo della vite (348 s)
+# §98 — la scala dei gradini, percorsa da ENTRAMBI i Path in salita e in
+# discesa. Da base 1000: 1->2->3->4 e ritorno 4->3->2->1. Da base 2000:
+# 2->3->4 e ritorno 4->3->2 (sotto la base non si scende mai).
+# Se PHD2 non offre un gradino la progressione si FERMA a quello precedente,
+# non lo salta. Lista vuota = vecchio comportamento moltiplicativo.
+exposure_ladder_ms    = [1000, 2000, 3000, 4000]
 snr_step_cooldown_s   = 45     # attesa fra due gradini di Path A (SNR)
-step_factor           = 1.5
+step_factor           = 1.5    # §98: usato solo se exposure_ladder_ms e' vuota
 max_steps_above_base  = 2
 cooldown_s            = 90
 spike_min             = 0.25   # unificato (mediana dei 3 setup: 0.30/0.25/0.20)

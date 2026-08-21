@@ -379,6 +379,18 @@ class AdaptiveController:
                     "Abbassa [exposure_dynamic] target_exposure_ms oppure alza "
                     "[emergency] max_exposure_ms.",
                     self.base_exposure_ms, self.cfg.emergency.max_exposure_ms)
+            # §98 — se la base non e' un gradino della scala, la progressione
+            # torna in SILENZIO alla vecchia formula moltiplicativa e ricompaiono
+            # i valori intermedi (2500 -> 3500) che la scala esplicita elimina.
+            _scala_cfg = self.cfg.exposure_dynamic.exposure_ladder_ms
+            if (_scala_cfg and self.base_exposure_ms
+                    and self.base_exposure_ms not in _scala_cfg):
+                logger.warning(
+                    "[esposizione] la base %sms non e' un gradino della scala %s: "
+                    "salita e discesa tornano al vecchio passo moltiplicativo e "
+                    "possono produrre valori intermedi. Allinea "
+                    "[exposure_dynamic] target_exposure_ms alla scala.",
+                    self.base_exposure_ms, _scala_cfg)
 
             # Controllo euristico Auto Exposure: se il valore letto non è nella
             # lista valida, PHD2 potrebbe avere Auto Exposure attivo.
@@ -2330,7 +2342,11 @@ class AdaptiveController:
                 )
 
             if up_ok:
-                new_exp = self._snap_exposure(int(cur * ed.step_factor))
+                # §98 — lo stesso gradino di Path A: una scala sola per entrambi.
+                _scala = self._exposure_ladder()
+                _idx = (min(range(len(_scala)), key=lambda i: abs(_scala[i] - cur))
+                        if _scala else 0)
+                new_exp = _scala[_idx + 1] if _idx + 1 < len(_scala) else cur
                 if new_exp > cur:
                     reason = (
                         f"DEGRADED_SEEING: RMS={snapshot.rms_total:.2f}\" "
@@ -2374,7 +2390,14 @@ class AdaptiveController:
             )
 
             if down_ok:
-                new_exp = self._snap_exposure(int(cur / ed.step_factor))
+                # §98 — discesa sulla STESSA scala della salita. Con la vecchia
+                # formula `cur / step` la discesa da 4000 atterrava su 2500, un
+                # valore che sulla scala non esiste: andata e ritorno non
+                # ripercorrevano la stessa strada.
+                _scala = self._exposure_ladder()
+                _idx = (min(range(len(_scala)), key=lambda i: abs(_scala[i] - cur))
+                        if _scala else 0)
+                new_exp = _scala[_idx - 1] if _idx > 0 else self.base_exposure_ms
                 new_exp = max(new_exp, self.base_exposure_ms)
                 if new_exp < cur:
                     reason = (
@@ -2470,10 +2493,34 @@ class AdaptiveController:
         if not base or base <= 0:
             return []
         ed = self.cfg.exposure_dynamic
+        tetto = self.cfg.emergency.max_exposure_ms
+
+        # §98 — scala ESPLICITA (il caso normale).
+        if ed.exposure_ladder_ms and base in ed.exposure_ladder_ms:
+            scala = []
+            for gradino in sorted(ed.exposure_ladder_ms):
+                if gradino < base:
+                    continue                 # sotto la base non si scende mai
+                if gradino > tetto:
+                    break                    # il tetto taglia
+                if self._valid_exposures and gradino not in self._valid_exposures:
+                    # REGOLA 4 — questa camera non offre il gradino. Ci si FERMA
+                    # qui invece di saltarlo: saltarlo ricreerebbe il salto
+                    # 2 -> 4 s che tutto questo lavoro serve a impedire.
+                    logger.warning(
+                        "[esposizione] il gradino %sms non e' fra i tempi offerti da "
+                        "PHD2: la progressione si ferma a %sms (mai saltare un "
+                        "gradino).", gradino, scala[-1] if scala else base)
+                    break
+                scala.append(gradino)
+            return scala or [base]
+
+        # Retrocompatibilita': nessuna scala dichiarata (o base fuori scala) ->
+        # comportamento storico moltiplicativo.
         step = ed.step_factor if ed.step_factor > 1.0 else 1.5
         scala = [base]
         cur = base
-        for _ in range(8):          # guardia: sopra il tetto la scala finisce
+        for _ in range(8):
             nxt = self._snap_exposure(int(cur * step))
             if nxt <= cur:
                 break

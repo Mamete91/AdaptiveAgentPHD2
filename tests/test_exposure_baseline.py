@@ -35,7 +35,7 @@ from unittest.mock import MagicMock
 from phd2_agent.analyzer import AnalysisSnapshot, SeeingCondition
 from phd2_agent.config import (
     AgentConfig, AxisLimits, ControlConfig, EmergencyConfig,
-    ExposureDynamicConfig, SetupConfig, Thresholds,
+    ExposureDynamicConfig, SetupConfig, Thresholds, load_config,
 )
 from phd2_agent.controller import AdaptiveController, ExposureState
 
@@ -148,15 +148,46 @@ class TestBaseDichiarata(unittest.TestCase):
         self.assertEqual(ctrl.base_exposure_ms, 4000)
         c.set_exposure.assert_not_called()
 
-    def test_target_non_valido_viene_snappato(self):
-        """2600 ms non esiste nel menu di PHD2: si sceglie il valido piu' vicino."""
-        c = _client(esposizione_in_phd2=1000)
-        ctrl = _ctrl(_cfg(target_ms=2600), c)
+    def test_una_base_non_ammessa_viene_rifiutata_senza_degradare(self):
+        """§98 — 2600 ms non e' un gradino della scala, e la Base puo' valere solo
+        uno dei due piu' bassi: i 4 s si raggiungono, non ci si parte.
 
-        ctrl._reconcile_base_exposure(full=True)
+        Prima questo test documentava lo snap al tempo PHD2 piu' vicino (2500).
+        Non e' piu' la regola, e soprattutto 2500 era proprio uno di quei valori
+        intermedi che la scala esplicita elimina. Qui si segue la catena vera —
+        TOML, loader, controller, scala — perche' il punto non e' solo che il
+        valore venga corretto, ma che a valle non resti **nessuna degradazione
+        silenziosa**: con una base fuori scala la progressione ricadrebbe sul
+        vecchio passo moltiplicativo e i gradini intermedi tornerebbero.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            toml = pathlib.Path(d) / "config.toml"
+            toml.write_text(
+                "[exposure_dynamic]\n"
+                "enabled = true\n"
+                "target_exposure_ms = 2600\n"
+                "exposure_ladder_ms = [1000, 2000, 3000, 4000]\n",
+                encoding="utf-8")
 
-        self.assertIn(ctrl.base_exposure_ms, VALIDE)
-        self.assertEqual(ctrl.base_exposure_ms, 2500)
+            # 1) il rifiuto e' esplicito, non silenzioso
+            with self.assertLogs("phd2_agent.config", level="ERROR") as log:
+                cfg = load_config(str(toml))
+            self.assertIn("NON AMMESSO", "\n".join(log.output))
+            self.assertEqual(cfg.exposure_dynamic.target_exposure_ms, 2000,
+                             "ripiego su un gradino ammesso, non su 2500")
+
+            # 2) a valle non resta traccia del valore non ammesso
+            c = _client(esposizione_in_phd2=1000)
+            ctrl = _ctrl(cfg, c)
+            ctrl._reconcile_base_exposure(full=True)
+
+            self.assertEqual(ctrl.base_exposure_ms, 2000)
+            scala = ctrl._exposure_ladder()
+            self.assertEqual(scala, [2000, 3000, 4000])
+            for intruso in (2500, 3500):
+                self.assertNotIn(intruso, scala,
+                                 "un gradino intermedio qui significa che la "
+                                 "progressione e' tornata al passo moltiplicativo")
 
     def test_target_oltre_il_tetto_viene_limitato(self):
         c = _client(esposizione_in_phd2=1000)

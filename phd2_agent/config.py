@@ -161,6 +161,13 @@ class ExposureDynamicConfig:
     # vuole che l'Agente tocchi l'esposizione. Con un valore dichiarato, la
     # Base non puo' piu' essere ereditata da un boost della sessione prima.
     target_exposure_ms: Optional[int] = None
+    # §98 — la scala dei gradini, ESPLICITA. Salita e discesa percorrono questa
+    # lista e nient'altro: e' l'unico modo per garantire che i due versi siano
+    # simmetrici, perche' `x1.5` e `:1.5` non lo sono una volta passati dallo
+    # snap ai tempi validi di PHD2. Lista vuota = comportamento storico
+    # moltiplicativo (retrocompatibilita' per config vecchi).
+    exposure_ladder_ms: list[int] = field(
+        default_factory=lambda: [1000, 2000, 3000, 4000])
     # §95 — attesa fra due gradini di Path A (SNR). Piu' corta di cooldown_s
     # perche' con la SNR che crolla la stella si perde in fretta: aspettare 90 s
     # fra un gradino e l'altro puo' costare la stella.
@@ -650,6 +657,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             enabled=bool(ed.get("enabled", False)),
             target_exposure_ms=(int(ed["target_exposure_ms"])
                                 if ed.get("target_exposure_ms") else None),
+            exposure_ladder_ms=[int(x) for x in ed.get(
+                "exposure_ladder_ms", [1000, 2000, 3000, 4000])],
             snr_step_cooldown_s=float(ed.get("snr_step_cooldown_s", 45.0)),
             step_factor=float(ed.get("step_factor", 1.5)),
             max_steps_above_base=int(ed.get("max_steps_above_base", 2)),
@@ -662,6 +671,25 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             pathb_restar_settle_frames=int(ed.get("pathb_restar_settle_frames", 2)),
             pathb_restar_cooldown_s=float(ed.get("pathb_restar_cooldown_s", 120.0)),
         )
+
+        # §98 (regola 2) — la Base puo' stare solo sui DUE GRADINI PIU' BASSI
+        # della scala. Non e' un capriccio: 4 s deve essere una condizione
+        # RAGGIUNTA in base ai dati della guida, mai un punto di partenza. Un
+        # valore intermedio verrebbe altrimenti trasformato in silenzio in una
+        # base diversa da quella scritta, ed e' esattamente il tipo di sorpresa
+        # che il §95 e' nato per eliminare.
+        _ed = cfg.exposure_dynamic
+        if _ed.target_exposure_ms and _ed.exposure_ladder_ms:
+            _ammessi = _ed.exposure_ladder_ms[:2]
+            if _ed.target_exposure_ms not in _ammessi:
+                _ripiego = _ammessi[-1]
+                logger.error(
+                    "[config] target_exposure_ms=%s NON AMMESSO: la base di sessione "
+                    "puo' valere solo %s (i due gradini piu' bassi della scala %s). "
+                    "Uso %sms — correggi config.toml.",
+                    _ed.target_exposure_ms, " o ".join(str(x) for x in _ammessi),
+                    _ed.exposure_ladder_ms, _ripiego)
+                _ed.target_exposure_ms = _ripiego
 
     # Auto-calibration (sezione opzionale — default se mancante per retrocompatibilita')
     if "auto_calibration" in raw:
