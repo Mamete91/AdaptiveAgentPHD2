@@ -222,8 +222,43 @@ montatura.
 
 ## 7. Domande ancora aperte
 
-- Cosa spiega **S +20%** e **R +14%** nella notte 21-22? Non la Luna (tempismo sbagliato), non
-  l'airmass (segno sbagliato), non l'HFR (segno instabile). **Non identificato.**
+### S +20% e R +14% nella notte 21-22 — parzialmente spiegato
+
+**Causa documentata, trovata nel log NINA:** un **autofocus alle 02:25**, cioè esattamente
+nell'intervallo fra il ciclo 2 e il ciclo 3 (trigger `AutofocusAfterHFRIncreaseTrigger`,
+`TrendPerFilter: True`; gli altri due sono alle 22:51 e alle 00:22). L'HFR migliora su 5 filtri su 6,
+e l'unico peggiorato (B, +0,22) e' anche quello che perde piu' stelle (-9,2%). Correlazione
+`d.HFR / d.stelle` fra i filtri: **r = -0,49**, nel verso atteso.
+
+**Ma non basta:** l'HFR di S migliora di soli -0,09 contro il -0,31 di R, eppure S guadagna il 21,8%
+e R il 6,4%. Il fuoco spiega la direzione, non la magnitudine.
+
+**Ipotesi di Alessandro (sito di Borno), valutata col test di banda:**
+
+| meccanismo | natura | verdetto |
+|---|---|---|
+| spegnimento luci domestiche e luminarie comunali | continuo a banda larga | **non torna**: predice L/R/G/B > S/H/O, osservato il contrario |
+| target che scende verso il settore del Giovetto, meno inquinato | banda larga | stessa obiezione |
+| **inversione termica che ripulisce foschia e umidita'** | **trasparenza vera, tutte le bande** | **compatibile** — e' la gamba che sopravvive |
+
+Il dato SQM piu' alto a notte fonda che in prima serata e' coerente con tutti e tre; solo il terzo
+spiega perche' a guadagnarci di piu' sia un filtro a banda stretta.
+
+**Previsione falsificabile per le prossime notti (ora misurabile grazie al §100):**
+piu' stelle **+** `bkg` in calo ⇒ compatibile con inquinamento luminoso o cielo che si ripulisce;
+piu' stelle **+** `bkg` invariato ⇒ il fondo non c'entra, la causa e' altrove.
+
+### L'autofocus e' un confondente che il sistema potrebbe gia' leggere
+
+Osservazione architetturale emersa da qui. Dei quattro confondenti individuati, l'autofocus e'
+l'unico che **NINA registra con un timestamp**: la Luna va calcolata, l'inquinamento luminoso va
+inferito, l'airmass va modellato — l'autofocus **si legge**, esattamente come il dither si legge da
+`SettleBegin`/`SettleDone` (main.py:580/588).
+
+Se un rifocus puo' produrre un gradino del 20% nel conteggio stelle di un filtro, il riferimento di
+trasparenza e' esposto a un cambiamento **non atmosferico** che il sistema potrebbe riconoscere
+invece di subire. Da valutare **dopo** la raccolta dati, non prima: e' una quinta variabile e vale
+la stessa regola delle altre quattro.
 - Il decadimento per evidenza va misurato in campioni, in tempo di posa cumulato, o in "minuti di
   cielo sereno osservati su quella chiave"? Le tre forme divergono su sequenze non uniformi come
   SHO 300 s + LRGB 120 s.
