@@ -88,6 +88,7 @@ class TransparencyTracker:
         # nomi file la calcola Hocus Focus, non l'analisi standard di NINA.
         self._last_hfr: Optional[float] = None
         self._last_bkg: Optional[float] = None
+        self._base_bkg: Optional[float] = None   # §100 — riferimento del fondo cielo
 
     # ------------------------------------------------------------------ #
     #  Ingest (per-posa)                                                  #
@@ -211,6 +212,7 @@ class TransparencyTracker:
             if isinstance(hfr, (int, float)) and hfr > 0:
                 self._last_hfr = float(hfr)
             self._last_bkg = bkg
+            self._base_bkg = base_bkg          # §100 — osservabile, non decide nulla
 
     def _ref_drift_pct(self) -> Optional[float]:
         """§66 — quanto il riferimento operativo è sotto il meglio della serata (stesso
@@ -334,6 +336,8 @@ class TransparencyTracker:
                 "star_count": self._last_star,
                 "hfr": self._last_hfr,
                 "bkg": self._last_bkg,
+                "base_bkg": (round(self._base_bkg, 2)
+                             if self._base_bkg is not None else None),   # §100
                 "background": self._last_bkg,   # §48 — alias del contratto consumatori (N6)
                 "filter": self._filter,
             }

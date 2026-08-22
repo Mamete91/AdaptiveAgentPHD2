@@ -55,6 +55,14 @@ _CSV_FIELDS = [
     "hfr_nina",
     "star_count",
     "airmass",
+    # §100 — il fondo cielo misurato e il riferimento del tracker. Erano gia'
+    # calcolati a ogni posa e buttati via: senza, un calo di stelle non si puo'
+    # attribuire (velatura? Luna? fuoco?) se non per congettura.
+    "bkg",
+    "base_bkg",
+    "base_stars",
+    "base_stars_session_best",
+    "ref_drift_pct",
     "diag_state",
     "diag_confidence",
     # §45/§46 — Layer-2 NINA: indice di trasparenza + stato + penalità N8 applicata al
@@ -158,6 +166,8 @@ class SessionLogger:
         transparency_index = ""
         transparency_state = ""
         nina_penalty = 0
+        # §100 — strumentazione: nessuna di queste colonne e' letta da una decisione.
+        bkg = base_bkg = base_stars = base_stars_best = ref_drift_pct = None
         tracker = getattr(ctrl, "transparency_tracker", None) if ctrl is not None else None
         if tracker is not None:
             try:
@@ -165,6 +175,11 @@ class SessionLogger:
                 if tb.get("index") is not None:
                     transparency_index = round(tb["index"], 3)
                 transparency_state = tb.get("state") or ""
+                bkg = tb.get("bkg")
+                base_bkg = tb.get("base_bkg")
+                base_stars = tb.get("base_stars")
+                base_stars_best = tb.get("base_stars_session_best")
+                ref_drift_pct = tb.get("ref_drift_pct")
             except Exception:
                 pass
         if eng is not None and getattr(eng, "_last", None) is not None:
@@ -203,6 +218,11 @@ class SessionLogger:
             "hfr_nina": getattr(snapshot, "hfr_nina", None),
             "star_count": getattr(snapshot, "star_count", None),
             "airmass": getattr(snapshot, "airmass", None),
+            "bkg": bkg,                                     # §100
+            "base_bkg": base_bkg,                           # §100
+            "base_stars": base_stars,                       # §100
+            "base_stars_session_best": base_stars_best,     # §100
+            "ref_drift_pct": ref_drift_pct,                 # §100
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
             "transparency_index": transparency_index,   # §45
@@ -237,7 +257,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 6,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa
+            "schema_version": 7,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa; §100 fondo cielo + riferimento del tracker
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

@@ -4360,3 +4360,57 @@ un test debole** — la funzione esisteva, si chiamava con le parole di PHD2.
 **412+14 = 426 test verdi** (invariati: i tooltip sono presentazione). Verifica di non-sovrascrittura fatta sul
 codice invece che sul browser, ed e' conclusiva: `app.js` **non contiene un solo riferimento** a `gauge-card`,
 quindi quelle card non vengono mai riscritte a runtime. ZIP **v2.17.0**. Plugin invariato (1.11.0.0).
+
+---
+
+## 100. Si registra cio' che il motore gia' calcola — agente v2.17.0 (2026-08-22)
+
+**Come e' nata.** Analizzando la notte ciclica del 21-22/8 ho dovuto ricostruire il riferimento di trasparenza
+per via indiretta (`riferimento = stelle / indice`, identita' valida solo se il fattore di fondo cielo vale 1) e
+stabilire l'influenza della Luna calcolando un'**effemeride** dalle coordinate dell'osservatore lette nel log
+NINA. Due fatiche entrambe evitabili: il tracker **conosce gia'** il fondo cielo misurato e il proprio
+riferimento, li usa a ogni posa per calcolare l'indice, e non li scriveva da nessuna parte.
+
+Alessandro: *"il bkg e' assolutamente una svolta, lo farei implementare da subito"*. Concordo, e la ragione e'
+che questa e' la modifica col miglior rapporto valore/rischio della serie: **non tocca una sola decisione**,
+rende osservabile una variabile che il motore possiede.
+
+**Cinque colonne** (schema 6 -> 7, 39 -> 44 campi), collocate nel gruppo §94 delle misure che nessuno legge:
+`bkg`, `base_bkg`, `base_stars`, `base_stars_session_best`, `ref_drift_pct`.
+
+`base_bkg` era una **variabile locale** dentro `ingest()`: senza di essa il log non sarebbe autosufficiente,
+perche' `bkg_factor = base_bkg / bkg` e' il secondo fattore dell'indice e resterebbe ricavabile solo per
+inversione — impossibile proprio quando l'indice satura a 1.00, cioe' nelle notti serene. Ora e' conservata ed
+esposta in `status_block()`.
+
+**La domanda che rendono rispondibile**, ed e' quella che separa la trasparenza da tutto il resto:
+
+    stelle in calo + fondo cielo che SALE   -> diffusione, probabile velatura
+    stelle in calo + fondo cielo COSTANTE   -> non e' trasparenza
+
+Verificato end-to-end: con stelle 1400 -> 980 e fondo 120 -> 210 la riga riporta `base_stars 1400` (il
+riferimento non ha inseguito), `bkg 210` contro `base_bkg 120`, indice 0.40, stato CLOUD. **La riga si
+interpreta da sola**; prima da quello stesso CSV si poteva solo congetturare.
+
+**Cosa NON e' stato fatto, ed e' deliberato.** Nessun correttore. Le tre notti analizzate hanno sgonfiato due
+candidati su tre appena messi alla prova: l'**HFR** ha il segno che si ribalta fra i filtri (3 positivi, 4
+negativi — una compensazione correggerebbe al contrario su O, H, R); la **Luna** e' risultata totalmente
+confusa col ciclo (i campioni "Luna sopra l'orizzonte" coincidono con il ciclo 1 per **tutti** i filtri, senza
+una sola eccezione) e il tempismo non torna comunque, perche' gli aumenti di S (+20%) e R (+14%) avvengono ore
+dopo il tramonto lunare delle 00:20. L'**airmass** resta telemetria: sopra i 30 gradi l'effetto e' sotto il
+rumore (R^2 fra 0.01 e 0.10 contro 0.68 dell'HFR), e sotto i 30 gradi **non abbiamo un solo campione** — il
+massimo osservato e' X 1.56.
+
+**Il vincolo, blindato da un test:** `test_il_controller_non_consuma_le_colonne_nuove` fallisce se
+`base_bkg`, `ref_drift_pct` o `base_stars_session_best` compaiono nel controller. E' strumentazione, non
+algoritmo — e deve restarlo finche' un replay sui dati reali non dice altro.
+
+**433 test verdi** (+7: colonne nello schema, collocazione nel gruppo in ombra, `base_bkg` esposto, valori
+scritti uguali a quelli del tracker, lo scenario velatura, colonne vuote senza NINA, e l'invariante di
+non-consumo). ZIP **v2.17.0** ricostruito. Plugin invariato (1.11.0.0).
+
+**Da questo commit la v2.17.0 e' la piattaforma di raccolta dati.** Il §100 va trattato come *baseline
+sperimentale*: si e' reso il sistema osservabile senza cambiarne il comportamento, e quella proprieta' si
+spreca se si continua a modificare il motore mentre si cerca di capire cosa dicono i dati. La sequenza
+concordata e': **§100 -> raccolta notti -> replay -> progetto memoria -> replay -> progetto N8 -> replay ->
+eventuale Guardian**. Le linee guida che fissano questo ordine stanno in `docs/development/LINEE_GUIDA_TRASPARENZA.md`.
