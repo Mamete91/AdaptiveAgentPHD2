@@ -52,6 +52,11 @@ _CSV_FIELDS = [
     "rms_low_active",
     "jitter_anchor",
     "rms_anchor",
+    # §101 — la CHIAVE del modello di trasparenza. Senza, le colonne qui
+    # sotto misurano qualcosa di cui non si sa a chi appartenga, e il replay
+    # per (target, filtro) richiede di riallineare a mano il log di NINA.
+    "target",
+    "filter",
     "hfr_nina",
     "star_count",
     "airmass",
@@ -168,6 +173,7 @@ class SessionLogger:
         nina_penalty = 0
         # §100 — strumentazione: nessuna di queste colonne e' letta da una decisione.
         bkg = base_bkg = base_stars = base_stars_best = ref_drift_pct = None
+        nina_target = nina_filter = ""      # §101 — contesto della riga
         tracker = getattr(ctrl, "transparency_tracker", None) if ctrl is not None else None
         if tracker is not None:
             try:
@@ -180,6 +186,8 @@ class SessionLogger:
                 base_stars = tb.get("base_stars")
                 base_stars_best = tb.get("base_stars_session_best")
                 ref_drift_pct = tb.get("ref_drift_pct")
+                nina_target = tb.get("target") or ""       # §101
+                nina_filter = tb.get("filter") or ""       # §101
             except Exception:
                 pass
         if eng is not None and getattr(eng, "_last", None) is not None:
@@ -215,6 +223,8 @@ class SessionLogger:
             # §94 — misura in ombra: nessuna decisione legge queste colonne.
             "jitter_anchor": getattr(snapshot, "jitter_anchor", None),
             "rms_anchor": getattr(snapshot, "rms_anchor", None),
+            "target": nina_target,                          # §101
+            "filter": nina_filter,                          # §101
             "hfr_nina": getattr(snapshot, "hfr_nina", None),
             "star_count": getattr(snapshot, "star_count", None),
             "airmass": getattr(snapshot, "airmass", None),
@@ -257,7 +267,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 7,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa; §100 fondo cielo + riferimento del tracker
+            "schema_version": 8,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa; §100 fondo cielo + riferimento del tracker; §101 target e filtro (chiave del modello)
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

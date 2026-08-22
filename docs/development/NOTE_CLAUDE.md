@@ -4414,3 +4414,43 @@ sperimentale*: si e' reso il sistema osservabile senza cambiarne il comportament
 spreca se si continua a modificare il motore mentre si cerca di capire cosa dicono i dati. La sequenza
 concordata e': **§100 -> raccolta notti -> replay -> progetto memoria -> replay -> progetto N8 -> replay ->
 eventuale Guardian**. Le linee guida che fissano questo ordine stanno in `docs/development/LINEE_GUIDA_TRASPARENZA.md`.
+
+---
+
+## 101. Ogni riga dice a chi appartiene — agente v2.17.0 (2026-08-22)
+
+**Trovato durante l'audit della telemetria del fuoco.** Il modello di trasparenza e' indicizzato per
+`(target, filtro)` — e' la chiave di `_stars_by_filter`, `_ref_stars_by_filter`,
+`_best_stars_by_filter`. Ma il CSV non registrava **nessuna delle due**: quarantaquattro colonne di misure
+di cui non si sapeva a chi appartenessero.
+
+Non e' un difetto teorico e ne ho pagato il prezzo di persona: per ricostruire la notte ciclica 21-22/8
+(sequenza O H S R G B L, tre cicli) ho dovuto parsare il log di NINA e riallineare a mano i blocchi filtro
+con il CSV dell'Agente. Il **replay del modello di memoria** — quello a cui le linee guida ci impegnano —
+era **impossibile dal solo CSV**.
+
+**Costo zero:** `status_block()` esponeva gia' `target` e `filter` (righe 334 e 342). Nessuna modifica al
+plugin, nessuna nuova DLL: stessa forma del §100. Schema 7 -> 8, 44 -> 46 colonne, collocate in TESTA al
+blocco NINA cosi' che si legga come *"questo target, con questo filtro, ha misurato questi valori"*.
+Verificato prima che nessun consumatore leggesse il CSV per posizione: `replay_*.py` e `analyze_logs.py`
+usano tutti `DictReader`.
+
+**Una nota sull'invariante, perche' qui il test del §100 NON si applica.** Per il fondo cielo l'invariante
+era "questi nomi non compaiono nel controller". Per `target` e `filter` sarebbe assurdo: sono concetti
+interni legittimi, il tracker ci costruisce sopra le proprie chiavi. L'invariante vero e' un altro — sono
+un **passaggio diretto** di cio' che il tracker dichiara, senza trasformazioni — ed e' quello verificato.
+Registrarlo esplicitamente evita che qualcuno, un giorno, aggiunga un test difensivo che non difende nulla.
+
+**Un dettaglio emerso dal banco di prova:** `star_count` arriva al CSV **dallo snapshot** (il controller lo
+copia da `_nina_shadow_block()`, controller.py:1228), mentre `target`/`filter`/`bkg` li legge il logger
+**direttamente** dal tracker. Due strade per la stessa sorgente. Non e' un difetto — entrambe finiscono in
+`status_block()` — ma va saputo, perche' un banco di prova che aggira il controller vede `star_count` vuoto.
+
+**439 test verdi** (+6: esistenza, collocazione prima delle misure che indicizzano, fedelta' al tracker,
+colonne vuote senza NINA, ricostruzione della serie per filtro dal solo CSV su una sequenza ciclica a 7
+filtri, e cambio target visibile nella riga). ZIP **v2.17.0** ricostruito.
+
+**Stadio B, non ancora fatto:** `focuser_position` + `focuser_temperature` per ogni LIGHT. Verificato che
+esistano nell'SDK **pinnato** 3.2.0.9001 (`FocuserParameter`, `get_Focuser`, `get_Position`,
+`get_Temperature`, `get_MechanicalPosition`), ma comporta plugin + nuova DLL: rilascio separato, cosi' se
+qualcosa non torna si sa dove cercare.
