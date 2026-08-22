@@ -4492,9 +4492,10 @@ vera sta in `Properties/AssemblyInfo.cs`. Allineate e documentate, perche' un me
 un metadato assente — ci ho perso tempo io prima di accorgermene.
 
 **La riga, alla fine.** Prova end-to-end: stelle 1400 -> 1710, focheggiatore 35435 -> 35525, temperatura
-11,4 -> 10,8 °C, ma `bkg` fermo a 120 = `base_bkg`. E' la firma della **rifocheggiatura riuscita**: il salto
-delle stelle non e' cielo migliore, e' fuoco recuperato. Prima quella riga era indistinguibile da un
-miglioramento della trasparenza.
+11,4 -> 10,8 °C, ma `bkg` fermo a 120 = `base_bkg`. Il quadro e' **fortemente compatibile con una
+rifocheggiatura riuscita** — il fondo cielo, che e' la misura diretta della trasparenza, non si e' mosso — ma
+**compatibile non vuol dire dimostrato**: la riga porta l'evidenza, non la causa. Prima quella stessa riga era
+indistinguibile da un miglioramento della trasparenza; ora le due ipotesi si possono separare.
 
 **448 test verdi** (+9: colonne e collocazione, `mechanical_position` assente, valori dal tracker, temperatura
 negativa, zero come valore valido, stessa riga per cause diverse, nessun consumo dal controller, colonne vuote

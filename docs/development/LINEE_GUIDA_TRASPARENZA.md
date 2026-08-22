@@ -13,6 +13,15 @@ Nasce dall'analisi di tre notti reali (13-14/8, 17-18/8, 21-22/8) e dall'audit d
 
 > Ogni nuova capacità viene **prima dimostrata sui dati** e solo dopo autorizzata a comandare.
 
+E la catena che ne discende, da rispettare anche nel **linguaggio** con cui si scrivono note e commit:
+
+```
+telemetria  ->  evidenza  ->  classificazione probabilistica  ->  eventuale decisione
+```
+
+mai `telemetria -> causa certa -> azione`. Si scrive **"compatibile con"**, non **"dimostra"**. Non è
+pedanteria: una nota che afferma una causalità diventa, sei mesi dopo, la premessa di qualcun altro.
+
 Non è una massima di prudenza: è la regola che ha già salvato il progetto due volte. Il cricchetto
 §66 fu **proposto, replayato e respinto** (a cadenza 3 s un'emivita di 25 min colma il 99,9% del
 divario in 4 ore: la medicina agiva su una scala di tempi sbagliata). L'ancora §94 sembrava un buon
