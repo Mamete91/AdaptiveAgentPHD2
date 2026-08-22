@@ -89,6 +89,13 @@ class TransparencyTracker:
         self._last_hfr: Optional[float] = None
         self._last_bkg: Optional[float] = None
         self._base_bkg: Optional[float] = None   # §100 — riferimento del fondo cielo
+        # §102 — stato del FUOCO alla posa. Telemetria pura: distingue una
+        # variazione del cielo da una del sistema ottico. Non si assume MAI
+        # perche' il focheggiatore si sia mosso (autofocus? offset del filtro?
+        # compensazione termica? intervento manuale?): sara' il replay a
+        # stabilire a posteriori la probabilita' della causa.
+        self._last_focuser_pos: Optional[float] = None
+        self._last_focuser_temp: Optional[float] = None
 
     # ------------------------------------------------------------------ #
     #  Ingest (per-posa)                                                  #
@@ -212,6 +219,13 @@ class TransparencyTracker:
             if isinstance(hfr, (int, float)) and hfr > 0:
                 self._last_hfr = float(hfr)
             self._last_bkg = bkg
+            # §102 — la temperatura puo' essere NEGATIVA: nessun filtro sul segno.
+            _fp = img.get("focuser_position")
+            _ft = img.get("focuser_temperature")
+            if isinstance(_fp, (int, float)):
+                self._last_focuser_pos = float(_fp)
+            if isinstance(_ft, (int, float)):
+                self._last_focuser_temp = float(_ft)
             self._base_bkg = base_bkg          # §100 — osservabile, non decide nulla
 
     def _ref_drift_pct(self) -> Optional[float]:
@@ -336,6 +350,8 @@ class TransparencyTracker:
                 "star_count": self._last_star,
                 "hfr": self._last_hfr,
                 "bkg": self._last_bkg,
+                "focuser_position": self._last_focuser_pos,      # §102
+                "focuser_temperature": self._last_focuser_temp,  # §102
                 "base_bkg": (round(self._base_bkg, 2)
                              if self._base_bkg is not None else None),   # §100
                 "background": self._last_bkg,   # §48 — alias del contratto consumatori (N6)

@@ -68,6 +68,11 @@ _CSV_FIELDS = [
     "base_stars",
     "base_stars_session_best",
     "ref_drift_pct",
+    # §102 — stato del FUOCO. Una variazione di posizione NON significa
+    # "autofocus": puo" essere l'offset del filtro, la compensazione
+    # termica o un intervento manuale. Si registra il fatto, non la causa.
+    "focuser_position",
+    "focuser_temperature",
     "diag_state",
     "diag_confidence",
     # §45/§46 — Layer-2 NINA: indice di trasparenza + stato + penalità N8 applicata al
@@ -174,6 +179,7 @@ class SessionLogger:
         # §100 — strumentazione: nessuna di queste colonne e' letta da una decisione.
         bkg = base_bkg = base_stars = base_stars_best = ref_drift_pct = None
         nina_target = nina_filter = ""      # §101 — contesto della riga
+        focuser_position = focuser_temperature = None      # §102
         tracker = getattr(ctrl, "transparency_tracker", None) if ctrl is not None else None
         if tracker is not None:
             try:
@@ -188,6 +194,8 @@ class SessionLogger:
                 ref_drift_pct = tb.get("ref_drift_pct")
                 nina_target = tb.get("target") or ""       # §101
                 nina_filter = tb.get("filter") or ""       # §101
+                focuser_position = tb.get("focuser_position")        # §102
+                focuser_temperature = tb.get("focuser_temperature")  # §102
             except Exception:
                 pass
         if eng is not None and getattr(eng, "_last", None) is not None:
@@ -233,6 +241,8 @@ class SessionLogger:
             "base_stars": base_stars,                       # §100
             "base_stars_session_best": base_stars_best,     # §100
             "ref_drift_pct": ref_drift_pct,                 # §100
+            "focuser_position": focuser_position,           # §102
+            "focuser_temperature": focuser_temperature,     # §102
             "diag_state": getattr(snapshot, "diag_state", "INSUFFICIENT_DATA"),
             "diag_confidence": int(getattr(snapshot, "diag_confidence", 0)),
             "transparency_index": transparency_index,   # §45
@@ -267,7 +277,7 @@ class SessionLogger:
         duration_s = time.time() - self._session_start.timestamp()
 
         summary = {
-            "schema_version": 8,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa; §100 fondo cielo + riferimento del tracker; §101 target e filtro (chiave del modello)
+            "schema_version": 9,   # §34 `evaluated`; §36 arcsec; §39 `reset_cause`; §45/§46 colonne trasparenza NINA + nina_penalty; §94 ancore in ombra + telemetria per-posa; §100 fondo cielo + riferimento del tracker; §101 target e filtro (chiave del modello); §102 stato del fuoco
             "session_start": self._session_start.isoformat(),
             "session_id": self.session_id,
             "duration_minutes": round(duration_s / 60, 1),

@@ -4454,3 +4454,52 @@ filtri, e cambio target visibile nella riga). ZIP **v2.17.0** ricostruito.
 esistano nell'SDK **pinnato** 3.2.0.9001 (`FocuserParameter`, `get_Focuser`, `get_Position`,
 `get_Temperature`, `get_MechanicalPosition`), ma comporta plugin + nuova DLL: rilascio separato, cosi' se
 qualcosa non torna si sa dove cercare.
+
+---
+
+## 102. Lo stato del fuoco viaggia con la posa — agente v2.17.0 + plugin v1.13.0.0 (2026-08-22)
+
+**Stadio B**, dopo il §101. La notte 21-22/8 ha mostrato che un autofocus puo' spostare `star_count` del
+**21,8%** su un filtro: il conteggio stelle, da solo, non distingue *"il cielo e' cambiato"* da *"il fuoco e'
+cambiato"*. Due colonne nuove — `focuser_position`, `focuser_temperature` — danno la seconda dimensione
+causale accanto a `star_count`/`bkg`.
+
+**Nessuna causa e' codificata, ed e' il punto architetturale.** Una variazione di posizione NON significa
+"autofocus": puo' essere l'offset del filtro — e **non tutti gli utenti usano gli offset** — la compensazione
+termica, un AF per HFR, per temperatura, per tempo, o un intervento manuale. Si registra il **fatto**; la
+probabilita' della causa la stabilisce il replay. Un test lo blinda: due sequenze che rappresentano un cambio
+filtro con offset e un autofocus producono **la stessa riga**, perche' distinguerli non e' compito del logger.
+
+**Perche' la posizione e non un flag "AF avvenuto".** NINA notifica solo l'inizio
+(`BroadcastAutoFocusRunStarting`: tre volte quella notte, zero notifiche di fine), quindi dedurre `AF_END`
+sarebbe un problema aperto. La posizione arriva **attaccata al frame**, senza allineamenti temporali, e copre
+*ogni* movimento invece dei soli eventi etichettati.
+
+**Tre cose che il compilatore ha stabilito, non l'inferenza.**
+
+1. `FocuserParameter.Position` e' `int?`, `Temperature` e' `double`.
+2. **`MechanicalPosition` non esiste** su `FocuserParameter`. Avevo dedotto il contrario da una ricerca piatta
+   di stringhe nella DLL — che trova `get_MechanicalPosition` ma **non puo' attribuirlo alla sua classe**. La
+   domanda "aggiunge informazione?" si e' risolta alla radice, ed e' il modo migliore in cui poteva risolversi.
+   Lezione: leggere l'heap delle stringhe di un assembly dice cosa c'e' *da qualche parte*, non *dove*.
+3. Il difetto piu' insidioso: `AddIfNumber` pretende `value >= 0` e avrebbe scartato **in silenzio** le
+   temperature sotto zero. A 967 m di quota sono la norma per buona parte dell'inverno — cioe' proprio quando
+   la deriva termica del fuoco e' piu' interessante. Nuovo helper `AddIfFinite`, e un test dedicato a −4,2 °C.
+
+**Un disallineamento trovato per strada.** La csproj dichiarava `<Version>1.7.0.0</Version>` mentre la DLL
+spedita era la **1.12.4.0**: con `GenerateAssemblyInfo=false` quelle proprieta' sono **inerti** e la versione
+vera sta in `Properties/AssemblyInfo.cs`. Allineate e documentate, perche' un metadato che mente e' peggio di
+un metadato assente — ci ho perso tempo io prima di accorgermene.
+
+**La riga, alla fine.** Prova end-to-end: stelle 1400 -> 1710, focheggiatore 35435 -> 35525, temperatura
+11,4 -> 10,8 °C, ma `bkg` fermo a 120 = `base_bkg`. E' la firma della **rifocheggiatura riuscita**: il salto
+delle stelle non e' cielo migliore, e' fuoco recuperato. Prima quella riga era indistinguibile da un
+miglioramento della trasparenza.
+
+**448 test verdi** (+9: colonne e collocazione, `mechanical_position` assente, valori dal tracker, temperatura
+negativa, zero come valore valido, stessa riga per cause diverse, nessun consumo dal controller, colonne vuote
+senza focheggiatore e senza tracker). Schema 8 -> 9, 46 -> 48 colonne. Plugin **1.13.0.0** costruito Release
+x64 (0 errori, 0 avvisi), installato e **verificato per hash**. ZIP **v2.17.0** ricostruito.
+
+**Il vincolo resta quello del §100:** nessuna di queste colonne entra nelle decisioni. Prima si misura, poi si
+replaya, poi si decide.
