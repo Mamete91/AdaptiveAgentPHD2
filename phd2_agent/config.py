@@ -138,6 +138,86 @@ class MinMoveCapConfig:
 
 
 @dataclass
+class BandaNominaleConfig:
+    """§106 — recinto attorno al nominale (§104).
+
+    Finche' il nominale era un numero fisso, l'unico modo di dire "quanto ti puoi
+    allontanare" era GIUDICARE: serviva una diagnosi, una confidenza, un arbitro.
+    Con un nominale MISURATO la domanda ha una risposta piu' semplice — la distanza
+    da un numero noto — che non puo' essere incerta e si verifica con una sottrazione.
+
+    Serve perche' il Guardian, per come e' costruito, quel ruolo non lo svolge:
+    nella sessione 22-23/8 ha prodotto 294 CONFIRM, 0 ATTENUATE, 0 BLOCK, con la
+    motivazione "diagnosi non confidente -> CONFIRM (fail-safe)". E' la scelta di
+    sicurezza giusta, ma nel 78% dei tick la diagnosi e' UNCERTAIN: la via di
+    sicurezza e' diventata l'unica via. Nel 24/8, con la stella persa per meta'
+    notte, l'aggressivita' RA e' comunque scesa da 70 al pavimento 35 e il MinMove
+    e' salito del 33% sopra il misurato: nessuno aveva il compito di fermarli.
+
+    Il recinto NON impedisce mai di tornare verso il nominale, e non tocca il
+    ripristino dei valori utente (che non passa da `_apply`).
+    """
+    enabled: bool = True
+    # Distanza massima dal MinMove nominale, in pixel. Con nominale RA 0.6175 la
+    # banda e' [0.42, 0.82]: il 24/8 l'escursione si e' fermata a 0.818.
+    minmove_px: float = 0.20
+    # Distanza massima dall'aggressivita' nominale, in punti di configurazione
+    # (scala 0-100). Con nominale 70 la banda e' [50, 90].
+    aggr_punti: float = 20.0
+
+
+@dataclass
+class GABaselineConfig:
+    """§104 — baseline nominale dal Guiding Assistant di PHD2.
+
+    Il GA misura ad anello aperto cio' che ad anello chiuso non e' osservabile.
+    I suoi risultati diventano il NOMINALE dell'Agente: valore di partenza (§50),
+    bersaglio del recupero simmetrico (§53) e definizione di "leve ammorbidite".
+
+    Le soglie sotto sono criteri di ACCETTAZIONE della caratterizzazione, non
+    parametri di controllo: servono a rifiutare una misura fatta male, non a
+    modulare la guida.
+    """
+    enabled: bool = True
+    # A SNR basso la dispersione misurata contiene il rumore di centroide, che il
+    # GA non sa separare dal seeing: la raccomandazione MinMove esce gonfiata.
+    snr_min: float = 30.0
+    # Sotto 1.2 x MEASUREMENT_WINDOW_SIZE (120 s) GetMinMoveRecs non attiva lo
+    # stimatore a finestre scorrevoli e usa la stima a finestra singola.
+    elapsed_min_s: int = 144
+    campioni_min: int = 60
+    # §118 — SCARTARE una caratterizzazione perche' misurata ad altra posa non e'
+    # una regola di PHD2: verificato sulla sorgente, la posa del GA viene salvata e
+    # poi usata solo per MOSTRARLA nella griglia dei risultati. Premendo Applica,
+    # PHD2 scrive il MinMove misurato qualunque sia la posa in uso. Spento per
+    # difetto: la differenza di posa resta come avviso graduato, non come scarto.
+    richiedi_posa_uguale: bool = False
+    # Oltre questi giorni la caratterizzazione viene USATA lo stesso (il
+    # MinMove segue il seeing TIPICO del sito, non quello della singola
+    # notte) ma si avvisa che conviene rifarla. Senza questa regola una
+    # misura di mesi prima verrebbe adottata in silenzio come se fosse
+    # di stanotte.
+    eta_avviso_giorni: int = 14
+    # §117 — dottrina "Assistente a ogni sessione". Il seeing e' una proprieta'
+    # della NOTTE, non del telescopio: la montatura e' la stessa da un anno, il
+    # cielo cambia da sera a sera. Con questo attivo il criterio non e' piu'
+    # "quanti giorni ha" ma "e' di questa sessione". Metti false per tornare alla
+    # sola soglia in giorni.
+    richiedi_ga_di_sessione: bool = True
+    # §115 — errore di allineamento polare misurato dal GA. Non e' un criterio di
+    # accettazione: una caratterizzazione fatta con la polare storta resta valida
+    # (il MinMove misura il seeing, non la deriva). E' un avviso su un problema a
+    # MONTE, che l'Agente non puo' correggere e non deve inseguire: la deriva in
+    # DEC che ne nasce non e' seeing, e alzare MinMove per assorbirla peggiora la
+    # guida invece di aggiustarla. La soglia e' quella che PHD2 stesso considera
+    # significativa nel proprio strumento di allineamento.
+    pa_error_avviso_arcmin: float = 5.0
+    # Scarto oltre il quale si avvisa che il backlash raccomandato non e' stato
+    # applicato. L'API PHD2 non espone il backlash: si puo' solo verificare.
+    backlash_tolleranza: float = 0.20
+
+
+@dataclass
 class LoggingConfig:
     csv_dir: str = "logs"
     log_level: str = "INFO"
@@ -161,6 +241,12 @@ class ExposureDynamicConfig:
     # vuole che l'Agente tocchi l'esposizione. Con un valore dichiarato, la
     # Base non puo' piu' essere ereditata da un boost della sessione prima.
     target_exposure_ms: Optional[int] = None
+    # §111 — Path B (adattamento al seeing) non puo' uscire dall'intervallo
+    # di posa che il Guiding Assistant ha misurato per questo setup. Fuori da
+    # li' la posa e' sbagliata per MISURA, e nessuna condizione di guida lo
+    # giustifica. Path A (perdita della stella) NON e' vincolato: perdere la
+    # stella e' peggio di una posa subottimale.
+    pathb_dentro_intervallo_ga: bool = True
     # §98 — la scala dei gradini, ESPLICITA. Salita e discesa percorrono questa
     # lista e nient'altro: e' l'unico modo per garantire che i due versi siano
     # simmetrici, perche' `x1.5` e `:1.5` non lo sono una volta passati dallo
@@ -252,6 +338,22 @@ class AutoCalibrationConfig:
     # e' instabile (CoV alto = transitorio/spazzatura) o oltre un tetto "guida
     # fondamentalmente rotta".
     baseline_fallback_max_cov: float = 0.50
+    # --- §120 — ancoraggio della baseline al pavimento misurato dal GA ---
+    # La baseline smette di essere solo "l'RMS che osservo" e diventa
+    #   baseline = pavimento_di_stanotte (+) contributo_del_rig
+    # dove il pavimento lo misura il Guiding Assistant ad anello aperto e il
+    # contributo del rig se lo impara l'Agente. Rompe la circolarita': oggi
+    # l'Agente misura se stesso e da li' decide cosa sia buono.
+    # Senza pavimento (GA mai eseguito) tutto resta come prima.
+    ancoraggio_ga_enabled: bool = True
+    # Quante notti tenere per la mediana del contributo del rig. Le ULTIME N: il
+    # rig migliora quando migliora la taratura, e una coda infinita terrebbe in
+    # vita per sempre le notti mal tarate.
+    rig_campioni_max: int = 5
+    # Rete di sicurezza: se la baseline PREVISTA dal pavimento si discosta piu' di
+    # questa frazione da quella OSSERVATA, vince l'osservata e lo si dice. Serve
+    # contro un GA fatto in condizioni che non descrivono la sessione.
+    ancoraggio_divergenza_max: float = 0.50
     baseline_fallback_reject_arcsec: float = 4.0
     # §40 — il FALLBACK §33 non deve essere congelato dalla soglia SNR alta: su una
     # notte genuinamente fioca (SNR < baseline_min_snr) la baseline si forma comunque
@@ -507,6 +609,8 @@ class AgentConfig:
     ra: AxisLimits = field(default_factory=AxisLimits)
     dec: AxisLimits = field(default_factory=AxisLimits)   # §24: RA/DEC armonizzati
     minmove_cap: MinMoveCapConfig = field(default_factory=MinMoveCapConfig)   # §51
+    ga_baseline: GABaselineConfig = field(default_factory=GABaselineConfig)   # §104
+    banda: BandaNominaleConfig = field(default_factory=BandaNominaleConfig)   # §106
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     phd2_log: PHD2LogConfig = field(default_factory=PHD2LogConfig)
     exposure_dynamic: ExposureDynamicConfig = field(default_factory=ExposureDynamicConfig)
@@ -627,6 +731,27 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             imaging_ceiling_arcsec=float(lim.get("minmove_imaging_ceiling_arcsec", 2.0)),
             filter_tau_minutes=float(lim.get("baseline_filter_tau_minutes", 18.0)),
         )
+        # §106 — recinto attorno al nominale, accanto agli altri limiti.
+        cfg.banda = BandaNominaleConfig(
+            enabled=bool(lim.get("banda_enabled", True)),
+            minmove_px=float(lim.get("banda_minmove_px", 0.20)),
+            aggr_punti=float(lim.get("banda_aggr_punti", 20.0)),
+        )
+
+    # §104 — baseline dal Guiding Assistant
+    if "ga_baseline" in raw:
+        gb = raw["ga_baseline"]
+        cfg.ga_baseline = GABaselineConfig(
+            enabled=bool(gb.get("enabled", True)),
+            snr_min=float(gb.get("snr_min", 30.0)),
+            elapsed_min_s=int(gb.get("elapsed_min_s", 144)),
+            campioni_min=int(gb.get("campioni_min", 60)),
+            richiedi_posa_uguale=bool(gb.get("richiedi_posa_uguale", False)),
+            eta_avviso_giorni=int(gb.get("eta_avviso_giorni", 14)),
+            pa_error_avviso_arcmin=float(gb.get("pa_error_avviso_arcmin", 5.0)),
+            richiedi_ga_di_sessione=bool(gb.get("richiedi_ga_di_sessione", True)),
+            backlash_tolleranza=float(gb.get("backlash_tolleranza", 0.20)),
+        )
 
     # Logging
     if "logging" in raw:
@@ -657,6 +782,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             enabled=bool(ed.get("enabled", False)),
             target_exposure_ms=(int(ed["target_exposure_ms"])
                                 if ed.get("target_exposure_ms") else None),
+            pathb_dentro_intervallo_ga=bool(
+                ed.get("pathb_dentro_intervallo_ga", True)),
             exposure_ladder_ms=[int(x) for x in ed.get(
                 "exposure_ladder_ms", [1000, 2000, 3000, 4000])],
             snr_step_cooldown_s=float(ed.get("snr_step_cooldown_s", 45.0)),
@@ -678,18 +805,20 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         # valore intermedio verrebbe altrimenti trasformato in silenzio in una
         # base diversa da quella scritta, ed e' esattamente il tipo di sorpresa
         # che il §95 e' nato per eliminare.
+        # §112 — QUI resta solo un controllo di sanita'. La regola vera — "la base
+        # deve lasciare margine per salire" — dipende dalla scala DERIVATA
+        # dall'intervallo misurato dal Guiding Assistant, che al caricamento del
+        # config non e' ancora noto: si valuta a runtime in `_reconcile_base_exposure`.
+        #
+        # La vecchia regola era `exposure_ladder_ms[:2]`, cioe' "i due gradini piu'
+        # bassi": esprimeva l'intenzione giusta come POSIZIONE in una lista scritta a
+        # mano. Conseguenza: un setup a cui il GA raccomanda 3 s non poteva
+        # dichiararlo, per un motivo senza rapporto con la fisica.
         _ed = cfg.exposure_dynamic
-        if _ed.target_exposure_ms and _ed.exposure_ladder_ms:
-            _ammessi = _ed.exposure_ladder_ms[:2]
-            if _ed.target_exposure_ms not in _ammessi:
-                _ripiego = _ammessi[-1]
-                logger.error(
-                    "[config] target_exposure_ms=%s NON AMMESSO: la base di sessione "
-                    "puo' valere solo %s (i due gradini piu' bassi della scala %s). "
-                    "Uso %sms — correggi config.toml.",
-                    _ed.target_exposure_ms, " o ".join(str(x) for x in _ammessi),
-                    _ed.exposure_ladder_ms, _ripiego)
-                _ed.target_exposure_ms = _ripiego
+        if _ed.target_exposure_ms is not None and _ed.target_exposure_ms <= 0:
+            logger.error("[config] target_exposure_ms=%s non valido: ignorato.",
+                         _ed.target_exposure_ms)
+            _ed.target_exposure_ms = None
 
     # Auto-calibration (sezione opzionale — default se mancante per retrocompatibilita')
     if "auto_calibration" in raw:
@@ -716,6 +845,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             baseline_best_fraction=float(a.get("baseline_best_fraction", 0.33)),
             rms_low_high_ratio_max=float(a.get("rms_low_high_ratio_max", 0.85)),
             baseline_fallback_max_cov=float(a.get("baseline_fallback_max_cov", 0.50)),
+            ancoraggio_ga_enabled=bool(a.get("ancoraggio_ga_enabled", True)),
+            rig_campioni_max=int(a.get("rig_campioni_max", 5)),
+            ancoraggio_divergenza_max=float(a.get("ancoraggio_divergenza_max", 0.50)),
             baseline_fallback_reject_arcsec=float(a.get("baseline_fallback_reject_arcsec", 4.0)),
             baseline_fallback_ignores_snr_gate=bool(a.get("baseline_fallback_ignores_snr_gate", True)),
             baseline_fallback_min_snr=float(a.get("baseline_fallback_min_snr", 3.0)),

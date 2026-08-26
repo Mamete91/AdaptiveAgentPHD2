@@ -1,0 +1,80 @@
+PHD Config 1
+/profile/1/name	1	Askar 71F focale 368/490mm
+/profile/2/GA/2026-04-08 21:36:52/BLT_MsmtPulse	3	500
+/profile/2/GA/2026-04-08 21:36:52/BLT_pulse	1	198
+/profile/2/GA/2026-04-08 21:36:52/backlash_info	1	 198  +/-  43 ms (1.5  +/-  0.3 arc-sec)
+/profile/2/GA/2026-04-08 21:36:52/dec_corrected_rms	1	0.000000
+/profile/2/GA/2026-04-08 21:36:52/dec_drift_rate	1	  0.94 px/min (  0.48 arc-sec/min )
+/profile/2/GA/2026-04-08 21:36:52/dec_hpf_rms	1	  0.63 px (  0.32 arc-sec )
+/profile/2/GA/2026-04-08 21:36:52/dec_lf_drift_rate	1	0.943399
+/profile/2/GA/2026-04-08 21:36:52/dec_peak	1	  3.84 px (  1.95 arc-sec )
+/profile/2/GA/2026-04-08 21:36:52/elapsed_time	1	805s
+/profile/2/GA/2026-04-08 21:36:52/exposure_time	1	1s
+/profile/2/GA/2026-04-08 21:36:52/pa_error	1	 1.8 arc-min
+/profile/2/GA/2026-04-08 21:36:52/ra_drift_exposure	1	   1.3 s 
+/profile/2/GA/2026-04-08 21:36:52/ra_drift_rate	1	  2.15 px/min (  1.09 arc-sec/min )
+/profile/2/GA/2026-04-08 21:36:52/ra_hpf_rms	1	  0.77 px (  0.39 arc-sec )
+/profile/2/GA/2026-04-08 21:36:52/ra_peak	1	  4.58 px (  2.33 arc-sec )
+/profile/2/GA/2026-04-08 21:36:52/ra_peak_drift_rate	1	  0.61 px/sec (  0.31 arc-sec/sec )
+/profile/2/GA/2026-04-08 21:36:52/ra_peak_peak	1	 39.11 px ( 19.87 arc-sec )
+/profile/2/GA/2026-04-08 21:36:52/rec_dec_minmove	1	1.250000
+/profile/2/GA/2026-04-08 21:36:52/rec_ra_minmove	1	0.812500
+/profile/2/GA/2026-04-08 21:36:52/sample_count	1	511
+/profile/2/GA/2026-04-08 21:36:52/snr	1	33.6
+/profile/2/GA/2026-04-08 21:36:52/star_mass	1	3040.1
+/profile/2/GA/2026-04-08 21:36:52/timestamp	1	2026-04-08 21:36:52
+/profile/2/GA/2026-04-08 21:36:52/total_hpf_rms	1	  1.00 px (  0.51 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/BLT_MsmtPulse	3	500
+/profile/2/GA/2026-06-12 22:33:35/BLT_pulse	1	147
+/profile/2/GA/2026-06-12 22:33:35/backlash_info	1	 147  +/-  64 ms (1.1  +/-  0.5 arc-sec)
+/profile/2/GA/2026-06-12 22:33:35/dec_corrected_rms	1	0.000000
+/profile/2/GA/2026-06-12 22:33:35/dec_drift_rate	1	  2.98 px/min (  1.52 arc-sec/min )
+/profile/2/GA/2026-06-12 22:33:35/dec_hpf_rms	1	  0.65 px (  0.33 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/dec_lf_drift_rate	1	2.982305
+/profile/2/GA/2026-06-12 22:33:35/dec_peak	1	  3.86 px (  1.96 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/elapsed_time	1	278s
+/profile/2/GA/2026-06-12 22:33:35/exposure_time	1	1s
+/profile/2/GA/2026-06-12 22:33:35/pa_error	1	 5.8 arc-min
+/profile/2/GA/2026-06-12 22:33:35/ra_drift_exposure	1	   1.9 s 
+/profile/2/GA/2026-06-12 22:33:35/ra_drift_rate	1	 -0.98 px/min ( -0.50 arc-sec/min )
+/profile/2/GA/2026-06-12 22:33:35/ra_hpf_rms	1	  0.76 px (  0.38 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/ra_peak	1	  4.33 px (  2.20 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/ra_peak_drift_rate	1	  0.48 px/sec (  0.24 arc-sec/sec )
+/profile/2/GA/2026-06-12 22:33:35/ra_peak_peak	1	 19.63 px (  9.97 arc-sec )
+/profile/2/GA/2026-06-12 22:33:35/rec_dec_minmove	1	1.400000
+/profile/2/GA/2026-06-12 22:33:35/rec_ra_minmove	1	0.910000
+/profile/2/GA/2026-06-12 22:33:35/sample_count	1	174
+/profile/2/GA/2026-06-12 22:33:35/snr	1	44.0
+/profile/2/GA/2026-06-12 22:33:35/star_mass	1	5091.3
+/profile/2/GA/2026-06-12 22:33:35/timestamp	1	2026-06-12 22:33:35
+/profile/2/GA/2026-06-12 22:33:35/total_hpf_rms	1	  1.00 px (  0.51 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/BLT_MsmtPulse	3	500
+/profile/2/GA/2026-08-24 00:28:30/BLT_pulse	1	132
+/profile/2/GA/2026-08-24 00:28:30/backlash_info	1	 132  +/-  33 ms (1.0  +/-  0.2 arc-sec)
+/profile/2/GA/2026-08-24 00:28:30/dec_corrected_rms	1	17801703207778500255472464172044833741962437610911454105375204032524276533285038864286813724283311597408255795251618679242096640.000000
+/profile/2/GA/2026-08-24 00:28:30/dec_drift_rate	1	  0.55 px/min (  0.28 arc-sec/min )
+/profile/2/GA/2026-08-24 00:28:30/dec_hpf_rms	1	  0.28 px (  0.14 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/dec_lf_drift_rate	1	0.554352
+/profile/2/GA/2026-08-24 00:28:30/dec_peak	1	  2.61 px (  1.33 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/elapsed_time	1	256s
+/profile/2/GA/2026-08-24 00:28:30/exposure_time	1	2s
+/profile/2/GA/2026-08-24 00:28:30/pa_error	1	 1.1 arc-min
+/profile/2/GA/2026-08-24 00:28:30/ra_drift_exposure	1	   1.9 s 
+/profile/2/GA/2026-08-24 00:28:30/ra_drift_rate	1	  2.65 px/min (  1.34 arc-sec/min )
+/profile/2/GA/2026-08-24 00:28:30/ra_hpf_rms	1	  0.43 px (  0.22 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/ra_peak	1	  2.97 px (  1.51 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/ra_peak_drift_rate	1	  0.32 px/sec (  0.16 arc-sec/sec )
+/profile/2/GA/2026-08-24 00:28:30/ra_peak_peak	1	 12.70 px (  6.45 arc-sec )
+/profile/2/GA/2026-08-24 00:28:30/rec_dec_minmove	1	0.950000
+/profile/2/GA/2026-08-24 00:28:30/rec_ra_minmove	1	0.617500
+/profile/2/GA/2026-08-24 00:28:30/sample_count	1	99
+/profile/2/GA/2026-08-24 00:28:30/snr	1	64.9
+/profile/2/GA/2026-08-24 00:28:30/star_mass	1	11556.0
+/profile/2/GA/2026-08-24 00:28:30/timestamp	1	2026-08-24 00:28:30
+/profile/2/GA/2026-08-24 00:28:30/total_hpf_rms	1	  0.51 px (  0.26 arc-sec )
+/profile/2/name	1	CEM70 RC8
+/profile/2/scope/BacklashCompEnabled	3	1
+/profile/2/scope/DecBacklashCeiling	3	292
+/profile/2/scope/DecBacklashFloor	3	20
+/profile/2/scope/DecBacklashPulse	3	203
+/profile/2/scope/DecGuideMode	3	1

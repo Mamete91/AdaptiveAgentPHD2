@@ -44,6 +44,8 @@ from .shadow_refs import ShadowRefs
 from .client import PHD2Client, PHD2RPCError
 from .config import AgentConfig, AxisLimits, ExposureDynamicConfig
 from .diagnostic_engine import GuardianVerdict, SeeingDiagnosticEngine
+from . import ancoraggio
+from . import ga_baseline
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +144,25 @@ _AGGR_ALIASES = (
 # Verificato su guide_algorithm_hysteresis.cpp e guide_algorithm_resistswitch.cpp.
 _AGGR_FRACTIONAL_PARAMS = frozenset({"aggression", "Aggression"})
 
-# §50 — valori standard PHD2 all'INIT (aggr in scala config 0-100, minmove in px/arcsec):
-#   RA  (Hysteresis):     Aggressiveness 70  (native 0.70), MinMove 0.20
-#   DEC (Resist Switch):  Aggressiveness 100 (native 1.00), MinMove 0.20
+# §50/§104 — nominale di ULTIMA ISTANZA (aggr in scala config 0-100, minmove in px).
+#
+# L'aggressivita' e' corretta e non si tocca: sono i default delle classi PHD2,
+# `DefaultAggression = 0.7` per Hysteresis (guide_algorithm_hysteresis.cpp:44) e
+# `1.0` per Resist Switch (guide_algorithm_resistswitch.cpp:43). Il GA non
+# caratterizza l'aggressivita', quindi questi valori restano in ogni scenario.
+#
+# Il MinMove 0.20 invece NON e' "lo standard PHD2" per un setup configurato: e' il
+# `DefaultMinMove` di classe, usato solo in assenza di qualunque valore salvato.
+# PHD2 assegna a ogni profilo creato dal wizard `SmartDefaultMinMove()`
+# (profile_wizard.cpp:907), che dipende dalla scala: a 0.51 arcsec/px vale 0.456 px,
+# piu' del doppio. Il nominale REALE viene risolto a runtime da §104 in tre livelli
+# (GA misurato -> formula PHD2 -> questa costante): vedi `_resolve_nominal`.
 _STANDARD_INIT = {"ra": (70.0, 0.20), "dec": (100.0, 0.20)}
+
+# §122 — ogni quanto richiedere a PHD2 collegamento e calibrazione. Cinque
+# secondi: abbastanza da seguire l'operatore che collega le periferiche, poco
+# abbastanza da non pesare (due chiamate, nessun calcolo).
+FASE_TTL_S = 5.0
 # Scala nativa frazionaria (0-1) = famiglia 'aggression' (Hysteresis / Resist Switch).
 # È il discriminante di sicurezza: i default 70/100 hanno senso solo su questa scala.
 _FRACTIONAL_AGGR_SCALE = 0.01
@@ -270,6 +287,18 @@ class AdaptiveController:
 
         # Baseline Guardian
         self.baseline_path = Path("baseline.json")
+        # §120 — il contributo del rig e' una proprieta' del SETUP: sopravvive ai
+        # riavvii, altrimenti andrebbe reimparato da capo ogni sera.
+        self._storico_rig = ancoraggio.StoricoRig(
+            Path("rig_contribution.json"),
+            massimo_campioni=config.auto_calibration.rig_campioni_max).carica()
+        self._ancoraggio_stato: dict = {"ancorata": False, "motivo": "non valutato"}
+        # §122 — collegamento e calibrazione: due domande che PHD2 sa gia'
+        # rispondere (`get_connected`, `get_calibrated`) e che non gli avevamo mai
+        # fatto. Servono a sapere in quale FASE si trova, non solo se sta guidando.
+        self._phd2_connesso = None
+        self._phd2_calibrato = None
+        self._fase_ultimo_poll = 0.0
         # ID setup per identificare baseline cross-setup. Se in config c'e' un
         # campo [setup] profile_name lo usiamo, altrimenti "default".
         self._baseline_setup_id = self._read_setup_id_from_config()
@@ -299,6 +328,31 @@ class AdaptiveController:
         # §51/dashboard — clamping_active: il cap ha TAGLIATO una richiesta MinMove-up
         # (requested > cap). Persistenza anti-flicker: resta true fino a questo istante.
         self._minmove_clamp_active_until: float = 0.0
+        # §106 — la banda ha limitato una richiesta di recente (badge dashboard)
+        self._banda_limita_fino: float = 0.0
+        # §108 — l'uscita di guida di PHD2 e' sospesa (Guiding Assistant,
+        # Polar Drift, o spunta tolta a mano). Ad anello aperto la stella non
+        # viene corretta: l'RMS misurato e' il moto NON corretto e non
+        # descrive la qualita' della guida. L'Agente non agisce e non ingerisce.
+        self.anello_aperto: bool = False
+        # §109 — PHD2 sta calibrando. Non arrivano GuideStep (le mosse di
+        # calibrazione non costruiscono un GuideStepInfo), ma gli StarLost SI'
+        # (guider.cpp:1337, stati CALIBRATING_PRIMARY/SECONDARY) — e da li' si
+        # arriva a `find_star`, che non ha alcuna guardia di stato lato PHD2
+        # (event_server.cpp:1004) e sposterebbe la lock position NEL MEZZO della
+        # calibrazione, che misura proprio lo spostamento dal punto di partenza.
+        self.in_calibrazione: bool = False
+        # §110 — ultimo AppState annunciato da PHD2. L'Agente agisce solo quando
+        # PHD2 sta davvero guidando: e' una condizione POSITIVA, quindi copre anche
+        # gli stati che non abbiamo enumerato (Manual Guide, Star Cross, strumenti
+        # futuri) invece di rincorrerli uno per uno.
+        self.app_state: Optional[str] = None
+        # §104 — nominale risolto (GA misurato -> formula PHD2 -> costante). E' il
+        # "casa" dell'anello adattivo: valore all'INIT (§50), pavimento/tetto del
+        # recupero simmetrico (§53) e definizione di "leve ammorbidite". Finche' non
+        # e' risolto vale la costante, cosi' ogni percorso ha sempre un valore valido.
+        self._nominal: dict[str, tuple[float, float]] = dict(_STANDARD_INIT)
+        self._baseline: Optional[ga_baseline.Baseline] = None
         self._rms_baseline_value: Optional[float] = None
         self._rms_baseline_done: bool = False
         # §23: gate di rifiuto + clamp proporzionale
@@ -366,6 +420,13 @@ class AdaptiveController:
                 self._check_orphan_baseline()
 
             self._valid_exposures = self.client.get_exposure_durations()
+            # §112 — prima passata sulla caratterizzazione: serve SOLO l'intervallo
+            # di posa, che e' una proprieta' del setup e non dipende dalla base. Senza
+            # di essa `_reconcile_base_exposure` non saprebbe quali basi sono ammesse.
+            # La seconda passata (dopo, con la base definitiva) stabilisce il nominale
+            # applicando anche il confronto sulla posa. Costo di entrambe: ~1 ms.
+            if full:
+                self._resolve_nominal(silenzioso=True)
             self._reconcile_base_exposure(full)
             # §95 — la paralisi non si annuncia da sola: "nessuna azione" e' anche
             # il comportamento di una notte tranquilla. Se base e tetto coincidono
@@ -440,6 +501,22 @@ class AdaptiveController:
                 # salva baseline DOPO aver letto i parametri puliti
                 self.save_baseline()
 
+                # §104 — il nominale va risolto DOPO la scala pixel (serve alla
+                # formula PHD2) e PRIMA dell'INIT §50, che lo scrive su PHD2.
+                self._resolve_nominal()
+                # §108 — rete di sicurezza: se l'Agente si connette quando l'uscita
+                # di guida e' GIA' sospesa (Guiding Assistant partito prima), l'evento
+                # di apertura se l'e' perso e crederebbe l'anello chiuso.
+                try:
+                    if not self.client.get_guide_output_enabled():
+                        self.anello_aperto = True
+                        logger.warning(
+                            "[anello aperto] all'avvio l'uscita di guida di PHD2 e' "
+                            "SOSPESA (Guiding Assistant o strumento di misura in "
+                            "corso): l'Agente resta fermo finche' non riprende")
+                except Exception as exc:      # noqa: BLE001
+                    logger.debug("[anello aperto] stato non leggibile: %s", exc)
+
                 # §50 — INIT ai valori standard PHD2 (stato iniziale NOTO): DOPO la
                 # calibrazione (params letti) e save_baseline (valori utente salvati per il
                 # restore), PRIMA della formazione baseline. Al primo init di un nuovo
@@ -507,6 +584,223 @@ class AdaptiveController:
             axis_state.param_names,
         )
 
+    def _resolve_nominal(self, silenzioso: bool = False) -> None:
+        """§104 — risolve il nominale delle leve, in ordine di preferenza:
+
+          1. Guiding Assistant valido -> rec_ra_minmove / rec_dec_minmove   MISURATO
+          2. altrimenti               -> SmartDefaultMinMove(scala)         FORMULA PHD2
+          3. scala non utilizzabile   -> _STANDARD_INIT                     FALLBACK
+
+        Non blocca mai l'avvio: qualunque errore fa scendere di livello e produce un
+        avviso. L'aggressivita' resta ai default PHD2 in ogni caso — il GA non la
+        caratterizza.
+
+        Da chiamare DOPO `_apply_pixel_scale_from_phd2` (serve la scala reale) e
+        PRIMA di `_init_to_phd2_standard` (che scrive il nominale su PHD2).
+        """
+        scala = self.cfg.setup.guide_pixel_scale_arcsec
+        gb = self.cfg.ga_baseline
+        corse: list[ga_baseline.GARun] = []
+        backlash_cfg: Optional[ga_baseline.BacklashState] = None
+        avvisi_lettura: list[str] = []
+
+        if gb.enabled:
+            try:
+                profilo = self.client.get_profile() or {}
+                profile_id = int(profilo.get("id", 0))
+                percorso = self.client.export_config_settings()
+                if not profile_id or not percorso:
+                    raise ValueError(
+                        f"profilo={profilo!r} percorso={percorso!r}")
+                testo = Path(percorso).read_text(encoding="utf-8", errors="replace")
+                corse = ga_baseline.parse_ga_runs(testo, profile_id)
+                backlash_cfg = ga_baseline.parse_backlash(testo, profile_id)
+                logger.info("[GA baseline] profilo %s (%s): %d caratterizzazioni in %s",
+                            profile_id, profilo.get("name", "?"), len(corse), percorso)
+            except Exception as exc:      # noqa: BLE001 — nessun errore deve bloccare
+                avvisi_lettura.append(
+                    f"lettura dei risultati GA fallita ({exc.__class__.__name__}: {exc})")
+                logger.warning("[GA baseline] lettura fallita: %s — si prosegue "
+                               "con la formula PHD2", exc)
+        else:
+            avvisi_lettura.append("baseline GA disabilitata in configurazione")
+
+        # §118 — la posa vera arriva SEMPRE: serve agli avvisi graduati, che sono
+        # utili anche (soprattutto) quando non si scarta niente. Lo scarto e' un
+        # interruttore separato, spento per difetto perche' non e' una regola di
+        # PHD2 — vedi `motivi_di_scarto`.
+        base_posa = self.base_exposure_ms
+        baseline = ga_baseline.risolvi(
+            corse=corse,
+            pixel_scale_arcsec=scala,
+            base_exposure_ms=base_posa,
+            minmove_min=min(self.cfg.ra.minmove_min, self.cfg.dec.minmove_min),
+            minmove_max=max(self.cfg.ra.minmove_max, self.cfg.dec.minmove_max),
+            snr_min=gb.snr_min,
+            elapsed_min_s=gb.elapsed_min_s,
+            campioni_min=gb.campioni_min,
+            eta_avviso_giorni=gb.eta_avviso_giorni,
+            pa_error_avviso_arcmin=gb.pa_error_avviso_arcmin,
+            richiedi_ga_di_sessione=gb.richiedi_ga_di_sessione,
+            scarta_per_posa=gb.richiedi_posa_uguale,
+            durate_posa_ms=self._valid_exposures or None,
+            backlash=backlash_cfg,
+            backlash_tolleranza=gb.backlash_tolleranza,
+        )
+        baseline.avvisi = avvisi_lettura + baseline.avvisi
+        self._baseline = baseline
+        self._nominal = baseline.as_nominal()
+
+        if silenzioso:
+            # Prima passata (§112): serve solo l'intervallo di posa. Gli avvisi li
+            # emette la seconda, quando la base e' definitiva — altrimenti si
+            # leggerebbero due volte, la prima con un confronto sulla posa ancora
+            # provvisorio.
+            return
+        if baseline.sorgente == "guide_assistant":
+            logger.info("[GA baseline] MISURATA — %s | nominale RA MinMove %.4f, "
+                        "DEC MinMove %.4f (aggr %.0f/%.0f, default PHD2)",
+                        baseline.dettaglio, baseline.ra_minmove,
+                        baseline.dec_minmove, baseline.ra_aggr, baseline.dec_aggr)
+        else:
+            logger.warning("[GA baseline] NON caratterizzata (%s) — %s | nominale "
+                           "MinMove %.4f px su entrambi gli assi",
+                           baseline.sorgente, baseline.dettaglio, baseline.ra_minmove)
+        for avviso in baseline.avvisi:
+            logger.warning("[GA baseline] %s", avviso)
+
+    @property
+    def sospeso(self) -> bool:
+        """§108/§109 — PHD2 sta MISURANDO, non guidando: l'Agente non tocca niente.
+
+        Copre l'anello aperto (Guiding Assistant, Polar Drift, spunta "Enable guide
+        output" tolta a mano) e la calibrazione. In entrambi i casi cio' che si
+        osserva non descrive la qualita' della guida, e qualunque azione falserebbe
+        la misura in corso."""
+        if self.anello_aperto or self.in_calibrazione:
+            return True
+        # Stato noto e non di guida: PHD2 sta facendo altro. `None` significa che
+        # non l'abbiamo ancora ricevuto — non si sospende su un'ignoranza.
+        if self.app_state is not None and self.app_state not in ("Guiding", "LostLock"):
+            return True
+        return False
+
+    def _ts_riferimento_ga(self) -> Optional[str]:
+        """§116 — il timestamp su cui si decide "e' arrivato qualcosa di nuovo".
+
+        E' quello della corsa piu' recente che superi i criteri di QUALITA',
+        indipendente dal filtro sulla posa: un GA appena concluso a posa diversa
+        deve essere notato lo stesso, perche' e' proprio il caso in cui ha piu' da
+        dirci. Ripiega sul timestamp adottato quando il riferimento manca.
+        """
+        b = self._baseline
+        if not b:
+            return None
+        return b.ga_riferimento_timestamp or (b.ga.timestamp if b.ga else None)
+
+    def ricontrolla_baseline_ga(self) -> bool:
+        """§108 — rilegge la caratterizzazione e la adotta se e' piu' recente.
+
+        Serve perche' nel flusso reale l'Agente e' gia' in funzione quando si lancia
+        il Guiding Assistant: NINA accende l'Agente all'avvio, PHD2 parte in
+        parallelo, e il GA lo si esegue dopo. Con la sola lettura all'avvio (§104)
+        quella caratterizzazione non sarebbe mai vista.
+
+        Il tempismo funziona: `SaveGAResults` e' chiamato dentro `MakeRecommendations`,
+        PRIMA che il GA riabiliti l'uscita di guida — quindi quando arriva l'evento di
+        riapertura i risultati sono gia' nel profilo, anche se l'operatore non ha
+        ancora premuto Applica.
+
+        Ritorna True se la caratterizzazione nuova e' quella EFFETTIVAMENTE in
+        vigore. Una corsa rilevata ma non utilizzabile alla posa in uso viene
+        comunque processata — la posa si riallinea, gli avvisi si emettono — ma
+        ritorna False, perche' il nominale non viene da lei.
+        """
+        if not self._initialized:
+            # Senza init non conosciamo ne' la scala pixel ne' la posa di base: la
+            # validazione girerebbe su presupposti assenti e potrebbe adottare una
+            # caratterizzazione fatta a un'altra posa.
+            logger.debug("[GA baseline] rilettura richiesta prima dell'init: ignorata")
+            return False
+        precedente = self._ts_riferimento_ga()
+        # §116 — PRIMA PASSATA: serve l'intervallo di posa, che e' una proprieta'
+        # del setup e non dipende dalla base. Silenziosa: gli avvisi si emettono
+        # una volta sola, alla passata definitiva.
+        self._resolve_nominal(silenzioso=True)
+        nuovo = self._ts_riferimento_ga()
+        if nuovo is None or nuovo == precedente:
+            return False
+
+        # §116 — LA POSA PRIMA DEL NOMINALE. Il §114 la spostava dopo, e questo
+        # lasciava uno stato incoerente: con un GA eseguito a 1 s che raccomanda
+        # 2 s si adottava il MinMove misurato a 1 s e SUBITO DOPO si portava la
+        # posa a 2 s, tenendo in vigore un valore che la nostra stessa regola
+        # (`richiedi_posa_uguale`) considera non utilizzabile — e che alla
+        # rilettura successiva veniva scartato in silenzio, ripiegando sulla
+        # formula. L'avvio a freddo questa disciplina ce l'aveva gia'
+        # (intervallo -> posa -> nominale): qui me l'ero dimenticata.
+        self._riallinea_posa_alla_nuova_misura()
+        # SECONDA PASSATA: ora la base e' quella definitiva, e il nominale si
+        # risolve contro di essa. O la caratterizzazione vale alla posa in vigore,
+        # o non vale e lo si dice subito invece di scoprirlo dopo.
+        self._resolve_nominal()
+        logger.warning(
+            "[GA baseline] caratterizzazione NUOVA rilevata (%s, prima %s): "
+            "sorgente %s, RA MinMove %.4f, DEC MinMove %.4f",
+            nuovo, precedente or "nessuna",
+            self._baseline.sorgente if self._baseline else "?",
+            self._nominal["ra"][1], self._nominal["dec"][1])
+        # L'ordine conta: `self._nominal` e' gia' aggiornato da `_resolve_nominal`,
+        # quindi il recinto §106 misura la distanza dal nominale NUOVO e non taglia
+        # la scrittura. Farlo prima significherebbe applicare i valori nuovi
+        # limitandoli con il recinto vecchio.
+        self._init_to_phd2_standard()
+        # Le leve sono appena saltate: le finestre e i contatori che le seguivano
+        # non descrivono piu' questo regime.
+        self._recovery_consec = 0
+        self._recovery_anchor_rms = None
+        self._recovery_direction = None
+        # §116 — il valore di ritorno resta onesto: True solo se la corsa NUOVA e'
+        # davvero quella in vigore. Rilevarla e reagirci (riallineare la posa, dire
+        # che non e' utilizzabile a questa posa) non e' averla adottata.
+        return (self._baseline is not None and self._baseline.ga is not None
+                and self._baseline.ga.timestamp == nuovo)
+
+    def risincronizza_leve(self) -> bool:
+        """§108 — rilegge da PHD2 i valori correnti delle leve.
+
+        Se l'operatore preme Applica nella finestra del Guiding Assistant (o cambia
+        un parametro a mano) mentre l'Agente e' in funzione, PHD2 cambia sotto i suoi
+        piedi e lui continua a credere il valore vecchio: il delta della modifica
+        successiva sarebbe calcolato su uno stato falso. Ritorna True se qualcosa era
+        disallineato."""
+        try:
+            params = self.client.probe_algo_params()
+        except Exception as exc:      # noqa: BLE001 — mai bloccare per una rilettura
+            logger.debug("[risinc] rilettura parametri fallita: %s", exc)
+            return False
+        cambiato = False
+        for axis_state, chiave in ((self._ra, "ra"), (self._dec, "dec")):
+            valori = params.get(chiave, {}) or {}
+            if axis_state.minmove_param in valori:
+                v = float(valori[axis_state.minmove_param])
+                if abs(v - axis_state.current_minmove) > 1e-6:
+                    logger.info("[risinc] %s MinMove: l'Agente aveva %.4f, PHD2 ha %.4f "
+                                "— allineo", chiave.upper(),
+                                axis_state.current_minmove, v)
+                    axis_state.current_minmove = v
+                    cambiato = True
+            if axis_state.aggr_param in valori:
+                v = float(valori[axis_state.aggr_param]) / max(
+                    axis_state.aggr_native_scale, 1e-9)
+                if abs(v - axis_state.current_aggr) > 1e-3:
+                    logger.info("[risinc] %s Aggr: l'Agente aveva %.1f, PHD2 ha %.1f "
+                                "— allineo", chiave.upper(),
+                                axis_state.current_aggr, v)
+                    axis_state.current_aggr = v
+                    cambiato = True
+        return cambiato
+
     def _init_to_phd2_standard(self) -> None:
         """§50 — porta le leve ai valori standard PHD2 all'inizio guida (stato iniziale
         NOTO). Algoritmo-aware: applica SOLO se l'asse usa la scala frazionaria 'aggression'
@@ -514,8 +808,9 @@ class AdaptiveController:
         → WARNING + skip di quell'asse (fail-safe). Rispetta dry_run (via _apply)."""
         if not self.cfg.control.init_to_phd2_standard:
             return
+        origine = self._baseline.sorgente if self._baseline else "fallback_phd2"
         for axis_state, limits in ((self._ra, self.cfg.ra), (self._dec, self.cfg.dec)):
-            std_aggr, std_mm = _STANDARD_INIT[axis_state.axis]
+            std_aggr, std_mm = self._nominal[axis_state.axis]
             if (not axis_state.aggr_param
                     or axis_state.aggr_native_scale != _FRACTIONAL_AGGR_SCALE):
                 logger.warning(
@@ -535,11 +830,12 @@ class AdaptiveController:
             if axis_state.minmove_param and std_mm != axis_state.current_minmove:
                 self._apply(axis_state, limits, axis_state.minmove_param,
                             axis_state.current_minmove, std_mm,
-                            f"[init-std] {axis_state.axis.upper()} MinMove → {std_mm:.2f} (standard PHD2)",
+                            f"[init-std] {axis_state.axis.upper()} MinMove → {std_mm:.4f} "
+                            f"(nominale §104: {origine})",
                             is_minmove=True, softening_source="init_standard")
                 axis_state.current_minmove = std_mm
-            logger.info("[init-std] Asse %s ai valori standard: aggr=%.0f (native %.2f) minmove=%.2f",
-                        axis_state.axis.upper(), std_aggr,
+            logger.info("[init-std] Asse %s al nominale (%s): aggr=%.0f (native %.2f) minmove=%.4f",
+                        axis_state.axis.upper(), origine, std_aggr,
                         std_aggr * axis_state.aggr_native_scale, std_mm)
 
     def reinitialize(self) -> None:
@@ -834,6 +1130,9 @@ class AdaptiveController:
         inversion_capped, derived_low = d["inversion_capped"], d["derived_low"]
         self._rms_baseline_done = True
         self._rms_baseline_rejected = False
+        # §120 — la baseline appena formata e' la miglior stima dell'RMS osservato:
+        # e' il momento giusto per scorporare il contributo del rig.
+        self._impara_contributo_rig(new_baseline)
         self._baseline_finalize_time = time.monotonic()   # §25: timer del prossimo refresh
 
         fb_label = (" [FALLBACK best-%d%%]" % round(ac.baseline_best_fraction * 100)) if fallback else ""
@@ -860,6 +1159,129 @@ class AdaptiveController:
                 new_low, low_tag,
             )
 
+    def _aggiorna_fase_phd2(self) -> None:
+        """§122 — rinfresca collegamento e calibrazione, non piu' di una volta ogni
+        `FASE_TTL_S`. Le due chiamate passano dal lock RPC del client, quindi si
+        possono fare anche dal thread che serve lo stato.
+
+        Serve un poll e non basta un evento: le fasi 0 e 1 (niente periferiche,
+        non calibrato) si vivono a guida FERMA, e il ciclo eventi in quel momento
+        non gira — `GuideStep` non arriva se non si sta guidando.
+        """
+        ora = time.monotonic()
+        if ora - self._fase_ultimo_poll < FASE_TTL_S:
+            return
+        self._fase_ultimo_poll = ora
+        for attributo, metodo in (("_phd2_connesso", "get_connected"),
+                                  ("_phd2_calibrato", "get_calibrated")):
+            try:
+                setattr(self, attributo, bool(getattr(self.client, metodo)()))
+            except Exception:
+                # PHD2 puo' non rispondere: si resta sull'ultimo valore noto
+                # invece di dichiarare una fase su un'ignoranza.
+                pass
+
+    @property
+    def fase(self) -> str:
+        """§122 — in quale punto della serata siamo, dal punto di vista di PHD2.
+
+        L'ordine dei controlli e' quello delle PRIORITA', non del flusso: una
+        misura in corso conta piu' di "non ancora calibrato", perche' descrive cosa
+        sta succedendo adesso.
+
+        La catena della serata e' imposta da PHD2, non da noi: la guida non parte
+        senza calibrazione (`guider.cpp`, BeginCalibration), e il pulsante Inizia
+        dell'Assistente resta grigio finche' la guida non e' attiva
+        (`guiding_assistant.cpp:1738`, `m_start->Enable(pGuider->IsGuiding())`).
+        Quindi: calibri -> guidi -> solo allora l'Assistente si accende.
+        """
+        if self.in_calibrazione:
+            return "calibrazione"
+        if self.anello_aperto:
+            return "misura"
+        if self._phd2_connesso is False:
+            return "non_connesso"
+        if self._phd2_calibrato is False:
+            return "non_calibrato"
+        b = self._baseline
+        misurata = bool(b and b.sorgente == "guide_assistant")
+        stanotte = bool(b and b.ga_di_stanotte)
+        if self.app_state in ("Guiding", "LostLock"):
+            if misurata:
+                return "guida_ok" if stanotte else "guida_ga_vecchio"
+            return "guida_stimata"
+        if misurata:
+            return "pronto_ga_stanotte" if stanotte else "pronto_ga_vecchio"
+        return "pronto_senza_ga"
+
+    def _pavimento_arcsec(self):
+        """Il pavimento misurato dal GA per la sessione in corso, in secondi d'arco."""
+        if not self.cfg.auto_calibration.ancoraggio_ga_enabled:
+            return None
+        b = self._baseline
+        return b.pavimento_totale_arcsec if b else None
+
+    def _baseline_efficace(self, osservata: float) -> tuple:
+        """§120 — la baseline da usare: calcolata dal pavimento, o quella osservata.
+
+        Con pavimento e contributo del rig noti la baseline non si osserva piu':
+        si compone. E' cio' che rompe la circolarita' — l'osservata e' il RISULTATO
+        del lavoro dell'Agente, il pavimento no (in quei minuti l'Agente era fermo).
+
+        L'osservata resta in due casi: quando manca un ingresso (prima notte, GA mai
+        eseguito) e quando le due divergono troppo — segno che quel GA non descrive
+        questa sessione, e allora e' meglio fidarsi di cio' che si vede.
+        """
+        ac = self.cfg.auto_calibration
+        pavimento = self._pavimento_arcsec()
+        if pavimento is None:
+            return osservata, {"ancorata": False, "motivo": "nessun pavimento dal GA"}
+        rig = self._storico_rig.valore(self._baseline_setup_id)
+        if not rig:
+            return osservata, {"ancorata": False, "pavimento": round(pavimento, 3),
+                               "motivo": "contributo del rig non ancora appreso"}
+        prevista = ancoraggio.baseline_prevista(pavimento, rig)
+        if prevista is None:
+            return osservata, {"ancorata": False, "pavimento": round(pavimento, 3),
+                               "motivo": "previsione non calcolabile"}
+        if osservata and abs(prevista - osservata) / osservata > ac.ancoraggio_divergenza_max:
+            logger.warning(
+                "[ancoraggio] prevista %.3f dal pavimento %.3f piu' rig %.3f, ma "
+                "osservo %.3f: divergenza oltre il %.0f%%. Uso l'osservata — quel GA "
+                "non descrive questa sessione.",
+                prevista, pavimento, rig, osservata, ac.ancoraggio_divergenza_max * 100)
+            return osservata, {"ancorata": False, "pavimento": round(pavimento, 3),
+                               "rig": round(rig, 3), "prevista": round(prevista, 3),
+                               "motivo": "divergenza dall'osservata"}
+        return prevista, {"ancorata": True, "pavimento": round(pavimento, 3),
+                          "rig": round(rig, 3), "prevista": round(prevista, 3),
+                          "osservata": round(osservata, 3), "motivo": "pavimento GA"}
+
+    def _impara_contributo_rig(self, osservata: float) -> None:
+        """§120 — scorpora il contributo del rig dal pavimento e lo mette da parte.
+
+        Una volta per formazione della baseline, non a ogni fotogramma: e' una
+        proprieta' del setup, non un segnale da inseguire.
+        """
+        pavimento = self._pavimento_arcsec()
+        if pavimento is None or not osservata:
+            return
+        rig = ancoraggio.contributo_rig(osservata, pavimento)
+        if rig is None:
+            # Guidato al di sotto del pavimento: succede per davvero quando il GA e'
+            # stato fatto a declinazione 0 (~45 gradi di altezza) e si riprende piu'
+            # in alto, dove il seeing e' migliore. Non e' un campione valido.
+            logger.info(
+                "[ancoraggio] RMS osservato %.3f non sopra il pavimento %.3f: "
+                "nessun campione del rig da questa sessione", osservata, pavimento)
+            return
+        mediana = self._storico_rig.aggiungi(self._baseline_setup_id, rig)
+        logger.info(
+            "[ancoraggio] contributo del rig da questa sessione %.3f "
+            "(osservato %.3f meno pavimento %.3f) | mediana su %d notti: %.3f",
+            rig, osservata, pavimento,
+            len(self._storico_rig.campioni(self._baseline_setup_id)), mediana)
+
     def _apply_derived_thresholds(self, new_baseline: float) -> dict:
         """§24 — deriva rms_high/rms_low da `new_baseline` e li scrive in cfg.thresholds
         + analyzer. Punto UNICO di derivazione soglie, condiviso dal finalize (§33/§25) e
@@ -868,10 +1290,22 @@ class AdaptiveController:
         `_rms_baseline_value` né i timer. Ritorna i valori utili al logging."""
         ac = self.cfg.auto_calibration
         scale = self.cfg.setup.guide_pixel_scale_arcsec
-        # CAP proporzionale §23/§24 — MANTENUTO: tetto di sicurezza contro soglie troppo larghe.
-        cap_proporzionale = ac.rms_high_max_factor * scale
-        cap_efficace = max(ac.rms_high_min_arcsec,
-                           min(ac.rms_high_max_arcsec, cap_proporzionale))
+        pavimento = self._pavimento_arcsec()
+        # §120 — la baseline si CALCOLA dal pavimento quando si puo'. L'osservata
+        # resta il ripiego e la rete di sicurezza (vedi `_baseline_efficace`).
+        osservata = new_baseline
+        new_baseline, self._ancoraggio_stato = self._baseline_efficace(osservata)
+        # §120 — il tetto: ancorato al pavimento, che sa cosa era ottenibile stanotte
+        # su QUESTO setup. Il vecchio clamp(fattore x scala, 0.70, 1.00) valeva 1.00"
+        # per qualunque scala >= 0.5"/px, cioe' per tutti: su un cercatore che guida
+        # a 1.5" entrambe le soglie finivano SOTTO la baseline e quell'utente aveva
+        # l'Agente in allarme tutta la notte. Senza pavimento resta la formula
+        # vecchia, che e' l'unico riparo disponibile.
+        prevista = self._ancoraggio_stato.get("prevista")
+        cap_efficace, cap_da_pavimento = ancoraggio.cap_ancorato(
+            prevista, scale, ac.rms_high_max_factor,
+            ac.rms_high_min_arcsec, ac.rms_high_max_arcsec)
+        cap_proporzionale = ac.rms_high_max_factor * (prevista or scale)
         derived_high = ac.rms_high_factor * new_baseline
         new_high = min(cap_efficace, derived_high)
         self._rms_high_cap_active = (derived_high > cap_efficace)
@@ -894,6 +1328,8 @@ class AdaptiveController:
             "new_high": new_high, "new_low": new_low,
             "cap_proporzionale": cap_proporzionale, "cap_efficace": cap_efficace,
             "inversion_capped": inversion_capped, "derived_low": derived_low,
+            "cap_da_pavimento": cap_da_pavimento, "baseline_usata": new_baseline,
+            "baseline_osservata": osservata,
         }
 
     def _continuous_track_baseline(self) -> None:
@@ -980,15 +1416,28 @@ class AdaptiveController:
         }
         return cap_px
 
-    def _cap_minmove_up(self, new_mm: float, limits: AxisLimits) -> float:
+    def _cap_minmove_up(self, new_mm: float, limits: AxisLimits,
+                        axis_state: Optional["AxisState"] = None) -> float:
         """§51 — applica il cap adattivo a un MinMove che sta salendo. Tetto superiore:
         new_mm non supera cap_px; il floor minmove_min resta la barriera inferiore.
         Fallback (cap None): ritorna new_mm invariato (comportamento legacy).
         §0-bis: se il cap TAGLIA la richiesta (cap_px < new_mm) registra clamping_active
-        con persistenza anti-flicker (per il badge ACTIVE della dashboard)."""
+        con persistenza anti-flicker (per il badge ACTIVE della dashboard).
+
+        §104 — il cap non puo' scendere sotto il NOMINALE dell'asse. Il cap deriva
+        dall'RMS *ottenuto* (k x baseline filtrata), il nominale dal seeing *misurato*
+        dal Guiding Assistant: sono due grandezze diverse, e migliorando la guida il
+        primo scende sotto il secondo. Senza questo pavimento il cap contraddirebbe
+        la misura proprio quando la configurazione funziona — un anello che punisce
+        il successo. Esempio reale: nominale DEC 0.95 px, cap 0.94 px gia' a
+        baseline 0.60". Il cap conserva il suo scopo (frenare la crescita OLTRE il
+        misurato) ma non puo' negarlo."""
         cap_px = self._minmove_cap_px()
         if cap_px is None:
             return new_mm
+        if axis_state is not None:
+            nominale = self._nominal.get(axis_state.axis, (0.0, 0.0))[1]
+            cap_px = max(cap_px, nominale)
         if cap_px < new_mm:   # il controllore chiedeva più del cap -> il cap ha tagliato
             self._minmove_clamp_active_until = time.monotonic() + _MINMOVE_CLAMP_PERSIST_S
         return max(limits.minmove_min, min(new_mm, cap_px))
@@ -1429,7 +1878,7 @@ class AdaptiveController:
                     and mm_elapsed >= minmove_cooldown):
                 old_mm = axis_state.current_minmove
                 new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
-                new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo
+                new_mm = self._cap_minmove_up(new_mm, limits, axis_state)   # §51 cap adattivo
                 if new_mm != old_mm:
                     reason = (
                         f"Seeing degradato - aumento MinMove "
@@ -1564,7 +2013,7 @@ class AdaptiveController:
         mai OLTRE il nominale §50) + MinMove GIÙ (mai SOTTO il nominale §50). Un gradino per
         cooldown; l'esito è valutato in _finalize_recovery_windup (KEEP/STOP)."""
         lo = self.cfg.lever_optimization
-        nom_aggr, nom_mm = _STANDARD_INIT[axis_state.axis]
+        nom_aggr, nom_mm = self._nominal[axis_state.axis]
         anchor = (self._recovery_anchor_rms if self._recovery_anchor_rms is not None
                   else snapshot.rms_total)
         # Aggr SU verso il nominale §50 (solo Hysteresis/Resist Switch: scala frazionaria).
@@ -1611,7 +2060,7 @@ class AdaptiveController:
             return
         old_mm = axis_state.current_minmove
         new_mm = min(limits.minmove_max, old_mm + limits.minmove_step)
-        new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo
+        new_mm = self._cap_minmove_up(new_mm, limits, axis_state)   # §51 cap adattivo
         if new_mm == old_mm:
             return
         lo_factor = self.cfg.lever_optimization.minmove_recovery_factor
@@ -1668,7 +2117,7 @@ class AdaptiveController:
         """§53 — True se almeno un asse è più MORBIDO dello standard §50 (aggr sotto il
         nominale su assi a scala frazionaria, oppure MinMove sopra il nominale)."""
         for axis_state in (self._ra, self._dec):
-            nom_aggr, nom_mm = _STANDARD_INIT[axis_state.axis]
+            nom_aggr, nom_mm = self._nominal[axis_state.axis]
             if (axis_state.aggr_native_scale == _FRACTIONAL_AGGR_SCALE
                     and axis_state.aggr_param
                     and axis_state.current_aggr < nom_aggr - 1e-6):
@@ -1885,7 +2334,7 @@ class AdaptiveController:
             new_mm = (min(limits.minmove_max, old_mm + step) if proposal.minmove > 0
                       else max(limits.minmove_min, old_mm - step))
             if proposal.minmove > 0:
-                new_mm = self._cap_minmove_up(new_mm, limits)   # §51 cap adattivo (solo in salita)
+                new_mm = self._cap_minmove_up(new_mm, limits, axis_state)   # §51 cap adattivo (solo in salita)
             if new_mm != old_mm:
                 actions.append(self._apply(axis_state, limits, axis_state.minmove_param,
                                            old_mm, new_mm, reason, is_minmove=True,
@@ -2176,14 +2625,15 @@ class AdaptiveController:
                 old, new = axis_state.current_aggr, float(data["current_aggr"])
                 if abs(new - old) > 1e-9:
                     self._apply(axis_state, limits, axis_state.aggr_param, old, new,
-                                "[mode transition] ripristino Aggressivita baseline")
+                                "[mode transition] ripristino Aggressivita baseline",
+                                bypass_banda=True)
                 axis_state.current_aggr = new
             if data.get("minmove_param") and axis_state.minmove_param:
                 old, new = axis_state.current_minmove, float(data["current_minmove"])
                 if abs(new - old) > 1e-9:
                     self._apply(axis_state, limits, axis_state.minmove_param, old, new,
                                 "[mode transition] ripristino MinMove baseline",
-                                is_minmove=True)
+                                is_minmove=True, bypass_banda=True)
                 axis_state.current_minmove = new
 
     # ------------------------------------------------------------------ #
@@ -2428,6 +2878,74 @@ class AdaptiveController:
 
         return actions
 
+    def _riallinea_posa_alla_nuova_misura(self) -> None:
+        """§114 — dopo un GA eseguito a sessione avviata, anche la posa segue.
+
+        Il §113 decide la base leggendo la caratterizzazione, ma lo fa in
+        `initialize()`, cioe' UNA volta all'avvio. Il flusso reale e' l'opposto:
+        NINA accende l'Agente, PHD2 parte in parallelo, e il Guiding Assistant lo
+        si esegue dopo. In quell'ordine la posa veniva decisa quando la misura
+        nuova non esisteva ancora, e alla fine del GA l'Agente adottava il MinMove
+        nuovo (§108) ma restava sulla posa vecchia — che l'operatore doveva
+        correggere a mano leggendo la raccomandazione.
+
+        Qui si applica alla posa la stessa regola gia' usata per le altre leve,
+        nello stesso istante: non si aggiunge un momento nuovo in cui l'Agente
+        scrive su PHD2, si usa quello che c'e' gia'.
+
+        La gerarchia del §113 resta intatta: se la posa attuale e' avallata
+        dall'intervallo misurato, non si tocca — anche quando il GA ne
+        raccomanderebbe un'altra.
+        """
+        if not self._baseline or self._baseline.posa_min_s is None:
+            return
+        consigliata = self._baseline.posa_consigliata_ms
+        if not consigliata:
+            # Caratterizzazione senza raccomandazione utilizzabile: non e' un
+            # motivo per riscrivere la posa con un valore di ripiego a meta'
+            # sessione. Si lascia dov'e'.
+            return
+
+        try:
+            letta = self.client.get_exposure()
+        except Exception as e:
+            logger.error("[esposizione] non riesco a rileggere la posa da PHD2: %s", e)
+            return
+
+        if letta and letta in self._basi_ammesse():
+            if letta != self.base_exposure_ms:
+                logger.warning(
+                    "[esposizione] la nuova caratterizzazione avalla i %sms che "
+                    "PHD2 ha adesso: diventano la base della sessione (era %sms).",
+                    letta, self.base_exposure_ms)
+                self.base_exposure_ms = letta
+                self.current_exposure_ms = letta
+                self._phd2_exposure_ms = letta
+                self.exposure_state = ExposureState.NOMINAL
+            return
+
+        logger.warning(
+            "[esposizione] PHD2 e' a %sms, che la nuova caratterizzazione non "
+            "avalla: porto la posa a %sms, il valore misurato dal Guiding "
+            "Assistant.", letta, consigliata)
+        try:
+            self.client.set_exposure(consigliata)
+        except Exception as e:
+            # La base resta quella di prima: senza la scrittura, cambiarla
+            # significherebbe credere a una posa che PHD2 non ha.
+            logger.error("[esposizione] PHD2 ha rifiutato %sms: %s", consigliata, e)
+            return
+
+        self.base_exposure_ms = consigliata
+        self.current_exposure_ms = consigliata
+        self._phd2_exposure_ms = consigliata
+        # La base e' stata ridefinita: un boost ereditato dal regime precedente
+        # non ha piu' un riferimento a cui tornare.
+        self.exposure_state = ExposureState.NOMINAL
+        # Il cambio di posa azzera le statistiche di guida: la decisione
+        # successiva va presa su fotogrammi nuovi, non sul transitorio.
+        self.last_exposure_action_time = time.monotonic()
+
     def _reconcile_base_exposure(self, full: bool) -> None:
         """§95 — stabilisce la Base della sessione. Prima si leggeva e basta:
         `base = client.get_exposure()`, cioe' "quello che trovo in PHD2". Un
@@ -2452,12 +2970,81 @@ class AdaptiveController:
             self.current_exposure_ms = letta or self.base_exposure_ms
             return
 
+        # §113 — PRIORITA' DELLA BASE. Fino alla 2.17 vinceva sempre il valore
+        # dichiarato in config: era l'unico riferimento esistente, e il §95 nasce
+        # per impedire che una posa lasciata da un'emergenza diventasse la base
+        # della notte dopo (17-18/8: base ereditata a 4000 = tetto, controller
+        # bloccato 4 ore). Ora un riferimento migliore c'e': l'intervallo misurato
+        # dal Guiding Assistant.
+        #
+        #   1. la posa che PHD2 ha adesso, SE il GA la avalla  -> si rispetta
+        #   2. la posa consigliata dal GA                      -> si scrive su PHD2
+        #   3. il target dichiarato in config                  -> ripiego senza GA
+        #
+        # La protezione del §95 non si perde: e' il MARGINE a garantirla. Una posa
+        # al tetto non ha gradini sopra di se', quindi non e' mai ammessa come base
+        # — verificato su tutte le scale, con e senza caratterizzazione.
+        ammesse = self._basi_ammesse()
+        consigliata = self._baseline.posa_consigliata_ms if self._baseline else None
+
+        # L'avallo deve venire dalla CARATTERIZZAZIONE, non dalla scala di ripiego:
+        # senza una misura non esiste nessuno che possa dire "questa posa va bene",
+        # e prendere quello che si trova in PHD2 e' precisamente cio' che il §95
+        # impedisce. Senza GA si scende ai rami successivi, comportamento invariato.
+        avallo_ga = (self._baseline is not None
+                     and self._baseline.posa_min_s is not None)
+
+        if avallo_ga and letta and ammesse and letta in ammesse:
+            # L'operatore ha scelto una posa che la caratterizzazione avalla:
+            # e' una scelta informata, non un residuo. Non si tocca.
+            self.base_exposure_ms = letta
+            self.current_exposure_ms = letta
+            self._phd2_exposure_ms = letta
+            if consigliata and letta != consigliata:
+                logger.info(
+                    "[esposizione] base %sms: presa da PHD2 ed avallata dalla "
+                    "caratterizzazione (che consiglierebbe %sms, ma %sms e' dentro "
+                    "l'intervallo misurato).", letta, consigliata, letta)
+            else:
+                logger.info("[esposizione] base %sms, dalla caratterizzazione.", letta)
+            return
+
+        if consigliata:
+            self.base_exposure_ms = consigliata
+            self.current_exposure_ms = consigliata
+            if letta != consigliata:
+                logger.warning(
+                    "[esposizione] PHD2 era a %sms, che la caratterizzazione non "
+                    "avalla: porto la posa a %sms, il valore misurato dal Guiding "
+                    "Assistant per questo setup.", letta, consigliata)
+                try:
+                    self.client.set_exposure(consigliata)
+                except Exception as e:
+                    logger.error("[esposizione] PHD2 ha rifiutato %sms: %s",
+                                 consigliata, e)
+            self._phd2_exposure_ms = consigliata
+            return
+
         if not target:
             self.base_exposure_ms = letta
             self.current_exposure_ms = letta
             return
 
         target = self._snap_exposure(int(target))
+        # §112 — l'ammissibilita' della base non si puo' piu' decidere al caricamento
+        # del config: dipende dall'intervallo misurato dal GA, che al caricamento non
+        # e' ancora noto. Si valuta qui, dopo che la caratterizzazione e' stata letta.
+        ammesse = self._basi_ammesse()
+        if ammesse and target not in ammesse:
+            ripiego = max(g for g in ammesse if g <= target) if any(
+                g <= target for g in ammesse) else min(ammesse)
+            logger.error(
+                "[esposizione] base %sms NON AMMESSA: deve lasciare almeno %d gradini "
+                "sopra di se' nella scala %s (dall'intervallo misurato dal Guiding "
+                "Assistant). Uso %sms — correggi target_exposure_ms in config.toml.",
+                target, self.cfg.exposure_dynamic.max_steps_above_base,
+                ammesse, ripiego)
+            target = ripiego
         self.base_exposure_ms = target
         if letta != target:
             logger.warning(
@@ -2475,6 +3062,54 @@ class AdaptiveController:
             logger.info("[esposizione] riferimento di sessione %sms (PHD2 concorde)", target)
         self.current_exposure_ms = target
         self._phd2_exposure_ms = target
+
+    def _scala_da_ga(self) -> list[int]:
+        """§112 — i tempi di posa che PHD2 offre, ristretti all'intervallo del GA.
+        Lista vuota se manca la caratterizzazione o le durate valide."""
+        if not self.cfg.exposure_dynamic.pathb_dentro_intervallo_ga:
+            return []
+        if self._baseline is None or not self._valid_exposures:
+            return []
+        mn, mx = self._baseline.posa_min_s, self._baseline.posa_max_s
+        if not mn or not mx:
+            return []
+        return sorted(d for d in self._valid_exposures
+                      if mn * 1000 - 1 <= d <= mx * 1000 + 1)
+
+    def _basi_ammesse(self) -> list[int]:
+        """§112 — quali pose possono fare da BASE di sessione.
+
+        La regola vera e' sempre stata "la base deve lasciare margine per salire, e
+        il tetto non dev'essere un punto di partenza". Prima era scritta come
+        posizione (`scala[:2]`); ora e' derivata: **una base e' ammessa se ha almeno
+        `max_steps_above_base` gradini sopra di se'**. Stesso risultato sulla scala
+        storica, ma segue la scala invece di presupporla."""
+        scala = self._scala_da_ga() or sorted(
+            self.cfg.exposure_dynamic.exposure_ladder_ms or [])
+        if not scala:
+            return []
+        # §113 — quanto spazio pretendere sopra la base.
+        #
+        # Senza caratterizzazione il margine e' `max_steps_above_base`: non
+        # avendo nessuna misura di cui fidarsi, si tiene largo. Con l'intervallo
+        # del Guiding Assistant la garanzia di sensatezza la da' l'intervallo
+        # stesso, e resta da difendere una cosa sola — che la base non sia il
+        # gradino piu' alto. Quello era il vero difetto del 17-18/8: base = tetto,
+        # zero gradi di liberta' in salita e in discesa (il pavimento E' la base).
+        # Due gradini erano una mia scelta prudenziale, non un requisito: con una
+        # misura alle spalle pretenderli significherebbe rifiutare pose che il GA
+        # avalla — cioe' dare piu' peso alla nostra comodita' che alla misura.
+        con_ga = self._baseline is not None and self._baseline.posa_min_s is not None
+        margine = 1 if con_ga else max(1, self.cfg.exposure_dynamic.max_steps_above_base)
+        ammesse = [g for i, g in enumerate(scala) if len(scala) - 1 - i >= margine]
+        # §113 — la posa CONSIGLIATA dal Guiding Assistant e' ammessa per
+        # definizione, anche se sopra di lei restano pochi gradini. Il margine serve
+        # a lasciare spazio all'adattamento; pretenderlo sopra un valore MISURATO
+        # significherebbe rifiutare la misura in nome di una nostra comodita'.
+        consigliata = self._baseline.posa_consigliata_ms if self._baseline else None
+        if consigliata and consigliata in scala and consigliata not in ammesse:
+            ammesse.append(consigliata)
+        return sorted(ammesse)
 
     def _exposure_ladder(self) -> list[int]:
         """§95 — i gradini dell'esposizione, dalla base al tetto.
@@ -2495,7 +3130,26 @@ class AdaptiveController:
         ed = self.cfg.exposure_dynamic
         tetto = self.cfg.emergency.max_exposure_ms
 
-        # §98 — scala ESPLICITA (il caso normale).
+        # §112 — la scala DERIVATA: i tempi che PHD2 offre davvero, dentro
+        # l'intervallo che il Guiding Assistant ha misurato per questo setup.
+        #
+        # Prima era una lista scritta a mano `[1000, 2000, 3000, 4000]`, e con essa
+        # la regola "la base puo' essere solo i due gradini piu' bassi" — che voleva
+        # dire "lascia margine per salire" ma lo diceva come POSIZIONE. Risultato:
+        # un setup a cui il GA raccomanda 3 s non poteva dichiararlo, per un motivo
+        # senza alcun rapporto con la fisica. Con la scala derivata dall'intervallo
+        # 2.0-4.0 i gradini diventano 2000/2500/3000/3500/4000 e 3000 ha il margine
+        # che serve.
+        #
+        # Fuori dall'intervallo del GA la posa e' sbagliata per MISURA: nessuna
+        # condizione di guida giustifica di uscirne. Senza caratterizzazione si
+        # ricade sulla scala esplicita di configurazione.
+        scala_ga = self._scala_da_ga()
+        if scala_ga:
+            scala = [g for g in scala_ga if base <= g <= tetto]
+            return scala or [base]
+
+        # §98 — scala ESPLICITA (ripiego senza caratterizzazione).
         if ed.exposure_ladder_ms and base in ed.exposure_ladder_ms:
             scala = []
             for gradino in sorted(ed.exposure_ladder_ms):
@@ -2538,12 +3192,46 @@ class AdaptiveController:
             return target_ms
         return min(valid, key=lambda e: abs(e - target_ms))
 
+    def _limiti_effettivi(self, axis_state: AxisState,
+                          limits: AxisLimits) -> tuple[float, float]:
+        """§106 — (aggr minimo, MinMove massimo) realmente raggiungibili da un asse.
+
+        Non bastano i limiti statici: dal §106 il bordo lo decide anche il recinto
+        attorno al nominale, e dal §51 il cap adattivo. "Leva esaurita" significa
+        "non puo' andare oltre", qualunque sia la ragione."""
+        aggr_min = limits.aggr_min
+        mm_max = limits.minmove_max
+        nominale = self._nominal.get(axis_state.axis)
+        b = self.cfg.banda
+        if b.enabled and nominale is not None:
+            if b.aggr_punti > 0:
+                aggr_min = max(aggr_min, nominale[0] - b.aggr_punti)
+            if b.minmove_px > 0:
+                mm_max = min(mm_max, nominale[1] + b.minmove_px)
+        cap_px = self._minmove_cap_px()
+        if cap_px is not None:
+            # stesso cap effettivo di `_cap_minmove_up`: non scende sotto il nominale
+            if nominale is not None:
+                cap_px = max(cap_px, nominale[1])
+            mm_max = min(mm_max, cap_px)
+        return aggr_min, mm_max
+
     def _axis_levers_saturated(self, axis_state: AxisState,
                                limits: AxisLimits) -> bool:
-        """True se le leve cheap (aggressiveness+MinMove) di un asse hanno saturato."""
-        aggr_at_min = axis_state.current_aggr <= (limits.aggr_min + 1.0)
+        """True se le leve cheap (aggressiveness+MinMove) di un asse hanno saturato.
+
+        §106 — il confronto e' con i limiti EFFETTIVI, non con quelli statici.
+        Con il recinto attivo l'aggressivita' non arriva mai ad `aggr_min` e il
+        MinMove mai a `minmove_max`: confrontarsi con quelli terrebbe l'escalation
+        gate chiuso per sempre, e Path B (aumento esposizione a seeing degradato)
+        diventerebbe codice morto. Conseguenza voluta: il gate si apre PRIMA di
+        quanto facesse, perche' le leve economiche finiscono prima — ed e' la
+        logica del recinto portata fino in fondo. Fra una zona morta sei volte il
+        valore misurato e una posa piu' lunga, la seconda e' piu' difendibile."""
+        aggr_min_eff, mm_max_eff = self._limiti_effettivi(axis_state, limits)
+        aggr_at_min = axis_state.current_aggr <= (aggr_min_eff + 1.0)
         mm_at_max = (axis_state.current_minmove
-                     >= (limits.minmove_max - limits.minmove_step))
+                     >= (mm_max_eff - limits.minmove_step))
         elapsed_aggr = time.monotonic() - axis_state.last_action_time
         elapsed_mm = time.monotonic() - axis_state.last_minmove_action_time
         cooldown = self.cfg.control.cooldown_seconds
@@ -2773,6 +3461,46 @@ class AdaptiveController:
     #  Applicazione modifiche                                             #
     # ------------------------------------------------------------------ #
 
+    def _entro_la_banda(self, axis_state: "AxisState", old_value: float,
+                        new_value: float, is_minmove: bool) -> float:
+        """§106 — limita il valore alla banda attorno al nominale (§104).
+
+        Il nominale dice DA DOVE si parte; la banda dice QUANTO ci si puo'
+        allontanare. E' una regola, non un giudizio: non richiede una diagnosi e
+        non puo' essere incerta. Il Guardian resta l'arbitro dei casi in cui
+        un'evidenza c'e' — nella sessione 22-23/8 sono 294 CONFIRM e 0 attenuazioni,
+        perche' nel 78% dei tick la diagnosi e' UNCERTAIN e la via fail-safe e'
+        l'unica percorsa: nel restante non serve un arbitro, serve un recinto.
+
+        E' un CRICCHETTO contro la deriva, non una molla di richiamo: se il valore
+        e' gia' fuori banda (leve ereditate, sessione precedente, intervento manuale)
+        non lo si strattona dentro — lo si lascia dov'e' e gli si impedisce solo di
+        allontanarsi ancora. Avvicinarsi al nominale e' sempre permesso.
+        """
+        b = self.cfg.banda
+        if not b.enabled:
+            return new_value
+        nominale = self._nominal.get(axis_state.axis)
+        if nominale is None:
+            return new_value
+        centro = nominale[1] if is_minmove else nominale[0]
+        raggio = b.minmove_px if is_minmove else b.aggr_punti
+        if raggio <= 0:
+            return new_value
+        # distanza massima concessa: la banda, oppure dove si e' gia' se piu' lontano
+        concessa = max(raggio, abs(old_value - centro))
+        if abs(new_value - centro) <= concessa + 1e-9:
+            return new_value
+        limitato = centro + concessa * (1.0 if new_value > centro else -1.0)
+        if abs(limitato - new_value) > 1e-9:
+            self._banda_limita_fino = time.monotonic() + _MINMOVE_CLAMP_PERSIST_S
+            logger.info(
+                "[banda §106] %s %s: richiesto %.4f, limitato a %.4f "
+                "(nominale %.4f +/- %.4f)",
+                axis_state.axis.upper(), "MinMove" if is_minmove else "Aggr",
+                new_value, limitato, centro, raggio)
+        return limitato
+
     def _apply(
         self,
         axis_state: AxisState,
@@ -2783,11 +3511,32 @@ class AdaptiveController:
         reason: str,
         is_minmove: bool = False,
         softening_source: str = "other",
+        bypass_banda: bool = False,
     ) -> ControlAction:
-        """Invia (o simula) la modifica a PHD2."""
+        """Invia (o simula) la modifica a PHD2.
+
+        §106 — punto UNICO in cui le leve vengono scritte dai percorsi adattivi,
+        quindi punto unico in cui applicare il recinto. `bypass_banda` serve ai
+        ripristini (valori utente salvati dal Baseline Guardian), che devono poter
+        uscire dalla banda: sono un ritorno alla configurazione dell'utente, non
+        un adattamento. Il restore di shutdown non passa nemmeno di qui — scrive
+        diretto sul client — quindi non e' toccato in nessun caso."""
+        if not bypass_banda:
+            new_value = self._entro_la_banda(axis_state, old_value, new_value, is_minmove)
         # §47 — MinMove efficace in arcsec (px × pixel-scale viva) per l'attribuzione.
         mm_arcsec = (round(new_value * self.cfg.setup.guide_pixel_scale_arcsec, 3)
                      if is_minmove else None)
+        if abs(new_value - old_value) < 1e-9:
+            # La banda ha annullato la richiesta: nessuna scrittura su PHD2, ma
+            # l'azione viene comunque restituita con la sua attribuzione, perche'
+            # "il controllore ha proposto e il recinto ha fermato" e' un fatto che
+            # deve restare nei log e nei conteggi.
+            return ControlAction(
+                timestamp=time.time(), axis=axis_state.axis, param=param_name,
+                old_value=old_value, new_value=old_value,
+                reason=f"[banda §106] fermato al limite — {reason}",
+                dry_run=True, softening_source=softening_source,
+                minmove_arcsec=mm_arcsec)
         action = ControlAction(
             timestamp=time.time(),
             axis=axis_state.axis,
@@ -2865,6 +3614,9 @@ class AdaptiveController:
 
     def get_status(self) -> dict:
         """Snapshot dello stato del controller per la dashboard."""
+        # §122 — l'unico punto in cui la fase serve davvero e' quando qualcuno la
+        # guarda. Il TTL interno impedisce che una dashboard aperta martelli PHD2.
+        self._aggiorna_fase_phd2()
         sat_active = self.saturated_lock_since is not None
         sat_elapsed = 0.0
         if sat_active:
@@ -2872,6 +3624,11 @@ class AdaptiveController:
 
         last_action = self.action_history[-1] if self.action_history else None
         return {
+            # §122 — la fase della serata: e' quella che governa il banner che
+            # nomina l'Assistente di guida in ogni stato.
+            "fase": self.fase,
+            "phd2_connesso": self._phd2_connesso,
+            "phd2_calibrato": self._phd2_calibrato,
             "guiding_state": self.guiding_state.name,
             "dry_run": self.dry_run,
             # §63 — ciclo del motore per la dashboard: distingue "in raccolta dati"
@@ -2939,6 +3696,12 @@ class AdaptiveController:
                 ),
                 "baseline_done": self._rms_baseline_done,
                 "baseline_rejected": self._rms_baseline_rejected,
+                # §120 — da dove viene la baseline: calcolata dal pavimento del GA
+                # oppure osservata come prima, col motivo quando non e' ancorata.
+                "ancoraggio": dict(
+                    self._ancoraggio_stato,
+                    rig_campioni=len(self._storico_rig.campioni(
+                        self._baseline_setup_id))),
                 "baseline_progress": (
                     f"{len(self._rms_baseline_samples)}/"
                     f"{self.cfg.auto_calibration.baseline_window_frames}"
@@ -2995,6 +3758,42 @@ class AdaptiveController:
                  "mode": self.cfg.diagnostic_engine.mode,
                  "allow_dashboard_mode_switch": self.cfg.diagnostic_engine.allow_dashboard_mode_switch}
             ),
+            # §104 — provenienza del nominale delle leve. `sorgente` distingue una
+            # baseline MISURATA dal Guiding Assistant da una dedotta dalla formula
+            # PHD2: e' l'informazione che dice se stiamo guidando su una
+            # caratterizzazione reale o su una stima.
+            "ga_baseline": (self._baseline.status_block() if self._baseline else
+                            {"sorgente": "non_risolta", "dettaglio":
+                             "nominale non ancora risolto (init non eseguito)",
+                             "avvisi": []}),
+            # §106 — il recinto attorno al nominale: dove puo' arrivare ciascuna leva,
+            # e se sta limitando adesso. Regola verificabile, non giudizio.
+            "anello_aperto": self.anello_aperto,
+            "in_calibrazione": self.in_calibrazione,
+            "app_state": self.app_state,
+            "sospeso": self.sospeso,
+            "banda": {
+                "enabled": self.cfg.banda.enabled,
+                "minmove_px": self.cfg.banda.minmove_px,
+                "aggr_punti": self.cfg.banda.aggr_punti,
+                "limitando": time.monotonic() < self._banda_limita_fino,
+                "limiti_effettivi": {
+                    "ra": dict(zip(("aggr_min", "minmove_max"),
+                                   [round(v, 4) for v in
+                                    self._limiti_effettivi(self._ra, self.cfg.ra)])),
+                    "dec": dict(zip(("aggr_min", "minmove_max"),
+                                    [round(v, 4) for v in
+                                     self._limiti_effettivi(self._dec, self.cfg.dec)])),
+                },
+                "ra": {"minmove": [round(self._nominal["ra"][1] - self.cfg.banda.minmove_px, 4),
+                                   round(self._nominal["ra"][1] + self.cfg.banda.minmove_px, 4)],
+                       "aggr": [round(self._nominal["ra"][0] - self.cfg.banda.aggr_punti, 1),
+                                round(self._nominal["ra"][0] + self.cfg.banda.aggr_punti, 1)]},
+                "dec": {"minmove": [round(self._nominal["dec"][1] - self.cfg.banda.minmove_px, 4),
+                                    round(self._nominal["dec"][1] + self.cfg.banda.minmove_px, 4)],
+                        "aggr": [round(self._nominal["dec"][0] - self.cfg.banda.aggr_punti, 1),
+                                 round(self._nominal["dec"][0] + self.cfg.banda.aggr_punti, 1)]},
+            },
             # §51 — cap MinMove adattivo: MinMove efficace (arcsec) per asse, cap corrente
             # (arcsec/px) e termine vincente (guiding vs imaging). Aggiorna _minmove_cap_info.
             "minmove_cap": {

@@ -288,6 +288,11 @@ function applyFullStatus(data) {
     updateDiagnosticEngine(ctrl.diagnostic_engine);
   }
 
+  // §104 — provenienza della taratura di partenza (Guiding Assistant)
+  updateGaBaseline(ctrl.ga_baseline, ctrl.exposure);
+  // §122 — un solo banner per tutte le fasi della serata, che nomina
+  // l'Assistente di guida ovunque ci sia qualcosa da fare.
+  updateFase(ctrl);
   // §45 — Transparency Index (NINA, Layer-2)
   updateTransparency(data.nina);
   updateRecoveryHint(data.recovery_hint);
@@ -523,6 +528,22 @@ function updateAutoCalibration(ac) {
   srcEl.className = `gate-status-badge ${fromPhd2 ? 'ok' : 'saturated'}`;
 
   // Baseline RMS misurata
+  // §120 — la baseline calcolata dal pavimento del GA, o osservata come prima.
+  const anc = (ac && ac.ancoraggio) || {};
+  const ancEl = el('autocal-ancoraggio');
+  if (ancEl) {
+    if (anc.ancorata) {
+      ancEl.textContent = `dal pavimento (${anc.pavimento}" + rig ${anc.rig}")`;
+      ancEl.style.color = '#4ade80';
+      ancEl.title = `pavimento misurato stanotte ${anc.pavimento}", contributo della `
+        + `montatura ${anc.rig}" su ${anc.rig_campioni} notti -> baseline ${anc.prevista}"`;
+    } else {
+      ancEl.textContent = 'osservata';
+      ancEl.style.color = '#fbbf24';
+      ancEl.title = anc.motivo ? `osservata perché: ${anc.motivo}` : '';
+    }
+  }
+
   el('autocal-baseline').textContent = ac.baseline_rms_arcsec != null
     ? `${ac.baseline_rms_arcsec.toFixed(3)}"` : '—';
 
@@ -610,11 +631,313 @@ const TRANSP_STATE = {
 function syncOpsRow() {
   const row = el('ops-row');
   if (!row) { return; }
-  const qualcosaDaDire = ['transparency-card', 'recovery-card'].some(id => {
+  const qualcosaDaDire = ['ga-baseline-card', 'transparency-card', 'recovery-card'].some(id => {
     const c = el(id);
     return c && c.style.display !== 'none';
   });
   row.hidden = !qualcosaDaDire;
+}
+
+// §122 — le fasi della serata. Il banner nomina l'Assistente di guida in OGNI
+// stato in cui c'e' qualcosa da fare, e tace solo quando e' tutto a posto e la
+// scheda "Taratura di partenza" dice gia' tutto.
+//
+// La catena e' imposta da PHD2, non da noi: la guida non parte senza
+// calibrazione, e il pulsante Inizia dell'Assistente resta grigio finche' la
+// guida non e' attiva (guiding_assistant.cpp:1738). Per questo la fase 2 dice
+// "avvia la guida" PRIMA di parlare dell'Assistente: senza, si trova il
+// pulsante spento.
+const FASI = {
+  non_connesso: {
+    icona: '\u{1F50C}', tono: 'neutro',
+    titolo: 'Assistente di guida — si parte da qui',
+    sub: "Collega camera e montatura in PHD2. Poi tre passi in fila: calibrazione, "
+       + "guida avviata, Assistente di guida per consentire all'Agente Adattivo di "
+       + "ottimizzare le sue prestazioni.",
+    tip: "Senza periferiche PHD2 non puo' fare niente. La sequenza e': collega, calibra, "
+       + "avvia la guida, Assistente di guida. L'Agente prende i suoi valori dall'ultimo passo.",
+  },
+  non_calibrato: {
+    icona: '\u{1F9ED}', tono: 'neutro',
+    titolo: "Prima la calibrazione, poi l'Assistente di guida",
+    sub: "Calibrare a declinazione 0 vicino al meridiano: e' lo stesso punto buono "
+       + "anche per l'Assistente di Guida.",
+    tip: "La calibrazione manda impulsi di prova e misura in che direzione e di quanti "
+       + "pixel si sposta la stella: serve a PHD2 per sapere come correggere. L'Assistente "
+       + "e' un'altra cosa — misura di quanto la stella si muove da sola. Falla a "
+       + "declinazione 0 vicino al meridiano, che e' lo stesso punto buono per l'Assistente.",
+  },
+  pronto_senza_ga: {
+    icona: '\u{1F4D0}', tono: 'neutro',
+    titolo: 'Assistente di guida — da eseguire',
+    sub: "Porta il telescopio al meridiano, scegli la stella e avvia la guida: solo "
+       + "allora si accende Inizia nell'Assistente. Bastano 4-5 minuti di G.A. per "
+       + "avere un RMS migliore tutta la notte.",
+    tip: "Per 4-5 minuti l'Assistente spegne le correzioni e guarda la stella muoversi "
+       + "da sola: e' l'unico momento in cui si vede il seeing vero. Da li' escono soglia "
+       + "di intervento, gioco meccanico e tempo di posa, e l'Agente li adotta da solo.",
+  },
+  pronto_ga_vecchio: {
+    icona: '\u{1F4D0}', tono: 'ambra-tenue',
+    titolo: "Assistente di guida — l'ultima misura e' di un'altra notte",
+    sub: "L'ultima misura e' del {DATA}. Si puo' usare, ma il seeing cambia da una sera "
+       + "all'altra. Per rifarla: posiziona il telescopio al meridiano, avvia la guida, "
+       + "poi Assistente di Guida per 4/5 minuti \u2192 Inizia.",
+    tip: "Il seeing e' una proprieta' della notte, non del telescopio: una misura di "
+       + "un'altra sera non e' sbagliata, e' di un altro cielo. Se stanotte non puoi "
+       + "rifarla si continua con questa, la sessione non e' invalida.",
+  },
+  pronto_ga_stanotte: {
+    icona: '\u2705', tono: 'verde',
+    titolo: 'Assistente di guida — fatto stanotte',
+    sub: "Misura delle {ORA} in vigore: MinMove {MINMOVE} px, posa {POSA} s. "
+       + "Pronto per una guida stabile.",
+    tip: "Questi valori li ha misurati l'Assistente stanotte, a correzioni spente. "
+       + "L'Agente parte da li' e si muove dentro un recinto stretto attorno a loro.",
+  },
+  calibrazione: {
+    icona: '\u{1F9ED}', tono: 'blu',
+    titolo: 'Calibrazione in corso — Agente in pausa',
+    sub: "PHD2 sta mandando impulsi di prova per capire in che direzione e di quanto "
+       + "risponde la montatura. L'Agente non interviene. Appena finisce: avvia la guida "
+       + "e poi l'Assistente.",
+    tip: "PHD2 manda impulsi di prova per capire direzione e velocita' di risposta della "
+       + "montatura su ciascun asse. L'Agente non interviene finche' non ha finito.",
+  },
+  misura: {
+    icona: '\u23F8', tono: 'blu',
+    titolo: 'Misura in corso — Agente in pausa',
+    sub: "Correzioni spente per la misura — l'errore mostrato e' quello grezzo.",
+    tip: "In questo momento PHD2 ha spento le correzioni per misurare il seeing della "
+       + "serata. L'Agente Adattivo (AA) prendera' i valori raccomandati dall'Assistente "
+       + "di Guida come riferimento per tutta la notte.",
+  },
+  guida_ok: {
+    icona: '\u2705', tono: 'verde',
+    titolo: 'Guida attiva',
+    sub: "L'Agente lavora sui valori misurati stanotte dall'Assistente di Guida in "
+       + "condizioni ottimali.",
+    tip: "Taratura misurata stanotte a correzioni spente. Non c'e' niente da fare: la "
+       + "scheda Taratura di partenza mostra i valori in vigore.",
+  },
+  guida_ga_vecchio: {
+    icona: '\u{1F4D0}', tono: 'ambra-tenue',
+    titolo: 'Guida attiva',
+    sub: "Taratura dell'Assistente del {DATA}, non di stanotte.",
+    tip: "Si guida con una misura di un'altra sera. Funziona, ma il seeing cambia da una "
+       + "notte all'altra: alla prossima occasione conviene rifare l'Assistente.",
+  },
+  guida_stimata: {
+    icona: '\u{1F9EE}', tono: 'ambra',
+    titolo: 'Guida attiva su valori stimati',
+    sub: "L'Assistente di guida non e' mai stato eseguito su questo profilo.",
+    tip: "I valori di partenza sono calcolati dalla formula di PHD2 sulla scala del "
+       + "sensore: funzionano, ma non sono misurati sul tuo cielo. Alla prima occasione "
+       + "esegui l'Assistente di guida.",
+  },
+};
+
+const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+              'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+
+// Il timestamp del GA e' "YYYY-MM-DD HH:MM:SS" in ora LOCALE.
+function _dataGA(ts) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(ts || '');
+  if (!m) { return { data: '—', ora: '—' }; }
+  return { data: `${Number(m[3])} ${MESI[Number(m[2]) - 1]}`, ora: `${m[4]}:${m[5]}` };
+}
+
+function updateFase(ctrl) {
+  const banner = el('fase-banner');
+  if (!banner) { return; }
+  const f = FASI[ctrl && ctrl.fase];
+  if (!f) { banner.hidden = true; return; }
+  const gab = (ctrl && ctrl.ga_baseline) || {};
+  const q = _dataGA(gab.ga_timestamp);
+  const posa = gab.ga_exposure_ms != null ? (gab.ga_exposure_ms / 1000).toFixed(1) : '—';
+  const mm = gab.ra_minmove != null ? gab.ra_minmove.toFixed(2) : '—';
+  const riempi = s => s.replace('{DATA}', q.data).replace('{ORA}', q.ora)
+                       .replace('{MINMOVE}', mm).replace('{POSA}', posa);
+  banner.hidden = false;
+  banner.className = 'banner-fase tono-' + f.tono;
+  banner.title = riempi(f.tip);
+  setGlyph('fase-icona', f.icona);
+  el('fase-titolo').textContent = f.titolo;
+  el('fase-sub').textContent = riempi(f.sub);
+}
+
+// §104 — provenienza della taratura di partenza. La domanda a cui risponde:
+// i MinMove da cui parte la notte sono MISURATI o STIMATI?
+const GAB_STATE = {
+  guide_assistant: { icon: '\u{1F4CF}', color: '#4ade80', label: 'MISURATA' },
+  formula_phd2:    { icon: '\u{1F9EE}', color: '#fbbf24', label: 'STIMATA' },
+  fallback_phd2:   { icon: '❔',    color: '#f87171', label: 'NON NOTA' },
+};
+
+function updateGaBaseline(gab, ctrlExp) {
+  const card = el('ga-baseline-card');
+  if (!card) { return; }
+  if (!gab || !gab.sorgente || gab.sorgente === 'non_risolta') {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  const cfg = GAB_STATE[gab.sorgente]
+    || { icon: '❔', color: '#9ca3af', label: gab.sorgente };
+  // §118 — il confine non è più "posa diversa da quella del GA", che era una regola
+  // nostra: verificato sulla sorgente, PHD2 la posa del GA la salva solo per
+  // mostrarla e applica il MinMove misurato comunque. Il confine è l'INTERVALLO che
+  // PHD2 raccomanda per questo setup — l'unico che dichiari lui, e in base alla
+  // deriva misurata di questa montatura. Dentro l'intervallo si guida sereni;
+  // l'avviso, se serve, arriva dall'Agente ed è già negli `avvisi`.
+  const avvisi = (gab.avvisi || []).slice();
+  const posaOra = (ctrlExp && (ctrlExp.phd2_ms || ctrlExp.current_ms)) || null;
+  const posaOraS = posaOra ? posaOra / 1000 : null;
+  const fuoriIntervallo = (posaOraS != null
+    && gab.posa_min_s != null && gab.posa_max_s != null
+    && (posaOraS < gab.posa_min_s - 1e-9 || posaOraS > gab.posa_max_s + 1e-9));
+
+  // §117 — tre stati, non due. "Misurata" e "misurata stanotte" non sono la
+  // stessa cosa: il seeing è una proprietà della notte, e la zona morta è tarata
+  // su quello. Una misura di un'altra notte resta valida e si usa — l'etichetta
+  // dice solo che è di un'altra notte.
+  const misurata = (gab.sorgente === 'guide_assistant');
+  const altraNotte = (misurata && gab.ga_di_stanotte === false);
+
+  setGlyph('gab-icon', cfg.icon);
+  let etichetta = cfg.label;
+  if (misurata && fuoriIntervallo) { etichetta = 'MISURATA · posa fuori intervallo'; }
+  else if (altraNotte) { etichetta = 'MISURATA · altra notte'; }
+  el('gab-state').textContent = etichetta;
+  el('gab-state').style.color = ((misurata && fuoriIntervallo) || altraNotte)
+    ? '#fbbf24' : cfg.color;
+
+  // §122 — il banner non si governa più da qui: c'è un unico banner delle fasi
+  // (`updateFase`), che copre anche il caso "nessuna caratterizzazione".
+
+  const desc = el('gab-detail');
+  desc.textContent = avvisi.length ? avvisi[0] : (gab.dettaglio || '');
+  desc.title = avvisi.length ? avvisi.join('\n') : (gab.dettaglio || '');
+  desc.style.color = avvisi.length ? '#fbbf24' : '';
+
+  const px = v => (v != null ? `${v.toFixed(2)} px` : '—');
+  el('gab-ra').textContent = px(gab.ra_minmove);
+  el('gab-dec').textContent = px(gab.dec_minmove);
+  el('gab-snr').textContent = gab.ga_snr != null ? gab.ga_snr.toFixed(1) : '—';
+
+  // §119 — il pavimento misurato ad anello aperto. Informativo: non entra in
+  // nessuna decisione finché non avremo misurato quanto vale il rapporto con
+  // l'errore guidato su più notti.
+  const pavEl = el('gab-pavimento');
+  if (pavEl) {
+    const pav = gab.pavimento_totale_arcsec;
+    pavEl.textContent = (pav != null) ? `${pav.toFixed(2)}"` : '—';
+    pavEl.title = (pav != null)
+      ? `${pav.toFixed(2)} secondi d'arco: il minimo raggiungibile la notte della misura.`
+      : '';
+  }
+
+  // §115 — errore di allineamento polare. Non è un parametro di guida: è un
+  // problema a monte che l'Agente non può correggere e non deve inseguire.
+  const paEl = el('gab-pa');
+  if (paEl) {
+    const pa = gab.pa_error_arcmin;
+    const soglia = gab.pa_error_soglia_arcmin != null ? gab.pa_error_soglia_arcmin : 5.0;
+    if (pa == null) {
+      paEl.textContent = '—';
+      paEl.style.color = '';
+      paEl.title = '';
+    } else {
+      paEl.textContent = `${pa.toFixed(1)}'`;
+      const storta = pa > soglia;
+      paEl.style.color = storta ? '#fbbf24' : '#4ade80';
+      paEl.title = storta
+        ? `${pa.toFixed(1)} primi d'arco: sopra la soglia di ${soglia.toFixed(0)}'. `
+          + 'La deriva in Declinazione che ne nasce non è seeing — riallinea la '
+          + 'montatura, non toccare i parametri di guida.'
+        : `${pa.toFixed(1)} primi d'arco, sotto la soglia di ${soglia.toFixed(0)}'.`;
+    }
+  }
+
+  // §111 — la posa, confrontata con l'intervallo misurato dall'Assistente e con
+  // il limite-deriva (che è più stringente: l'intervallo è largo 2 s per costruzione).
+  const posaEl = el('gab-posa');
+  if (posaEl) {
+    const min = gab.posa_min_s, max = gab.posa_max_s, lim = gab.posa_limite_deriva_s;
+    const ora = posaOra ? posaOra / 1000 : null;
+    posaEl.style.color = '';
+    if (ora == null) {
+      posaEl.textContent = '—';
+      posaEl.title = '';
+    } else if (min == null) {
+      posaEl.textContent = `${ora.toFixed(1)} s`;
+      posaEl.title = "Nessuna caratterizzazione: non c'è un intervallo con cui confrontare.";
+    } else {
+      const fuori = (ora < min - 1e-9 || ora > max + 1e-9);
+      const sopraLimite = (lim != null && ora > lim * 1.15);
+      posaEl.textContent = `${ora.toFixed(1)} s`;
+      if (fuori || sopraLimite) { posaEl.style.color = '#fbbf24'; }
+      const cons = gab.posa_consigliata_ms;
+      posaEl.title = `Intervallo raccomandato ${min.toFixed(1)}–${max.toFixed(1)} s`
+        + (lim != null ? `, limite-deriva ${lim.toFixed(1)} s.` : '.')
+        + (cons != null
+            ? `\n\nL'Assistente consiglia ${(cons / 1000).toFixed(1)} s`
+              + (Math.abs(cons / 1000 - ora) < 0.05
+                  ? ', ed è quella che stai usando.'
+                  : `: la tua ${ora.toFixed(1)} s va bene lo stesso finché resta `
+                    + `dentro l'intervallo.`)
+            : '')
+        + (fuori
+            ? "\n\nSei FUORI dall'intervallo raccomandato."
+           : sopraLimite
+            ? "\n\nSei dentro l'intervallo ma sopra il limite-deriva: "
+              + "fra una correzione e l'altra la montatura si sposta più della soglia."
+           : "\n\nSei dentro entrambi.");
+    }
+  }
+
+  // Backlash. Un solo fatto azionabile: PHD2 non puo' uscire dalla banda
+  // [floor, ceiling], e il tetto vale 1.5x il valore applicato. Se il valore
+  // corrente e' incollato al tetto, l'anello chiede piu' di quanto gli sia
+  // concesso. Nessun confronto con il numero dell'Assistente: quello e' un punto
+  // di partenza, e PHD2 lo modula in continuazione.
+  const corrente = gab.backlash_pulse_ms;
+  const tetto = gab.backlash_ceiling_ms;
+  const attivo = gab.backlash_enabled;
+  const bl = el('gab-backlash');
+  const SPIEGAZIONE =
+    "Compensazione del gioco meccanico in Declinazione.\n\n"
+    + "Quando la montatura inverte il senso di marcia in Dec, gli ingranaggi hanno "
+    + "un piccolo vuoto da recuperare prima che il movimento riparta. PHD2 lo "
+    + "compensa con un impulso in piu', e ne regola la durata da solo durante la "
+    + "notte.\n\n"
+    + "Non puo' pero' superare un tetto, che vale una volta e mezza il valore "
+    + "applicato quando hai premuto Applica nell'Assistente di guida.";
+  bl.style.color = '';
+  if (corrente == null && !attivo) {
+    bl.textContent = '—';
+    bl.title = SPIEGAZIONE;
+  } else if (attivo === false) {
+    bl.textContent = 'disattivo';
+    bl.style.color = '#f87171';
+    bl.title = SPIEGAZIONE + "\n\nAdesso e' SPENTA: PHD2 non compensa il gioco.";
+  } else if (corrente != null && tetto != null && tetto > 0 && corrente >= tetto) {
+    bl.textContent = `${corrente} ms · al tetto`;
+    bl.style.color = '#fbbf24';
+    bl.title = SPIEGAZIONE
+      + `
+
+Adesso e' fermo esattamente contro quel tetto (${tetto} ms): vorrebbe `
+      + "compensare di piu' e non ci arriva. Se capita spesso, alza il valore dalle "
+      + "impostazioni avanzate di PHD2 — il tetto si sposta di conseguenza.";
+  } else {
+    bl.textContent = (corrente != null) ? `${corrente} ms` : '—';
+    bl.title = SPIEGAZIONE
+      + (tetto != null ? `
+
+Adesso: ${corrente} ms, tetto ${tetto} ms. `
+                       + "PHD2 lo regola da solo dentro questo margine." : '');
+  }
 }
 
 // §45 — card Transparency Index (NINA). Graceful: senza telemetria la card è nascosta.

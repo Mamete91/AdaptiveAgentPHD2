@@ -131,7 +131,63 @@
          dichiara quattro colonne: con NINA collegato finivano a capo su una
          riga spaiata. Qui si auto-dispongono, e la riga sparisce del tutto
          quando nessuna delle due ha qualcosa da dire. -->
+    <!-- §108 — PHD2 ha sospeso le correzioni (Assistente di guida o altro
+         strumento di misura): l'Agente è fermo di proposito, non bloccato. -->
+    <!-- §122 — un banner solo per tutte le fasi della serata. Nomina l'Assistente
+         di guida in ogni stato in cui c'e' qualcosa da fare, e tace quando e' tutto
+         a posto: durante la guida normale la scheda "Taratura di partenza" dice gia'
+         tutto, e un banner sempre acceso diventerebbe tappezzeria. Titolo, testo,
+         tooltip e tono li decide `FASI` in app.js. -->
+    <section id="fase-banner" class="banner-fase tono-neutro" hidden>
+      <span class="banner-icona" id="fase-icona">❓</span>
+      <div>
+        <strong id="fase-titolo">—</strong>
+        <div class="banner-sub" id="fase-sub"></div>
+      </div>
+    </section>
+
     <section class="ops-row" id="ops-row" hidden>
+      <!-- §104 — provenienza della taratura di partenza. Distingue una baseline
+           MISURATA dal Guiding Assistant di PHD2 da una dedotta per formula. -->
+      <div class="condition-card" id="ga-baseline-card" style="display:none"
+           title="Da dove vengono i valori di partenza della guida (MinMove: di quanto deve sbagliare la stella prima che PHD2 la corregga).&#10;&#10;MISURATA — li ha misurati l'Assistente di guida di PHD2: sospende le correzioni per qualche minuto e osserva di quanto si muove davvero la stella. È il dato più affidabile.&#10;&#10;Se poi guidi a una posa diversa da quella della misura, il valore resta in vigore: è quello che fa PHD2 stesso, che applica il MinMove misurato senza guardare la posa in uso. L'Agente te lo segnala e basta — a meno che tu non sia uscito dall'intervallo di pose raccomandato per questo setup, e allora la scritta diventa ambra.&#10;&#10;STIMATA — l'Assistente non è mai stato eseguito su questo profilo, quindi i valori sono calcolati dalla formula di PHD2 a partire dalla scala del sensore. Funzionano, ma non sono misurati: in PHD2 vai su Strumenti → Assistente di guida, lascialo girare 4-5 minuti alla posa che usi normalmente, poi premi Applica.&#10;&#10;NON NOTA — PHD2 non riporta la scala del sensore, si usa un valore generico.">
+        <div class="condition-label">Taratura di partenza</div>
+        <div class="condition-icon" id="gab-icon">❔</div>
+        <div class="condition-name" id="gab-state">—</div>
+        <div class="condition-desc" id="gab-detail"></div>
+        <div class="separator"></div>
+        <div class="mini-stats">
+          <div class="mini-stat" title="Soglia minima di movimento sull'asse di Ascensione Retta, in pixel: sotto questo valore PHD2 non corregge.">
+            <span class="mini-label">MinMove AR</span>
+            <span class="mini-val" id="gab-ra">—</span>
+          </div>
+          <div class="mini-stat" title="Soglia minima di movimento sull'asse di Declinazione, in pixel.">
+            <span class="mini-label">MinMove Dec</span>
+            <span class="mini-val" id="gab-dec">—</span>
+          </div>
+          <div class="mini-stat" title="Rapporto segnale/rumore della stella durante la misura. Sotto 30 la caratterizzazione non viene usata: il rumore verrebbe scambiato per seeing.">
+            <span class="mini-label">SNR misura</span>
+            <span class="mini-val" id="gab-snr">—</span>
+          </div>
+          <div class="mini-stat" title="Compensazione del gioco meccanico in Declinazione. PHD2 la regola da solo durante la notte, dentro un margine fissato quando hai premuto Applica nell'Assistente di guida. L'Agente non può modificarla — PHD2 non lo permette dall'esterno — e ti avvisa solo se PHD2 resta fermo contro il proprio tetto, cioè se vorrebbe compensare di più e non ci arriva.">
+            <span class="mini-label">Backlash</span>
+            <span class="mini-val" id="gab-backlash">—</span>
+          </div>
+          <div class="mini-stat" title="Il tempo di posa della camera di guida, confrontato con quello che l'Assistente di guida raccomanda per questo setup.&#10;&#10;L'Assistente non dà un valore unico ma un intervallo, perché più valori possono andar bene. Dentro quell'intervallo c'è però un vincolo fisico — il limite-deriva — oltre il quale, fra una correzione e l'altra, la montatura si sposta più della soglia di intervento.&#10;&#10;Non devi impostarla a mano: appena l'Assistente finisce, l'Agente porta da solo la posa al valore raccomandato. Se pero' la posa che c'e' cade gia' dentro l'intervallo misurato, la lascia dov'e' e la adotta come riferimento della sessione — anche se lui ne raccomanderebbe un'altra: dentro l'intervallo la scelta e' tua.&#10;&#10;In verde: stai guidando dentro l'intervallo e sotto il limite. In ambra: sei fuori da uno dei due, e il dettaglio ti dice quale.&#10;&#10;L'intervallo è il confine che conta anche per la taratura: dentro, il MinMove misurato si usa comunque, pure se l'Assistente girava a un'altra posa.">
+            <span class="mini-label">Posa</span>
+            <span class="mini-val" id="gab-posa">—</span>
+          </div>
+          <div class="mini-stat" title="Quanto è storto l'allineamento polare della montatura, in primi d'arco, misurato dall'Assistente di guida insieme a tutto il resto.&#10;&#10;Perché te lo mostro: una polare storta produce una deriva costante in Declinazione, che NON è seeing. L'Agente non la corregge e non deve inseguirla — se alzasse la soglia di intervento per assorbirla peggiorerebbe la guida invece di aggiustarla. È un problema a monte, si risolve riallineando la montatura.&#10;&#10;In verde sotto la soglia, in ambra sopra. Sotto i 5 primi l'effetto sulla guida è trascurabile per pose normali; sopra conviene rifare l'allineamento prima di dare la colpa ai parametri.&#10;&#10;Il valore è quello del momento in cui hai eseguito l'Assistente: se hai riallineato dopo, rifallo per aggiornarlo.">
+            <span class="mini-label">Polare</span>
+            <span class="mini-val" id="gab-pa">—</span>
+          </div>
+          <div class="mini-stat" title="Il pavimento: quanto si muove la stella con le correzioni SPENTE, tenendo solo la parte veloce.&#10;&#10;L'Assistente misura il movimento ad anello aperto e butta via tutto ciò che è più lento di un secondo — cioè la deriva e l'errore della vite, che sono proprio le cose che la guida esiste per correggere. Quello che resta è il tremolio dell'atmosfera, che la guida NON può togliere: è più rapido dell'anello di correzione e non è prevedibile.&#10;&#10;Quindi non è un obiettivo, è un limite inferiore: il meglio che si poteva fare quella notte. Se il tuo errore di guida gli si avvicina, la guida sta facendo il suo lavoro; se ne sta molto sopra, quella differenza non è cielo — è la montatura o la guida stessa.&#10;&#10;Per ora è solo informativo: l'Agente lo mostra e non lo usa per decidere niente. Prima va misurato su più notti quanto vale davvero quel rapporto, invece di deciderlo a tavolino.">
+            <span class="mini-label">Pavimento</span>
+            <span class="mini-val" id="gab-pavimento">—</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Trasparenza NINA (§45 N1) -->
       <div class="condition-card" id="transparency-card" style="display:none">
         <div class="condition-label">Trasparenza (NINA)</div>
@@ -315,9 +371,13 @@
               <span class="gate-status-badge" id="autocal-source" title="Da dove arriva la scala. PHD2 significa letta dalla guida, ed è la condizione normale. TOML è un ripiego dalla configurazione perché PHD2 non l'ha fornita: vale la pena controllarlo, perché le soglie dipendono da questo valore.">—</span>
             </span>
           </div>
-          <div class="param-row" title="L'RMS tipico di questo setup, misurato all'inizio della sessione. È il metro con cui l'Agente giudica se la guida sta peggiorando davvero o si sta comportando come al solito.">
+          <div class="param-row" title="L'RMS tipico di questo setup. È il metro con cui l'Agente giudica se la guida sta peggiorando davvero o si sta comportando come al solito.&#10;&#10;Può arrivare in due modi, e la riga sotto ti dice quale.">
             <span class="param-label">Baseline RMS</span>
             <span class="param-val mono" id="autocal-baseline">—</span>
+          </div>
+          <div class="param-row" title="Da dove viene la baseline.&#10;&#10;DAL PAVIMENTO — la calcola: prende quanto si muoveva la stella con le correzioni spente (misura dell'Assistente di guida, di stanotte) e ci somma il contributo della montatura, che l'Agente ha imparato dalle notti scorse. È il modo buono, perché quel numero non dipende da come sta guidando adesso.&#10;&#10;OSSERVATA — la misura guardando come sta andando. Funziona, ma è un metro che si allunga insieme a ciò che deve misurare: se la guida peggiora, la baseline sale e le soglie salgono con lei. Succede quando non hai eseguito l'Assistente, la prima notte (l'Agente sta ancora imparando il contributo della montatura), oppure quando le due stime divergono troppo — segno che quella misura non descrive questa sessione.">
+            <span class="param-label">Origine baseline</span>
+            <span class="param-val mono" id="autocal-ancoraggio">—</span>
           </div>
           <div class="param-row" title="Quanti campioni sono stati raccolti su quelli necessari per fidarsi della misura. Finché non è completa, l'Agente lavora con le soglie di configurazione invece che con quelle misurate.">
             <span class="param-label">Progresso baseline</span>
@@ -336,7 +396,7 @@
             <span class="param-val mono">
               <span id="autocal-rms-high-cap">—</span>
               <span class="gate-status-badge autocal-cap-badge" id="autocal-cap-active-badge"
-                    style="display:none" title="La baseline avrebbe spinto rms_high oltre il cap proporzionale alla pixel scale">CAP ATTIVO</span>
+                    style="display:none" title="La soglia alta e' stata limitata dal tetto.&#10;&#10;Il tetto e' due volte la baseline attesa per stanotte (pavimento misurato dall'Assistente + contributo della montatura). Se scatta, vuol dire che la guida sta andando molto peggio di quanto era lecito aspettarsi: l'Agente non allarga oltre, altrimenti finirebbe per considerare normale una notte che normale non e'.&#10;&#10;Senza una misura dell'Assistente il tetto resta quello vecchio, calcolato sulla scala del sensore e comunque non oltre 1 secondo d'arco.">CAP ATTIVO</span>
             </span>
           </div>
           <div class="param-row">

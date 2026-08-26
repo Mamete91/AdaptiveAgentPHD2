@@ -61,6 +61,14 @@ class _Stubs:
         self.controller.saturated_lock_since = None
         self.controller.evaluate.return_value = []
         self.controller._current_diag = None
+        # §108 — va impostato ESPLICITAMENTE: su un MagicMock qualunque attributo
+        # non definito e' truthy, quindi il gate dell'anello aperto scarterebbe
+        # ogni frame e il loop non finirebbe mai. Uno stub che non rispecchia i
+        # tipi reali non e' uno stub: e' una trappola.
+        self.controller.anello_aperto = False
+        self.controller.in_calibrazione = False
+        self.controller.sospeso = False
+        self.controller.app_state = "Guiding"
 
         self.logger = MagicMock()
         # il log del primo snapshot ferma il loop: un giro completo e usciamo

@@ -123,6 +123,37 @@ class TestMinMoveCap(unittest.TestCase):
         self.assertGreater(ctrl._minmove_baseline_ema, 0.9)
         self.assertLess(ctrl._minmove_baseline_ema, 1.0)
 
+    # ---- §104: il cap non puo' negare la misura del Guiding Assistant ----
+
+    def test_cap_non_scende_sotto_il_nominale_misurato(self):
+        """Il cap deriva dall'RMS OTTENUTO, il nominale dal seeing MISURATO: quando
+        la guida migliora il primo scende sotto il secondo. Senza pavimento il cap
+        contraddirebbe la caratterizzazione proprio quando funziona."""
+        ctrl = _ctrl(scale=0.5)
+        ctrl._nominal = {"ra": (70.0, 0.95), "dec": (100.0, 0.95)}
+        ctrl._minmove_baseline_ema = 0.5                    # cap_px 0.8 < nominale 0.95
+        # senza asse (chiamata legacy): il cap grezzo taglia
+        self.assertAlmostEqual(ctrl._cap_minmove_up(1.0, ctrl.cfg.ra), 0.8, places=3)
+        # con l'asse: il pavimento del nominale ha la precedenza
+        self.assertAlmostEqual(
+            ctrl._cap_minmove_up(1.0, ctrl.cfg.ra, ctrl._ra), 0.95, places=3)
+
+    def test_cap_resta_attivo_sopra_il_nominale(self):
+        """Il pavimento non disattiva il cap: frena ancora la crescita OLTRE il misurato."""
+        ctrl = _ctrl(scale=0.5)
+        ctrl._nominal = {"ra": (70.0, 0.30), "dec": (100.0, 0.30)}
+        ctrl._minmove_baseline_ema = 0.5                    # cap_px 0.8 > nominale 0.30
+        self.assertAlmostEqual(
+            ctrl._cap_minmove_up(1.5, ctrl.cfg.ra, ctrl._ra), 0.8, places=3)
+
+    def test_nominale_di_default_non_cambia_il_comportamento(self):
+        """Col nominale di fallback (0.20) il cap si comporta come prima: nessuna
+        regressione sui setup che non hanno una caratterizzazione GA."""
+        ctrl = _ctrl(scale=0.5)
+        ctrl._minmove_baseline_ema = 0.5                    # cap_px 0.8
+        self.assertAlmostEqual(
+            ctrl._cap_minmove_up(0.85, ctrl.cfg.ra, ctrl._ra), 0.8, places=3)
+
     def test_uses_filtered_not_instant(self):
         # Il cap usa l'EMA, NON il valore istantaneo _rms_baseline_value.
         ctrl = _ctrl(scale=0.5)

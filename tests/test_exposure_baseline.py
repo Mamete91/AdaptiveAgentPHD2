@@ -149,16 +149,16 @@ class TestBaseDichiarata(unittest.TestCase):
         c.set_exposure.assert_not_called()
 
     def test_una_base_non_ammessa_viene_rifiutata_senza_degradare(self):
-        """§98 — 2600 ms non e' un gradino della scala, e la Base puo' valere solo
-        uno dei due piu' bassi: i 4 s si raggiungono, non ci si parte.
+        """§112 — 2600 ms non lascia il margine richiesto sopra di se', e va corretto
+        SENZA silenzio: e' il tipo di sorpresa che il §95 esiste per eliminare.
 
-        Prima questo test documentava lo snap al tempo PHD2 piu' vicino (2500).
-        Non e' piu' la regola, e soprattutto 2500 era proprio uno di quei valori
-        intermedi che la scala esplicita elimina. Qui si segue la catena vera —
-        TOML, loader, controller, scala — perche' il punto non e' solo che il
-        valore venga corretto, ma che a valle non resti **nessuna degradazione
-        silenziosa**: con una base fuori scala la progressione ricadrebbe sul
-        vecchio passo moltiplicativo e i gradini intermedi tornerebbero.
+        Il rifiuto e' passato dal caricamento del config al CONTROLLER, perche' la
+        regola dipende ora dalla scala derivata dall'intervallo misurato dal Guiding
+        Assistant — che al caricamento non e' ancora noto. L'intenzione non cambia,
+        e questo test la segue lungo la catena vera: TOML, loader, controller, scala.
+        Il punto non e' solo che il valore venga corretto, ma che a valle non resti
+        **nessuna degradazione silenziosa**: con una base fuori scala la progressione
+        ricadrebbe sul vecchio passo moltiplicativo e i gradini intermedi tornerebbero.
         """
         with tempfile.TemporaryDirectory() as d:
             toml = pathlib.Path(d) / "config.toml"
@@ -169,18 +169,18 @@ class TestBaseDichiarata(unittest.TestCase):
                 "exposure_ladder_ms = [1000, 2000, 3000, 4000]\n",
                 encoding="utf-8")
 
-            # 1) il rifiuto e' esplicito, non silenzioso
-            with self.assertLogs("phd2_agent.config", level="ERROR") as log:
-                cfg = load_config(str(toml))
-            self.assertIn("NON AMMESSO", "\n".join(log.output))
-            self.assertEqual(cfg.exposure_dynamic.target_exposure_ms, 2000,
-                             "ripiego su un gradino ammesso, non su 2500")
+            # 1) il loader non giudica piu' l'ammissibilita': la lascia passare
+            cfg = load_config(str(toml))
+            self.assertEqual(cfg.exposure_dynamic.target_exposure_ms, 2600)
 
-            # 2) a valle non resta traccia del valore non ammesso
+            # 2) il rifiuto avviene nel controller, ed e' esplicito
             c = _client(esposizione_in_phd2=1000)
             ctrl = _ctrl(cfg, c)
-            ctrl._reconcile_base_exposure(full=True)
+            with self.assertLogs("phd2_agent.controller", level="ERROR") as log:
+                ctrl._reconcile_base_exposure(full=True)
+            self.assertIn("NON AMMESSA", chr(10).join(log.output))
 
+            # 3) a valle non resta traccia del valore non ammesso
             self.assertEqual(ctrl.base_exposure_ms, 2000)
             scala = ctrl._exposure_ladder()
             self.assertEqual(scala, [2000, 3000, 4000])
@@ -366,3 +366,92 @@ class TestScenarioNotte17(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ===========================================================================
+#  4. §113 — la misura viene prima della dichiarazione
+# ===========================================================================
+
+def _baseline_ga(minimo_s: float, massimo_s: float, consigliata_ms: int):
+    """Una caratterizzazione minima: solo i campi che decidono la posa."""
+    from phd2_agent.ga_baseline import Baseline
+    return Baseline(
+        ra_aggr=70.0, ra_minmove=0.6175, dec_aggr=100.0, dec_minmove=0.95,
+        sorgente="guide_assistant", dettaglio="misurata",
+        posa_min_s=minimo_s, posa_max_s=massimo_s,
+        posa_consigliata_ms=consigliata_ms,
+    )
+
+
+class TestPosaAvallataDalGA(unittest.TestCase):
+    """La posa impostata a mano in PHD2 e' legittima se il GA la avalla.
+
+    Il §95 nasce contro un valore EREDITATO da un'emergenza: nessuno lo aveva
+    scelto. Una posa scritta a mano dentro l'intervallo misurato e' il caso
+    opposto — una scelta informata, con una misura alle spalle. La differenza
+    non la fa chi ha digitato il numero, la fa l'esistenza della misura.
+    """
+
+    def _ctrl_con_ga(self, posa_phd2: int, ga, target: int | None = 2000):
+        cfg = _cfg(target_ms=target)
+        ctrl = _ctrl(cfg, _client(posa_phd2))
+        ctrl._baseline = ga
+        return ctrl
+
+    def test_posa_manuale_dentro_l_intervallo_viene_rispettata(self):
+        # GA 1.5-3.5 s, consiglio 2000. L'operatore ha scelto 3000: e' dentro.
+        ctrl = self._ctrl_con_ga(3000, _baseline_ga(1.5, 3.5, 2000))
+        ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 3000)
+        ctrl.client.set_exposure.assert_not_called()
+
+    def test_ogni_valore_avallato_e_ammesso_non_solo_i_bassi(self):
+        # La regola dev'essere generale: 1 s, 1.5 s, 2 s, 2.5 s, 3 s...
+        casi = [(1.0, 3.0, 1000), (1.0, 3.0, 1500), (1.5, 3.5, 2000),
+                (2.0, 4.0, 2500), (2.0, 4.0, 3000)]
+        for minimo, massimo, posa in casi:
+            with self.subTest(posa=posa):
+                ctrl = self._ctrl_con_ga(posa, _baseline_ga(minimo, massimo, 2000))
+                ctrl._reconcile_base_exposure(full=True)
+                self.assertEqual(ctrl.base_exposure_ms, posa)
+                ctrl.client.set_exposure.assert_not_called()
+
+    def test_il_target_dichiarato_non_scavalca_la_misura(self):
+        # config dice 2000, PHD2 e' a 2500, il GA avalla 2500: vince PHD2.
+        ctrl = self._ctrl_con_ga(2500, _baseline_ga(2.0, 4.0, 2000), target=2000)
+        ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 2500)
+        ctrl.client.set_exposure.assert_not_called()
+
+    def test_posa_fuori_intervallo_viene_portata_al_consiglio_del_ga(self):
+        # 4000 fuori da 1.5-3.5: si riscrive PHD2 sul valore MISURATO, non sul
+        # target di config.
+        ctrl = self._ctrl_con_ga(4000, _baseline_ga(1.5, 3.5, 2500), target=1000)
+        with self.assertLogs("phd2_agent.controller", level="WARNING"):
+            ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 2500)
+        ctrl.client.set_exposure.assert_called_once_with(2500)
+
+    def test_il_consiglio_del_ga_e_ammesso_anche_senza_margine_sopra(self):
+        # GA 1.5-3.5 consiglia 3000: sopra restano 3500 e basta, un solo
+        # gradino. Rifiutarlo vorrebbe dire rifiutare la misura stessa.
+        ctrl = self._ctrl_con_ga(3000, _baseline_ga(1.5, 3.5, 3000))
+        ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 3000)
+        ctrl.client.set_exposure.assert_not_called()
+
+    def test_senza_caratterizzazione_il_95_resta_intatto(self):
+        # Nessun GA: PHD2 a 4000 e' esattamente la notte del 17-18/8. Il
+        # residuo non deve diventare la base, come prima.
+        ctrl = self._ctrl_con_ga(4000, None, target=2000)
+        ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 2000)
+        ctrl.client.set_exposure.assert_called_once_with(2000)
+
+    def test_col_ga_il_tetto_non_e_mai_una_base_ammessa(self):
+        # La protezione del §95 col GA la garantisce il MARGINE: 4000 e' il
+        # gradino piu' alto dell'intervallo 2.0-4.0, non ha spazio sopra di se'.
+        ctrl = self._ctrl_con_ga(4000, _baseline_ga(2.0, 4.0, 2500))
+        self.assertNotIn(4000, ctrl._basi_ammesse())
+        ctrl._reconcile_base_exposure(full=True)
+        self.assertEqual(ctrl.base_exposure_ms, 2500)

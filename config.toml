@@ -83,7 +83,19 @@ saturation_timeout_s = 300
 minmove_cap_adaptive_enabled   = true    # kill-switch (false = solo minmove_max legacy)
 minmove_cap_baseline_factor    = 0.8     # k UNIVERSALE (<1): rapporto dead-band/RMS raggiungibile → scale-indipendente
 minmove_imaging_ceiling_arcsec = 2.0     # tetto imaging per-setup (stub N5); default generoso. RC8 0.5"/px più stringente
-baseline_filter_tau_minutes    = 18.0    # costante di tempo dell'EMA sulla baseline §44 (~decine di minuti)
+baseline_filter_tau_minutes    = 18.0    # costante di tempo dell'EMA sulla baseline §44
+
+# §106 — RECINTO ATTORNO AL NOMINALE
+# Il nominale (§104) dice DA DOVE si parte; questa banda dice QUANTO ci si puo'
+# allontanare. E' una regola, non un giudizio: non serve una diagnosi, e non puo'
+# essere incerta. Non impedisce mai di tornare verso il nominale, e non tocca il
+# ripristino dei valori utente allo shutdown.
+# Con nominale RA MinMove 0.6175 e aggressivita' 70 le bande sono [0.42, 0.82] e
+# [50, 90]. La notte del 24/8, con la stella persa per meta' tempo, il MinMove era
+# arrivato a 0.818 e l'aggressivita' al pavimento 35.
+banda_enabled                  = true
+banda_minmove_px               = 0.20   # distanza massima dal MinMove nominale (px)
+banda_aggr_punti               = 20.0   # distanza massima dall'aggressivita' nominale (0-100)
 
 # Range armonizzati RA/DEC (§24): i due blocchi sono identici.
 # §43b: aggr_max 90 -> 100 (tetto pieno di reattività; osservazione di campo a guida
@@ -96,7 +108,7 @@ aggr_max       = 100
 aggr_step_down = 5
 aggr_step_up   = 2
 minmove_min    = 0.15
-minmove_max    = 0.85
+minmove_max    = 1.20
 minmove_step   = 0.05
 
 [limits.dec]
@@ -105,8 +117,79 @@ aggr_max       = 100
 aggr_step_down = 5
 aggr_step_up   = 2
 minmove_min    = 0.15
-minmove_max    = 0.85
+minmove_max    = 1.20
 minmove_step   = 0.05
+
+# §104 — BASELINE DAL GUIDING ASSISTANT DI PHD2
+#
+# Il Guiding Assistant sospende l'uscita di guida e misura il moto NON corretto
+# della stella: ad anello chiuso quella grandezza non e' osservabile. I suoi
+# risultati diventano il NOMINALE dell'Agente — valore all'avvio, bersaglio del
+# recupero simmetrico §53 e definizione di "leve ammorbidite".
+#
+# Gerarchia:  GA valido -> SmartDefaultMinMove(scala) -> DefaultMinMove PHD2 (0.20)
+# Nessun livello blocca l'avvio: in mancanza di dati si scende e si avvisa.
+# L'aggressivita' resta sempre ai default PHD2 (70/100): il GA non la caratterizza.
+#
+# Per produrre la caratterizzazione: PHD2 -> Strumenti -> Assistente di guida,
+# alla posa operativa, almeno 4-5 minuti, con la casella backlash attiva.
+[ga_baseline]
+enabled              = true
+# A SNR basso la dispersione misurata contiene il rumore di centroide, che il GA
+# non sa separare dal seeing: la raccomandazione MinMove esce gonfiata. Le quattro
+# esecuzioni reali disponibili avevano SNR 18.8 / 33.6 / 44.0 / 64.9, e quella a
+# 18.8 raccomandava 1.30/2.00 contro 0.62/0.95 a 64.9.
+snr_min              = 30.0
+# Sotto 1.2 x MEASUREMENT_WINDOW_SIZE (120 s) GetMinMoveRecs non attiva lo
+# stimatore a finestre scorrevoli (guiding_assistant.cpp:1170).
+elapsed_min_s        = 144
+campioni_min         = 60
+# §118 — SCARTARE la caratterizzazione perche' misurata a un'altra posa NON e' una
+# regola di PHD2. Verificato leggendo la sorgente: la posa del GA viene salvata in
+# /GA/<data>/exposure_time e poi usata in un punto solo, per mostrarla nella griglia
+# dei risultati archiviati. PHD2 non ci confronta niente; premendo Applica scrive il
+# MinMove misurato qualunque sia la posa in uso.
+#
+# Anche l'intervallo di pose che il GA raccomanda non parla del MinMove: nel codice
+# nasce da due costanti (2.0 e 4.0 s per montature senza encoder, larghezza fissa di
+# 2 s) col bordo inferiore abbassato quando la deriva lo impone. E' un'opinione
+# generale sulle buone pose di guida, non un'affermazione sulla validita' del MinMove.
+#
+# La regola precedente era nostra ed era piu' severa di PHD2. Si appoggiava a un
+# fattore (0.679 fra 1 s e 2 s) ricavato da due corse a 73 giorni di distanza, con
+# SNR 44.0 e 64.9: fra le due era cambiata la posa, ma anche il cielo. Confuso.
+#
+# Ora la differenza di posa resta come AVVISO graduato — lieve dentro l'intervallo
+# raccomandato dal GA, forte fuori — e non fa piu' buttare una misura buona.
+# Metti true per tornare allo scarto.
+richiedi_posa_uguale = false
+# Oltre questi giorni la caratterizzazione si usa lo stesso, ma l'Agente
+# avvisa che conviene rifarla: il MinMove segue il seeing tipico del sito,
+# che nel giro di settimane puo' essere cambiato.
+eta_avviso_giorni    = 14
+
+# §115 — errore di allineamento polare, misurato dall'Assistente di guida.
+# Non invalida la caratterizzazione: il MinMove misura il seeing, non la deriva.
+# E' un avviso su un problema a MONTE. Una polare storta produce deriva costante
+# in DEC, che NON e' seeing: l'Agente non la corregge, e alzare MinMove per
+# assorbirla peggiora la guida invece di aggiustarla. Si risolve riallineando la
+# montatura, non toccando i parametri di guida.
+pa_error_avviso_arcmin = 5.0
+
+# §117 — dottrina "Assistente di guida a ogni sessione".
+# Il seeing e' una proprieta' della NOTTE, non del telescopio: la montatura e' la
+# stessa da un anno, il cielo cambia da sera a sera — e la zona morta (MinMove) e'
+# tarata proprio sul seeing. Con questo attivo il criterio di freschezza non e' piu'
+# "quanti giorni ha la misura" ma "e' di questa sessione", dove la sessione va da un
+# mezzogiorno al successivo (cosi' un Assistente delle 21:30 resta valido alle 4 del
+# mattino). Una misura di un'altra notte viene USATA lo stesso: l'avviso dice che e'
+# di un'altra notte, non che e' sbagliata.
+# Metti false per tornare alla sola soglia in giorni qui sopra.
+richiedi_ga_di_sessione = true
+# L'API PHD2 non espone il backlash: l'Agente puo' solo confrontare il valore
+# raccomandato con quello configurato e avvisare. Applicarlo resta un clic
+# nella finestra del Guiding Assistant.
+backlash_tolleranza  = 0.20
 
 [logging]
 csv_dir   = "logs"
@@ -132,19 +215,51 @@ enabled               = true
 # interrotta, PHD2 chiuso) diventa la base della notte dopo — ed e' successo:
 # 17-18/8 base ereditata a 4000ms = tetto, Exposure Controller bloccato 4 ore.
 # Metti a 0 (o togli la riga) per il comportamento storico "adotto cio' che c'e'".
-# §98 — ammessi SOLO i due gradini piu' bassi della scala qui sotto (1000 o
-# 2000). 4 s deve essere una condizione RAGGIUNTA sulla base dei dati di guida,
-# mai un punto di partenza. Un valore diverso viene segnalato come errore.
+# §113 — QUESTO VALORE E' UN RIPIEGO, non il riferimento principale.
+#
+# La base di sessione si decide in quest'ordine:
+#
+#   1. la posa che trovo impostata in PHD2, SE cade nell'intervallo misurato
+#      dall'Assistente di guida. E' una scelta informata: non la tocco. Vale
+#      qualunque valore avallato — 1 s, 1.5 s, 2 s, 3 s, 4 s.
+#   2. la posa RACCOMANDATA dall'Assistente per questo setup. La scrivo io in
+#      PHD2, perche' quella che c'era non e' avallata da nessuna misura.
+#   3. il valore qui sotto — solo se l'Assistente non e' mai stato eseguito.
+#
+# Perche' in quest'ordine: chi imposta la posa a mano lo fa DOPO aver letto la
+# raccomandazione dell'Assistente (che si applica a mano, non col tasto Applica).
+# Trattare quella scelta come un errore, e riscriverla con un numero deciso mesi
+# prima in un file di configurazione, sarebbe dare piu' peso alla dichiarazione
+# che alla misura.
+#
+# §114 — la stessa regola vale a sessione avviata. Se l'Assistente viene eseguito
+# mentre l'Agente e' gia' in funzione (il caso normale: NINA lo accende, PHD2
+# parte, il GA si esegue dopo), alla riapertura dell'anello l'Agente adotta la
+# caratterizzazione nuova e porta la posa al valore raccomandato da solo. Non c'e'
+# bisogno di impostarla a mano ne' di riavviare l'Agente.
+#
+# Il §95 non si perde. Il disastro del 17-18/8 non fu "4 secondi": fu che 4000
+# era anche il tetto, e li' il controller non poteva ne' salire ne' scendere (il
+# pavimento della discesa E' la base). La regola che lo impedisce e' un'altra —
+# la base deve avere almeno un gradino sopra di se' — e vale sempre, con e senza
+# Assistente. Verificato: il gradino piu' alto non e' mai una base ammessa.
 target_exposure_ms    = 2000   # 2 s: 174 campioni per periodo della vite (348 s)
-# §98 — la scala dei gradini, percorsa da ENTRAMBI i Path in salita e in
-# discesa. Da base 1000: 1->2->3->4 e ritorno 4->3->2->1. Da base 2000:
-# 2->3->4 e ritorno 4->3->2 (sotto la base non si scende mai).
+# §112 — scala di RIPIEGO, usata solo quando non esiste una caratterizzazione del
+# Guiding Assistant da cui derivare l'intervallo. Con la caratterizzazione, i
+# gradini sono i tempi che PHD2 offre davvero dentro l'intervallo misurato.
 # Se PHD2 non offre un gradino la progressione si FERMA a quello precedente,
 # non lo salta. Lista vuota = vecchio comportamento moltiplicativo.
 exposure_ladder_ms    = [1000, 2000, 3000, 4000]
 snr_step_cooldown_s   = 45     # attesa fra due gradini di Path A (SNR)
 step_factor           = 1.5    # §98: usato solo se exposure_ladder_ms e' vuota
 max_steps_above_base  = 2
+# §111 — Path B (adattamento al seeing) non puo' uscire dall'intervallo di posa
+# che l'Assistente di guida ha misurato per questo setup e per quella serata:
+# fuori da li' la posa e' sbagliata per MISURA, non per opinione. Il tetto
+# d'emergenza resta come limite assoluto, ma quello del GA e' piu' stringente.
+# Path A (perdita della stella) NON e' vincolato: perdere la stella e' peggio
+# di una posa subottimale.
+pathb_dentro_intervallo_ga = true
 cooldown_s            = 90
 spike_min             = 0.25   # unificato (mediana dei 3 setup: 0.30/0.25/0.20)
 hfd_min_arcsec        = 4.0    # unificato (mediana dei 3 setup: 4.5/4.0/4.0)
@@ -179,6 +294,36 @@ rms_high_min_arcsec           = 0.70
 rms_high_max_arcsec           = 1.00
 # Floor su rms_low:
 rms_low_min_arcsec            = 0.25
+
+# --- §120 — la baseline si ancora al pavimento misurato dal Guiding Assistant ---
+# Il difetto che risolve: fino alla 2.18 la baseline era l'RMS che l'Agente
+# OSSERVAVA guidando, cioe' il risultato del proprio lavoro. Se guidava male
+# saliva, e le soglie salivano con lei: l'Agente misurava se stesso e concludeva
+# che andava tutto bene. Un metro che si allunga con cio' che deve misurare.
+#
+# Il GA misura la dispersione ad ANELLO APERTO (total_hpf_rms, filtrata passa-alto
+# a 1 s): la parte che la guida non puo' togliere, il pavimento della notte. Da li':
+#
+#     baseline = pavimento_di_stanotte  (+)  contributo_del_rig
+#
+# Il pavimento cambia ogni sera e lo misura il GA. Il contributo del rig e'
+# montatura + guida, una proprieta' del SETUP, e se lo impara l'Agente scorporando
+# le due grandezze (rig_contribution.json). Nessuna costante da indovinare: e' il
+# requisito vero, perche' l'Agente gira da 0.35"/px a 4"/px.
+#
+# Senza pavimento (GA mai eseguito) tutto resta esattamente come prima.
+ancoraggio_ga_enabled         = true
+# Quante notti tenere per la mediana del contributo del rig. Le ULTIME N, perche'
+# il rig migliora quando migliora la taratura e una coda infinita terrebbe in vita
+# per sempre le notti mal tarate. Mediana e non minimo: il GA si esegue a
+# declinazione 0 (~45 gradi di altezza) e riprendendo piu' in alto si puo' guidare
+# sotto il pavimento — col minimo una notte cosi' incollerebbe la costante troppo
+# in basso per sempre.
+rig_campioni_max              = 5
+# Rete di sicurezza: se la baseline prevista si discosta piu' di questa frazione da
+# quella osservata, vince l'osservata e l'Agente lo dice. Serve quando il GA e'
+# stato fatto in condizioni che non descrivono la sessione.
+ancoraggio_divergenza_max     = 0.50
 # --- Gate di rifiuto baseline (§23) ---
 # reject se baseline > max(baseline_reject_min_arcsec, baseline_reject_factor * pixel_scale)
 # Esempi: RC8 reject > 1,53"; Tecnosky > 3,09"; Askar > 4,74".

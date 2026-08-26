@@ -379,7 +379,12 @@ def _event_loop(
             # timer) chiamiamo evaluate periodicamente per non lasciarlo
             # in attesa indefinita di un GuideStep.
             now = time.monotonic()
+            # §108 — anche questo percorso porta a `evaluate`, che puo' cambiare
+            # l'esposizione o riselezionare la stella: ad anello aperto falserebbe
+            # la misura in corso. Era l'unica chiamata a evaluate fuori dai rami
+            # GuideStep/StarLost, e quindi l'unica scoperta.
             if (not monitor_only
+                    and not controller.sospeso
                     and now - last_eval >= eval_interval
                     and controller.saturated_lock_since is not None):
                 # Crea snapshot vuoto per girare il timer
@@ -398,6 +403,18 @@ def _event_loop(
         if event_name == "GuideStep":
             if is_settling:
                 # Ignoriamo i GuideStep durante il dithering (falsi errori)
+                continue
+
+            # §108 — ad ANELLO APERTO (Guiding Assistant, Polar Drift, o spunta
+            # "Enable guide output" tolta a mano) PHD2 non corregge la stella:
+            # l'errore che arriva e' il moto NON corretto, quindi l'RMS schizza a
+            # diversi arcosecondi. Ingerirlo avvelenerebbe la baseline della
+            # sessione (60 frame, e una misura GA ne dura 120-150), il cap MinMove
+            # §51 che ne discende, e la diagnosi. Peggio: il controller lo
+            # leggerebbe come degrado e ammorbidirebbe le leve o alzerebbe la posa
+            # NEL MEZZO della misura, falsando la caratterizzazione che stiamo
+            # aspettando (il GA costruisce i suoi filtri sulla posa d'avvio).
+            if controller is not None and controller.sospeso:
                 continue
 
             # §36 — la misura grezza di PHD2 e' in PIXEL: converti in arcsec all'ingest
@@ -473,7 +490,9 @@ def _event_loop(
             _gh("on_star_lost", event)   # §71: frame arrivato, stella NO
 
             actions = []
-            if not monitor_only and controller:
+            # §108 — ad anello aperto non si valuta: `evaluate` puo' chiamare
+            # find_star, che riselezionerebbe la stella nel mezzo della misura.
+            if not monitor_only and controller and not controller.sospeso:
                 actions = controller.evaluate(snapshot)
                 if actions:
                     for a in actions:
@@ -516,6 +535,40 @@ def _event_loop(
             except Exception:
                 pass
 
+        elif event_name == "StartCalibration":
+            # §109 — durante la calibrazione PHD2 comanda spostamenti grandi e
+            # misura di quanto la stella si muove rispetto al punto di partenza.
+            # Non arrivano GuideStep, ma arrivano gli StarLost — e da li' l'Agente
+            # chiamerebbe find_star, che lato PHD2 non ha alcuna guardia di stato
+            # e sposterebbe la lock position nel mezzo della misura.
+            if controller is not None and not controller.in_calibrazione:
+                controller.in_calibrazione = True
+                log.warning("PHD2 sta CALIBRANDO. L'Agente si ferma: niente azioni, "
+                            "niente ingest — la calibrazione misura lo spostamento "
+                            "dal punto di partenza e non va disturbata.")
+                try:
+                    _broadcast({"type": "calibrazione", "ts": time.time(),
+                                "in_corso": True})
+                except Exception:
+                    pass
+
+        elif event_name in ("CalibrationComplete", "CalibrationFailed"):
+            if controller is not None and controller.in_calibrazione:
+                controller.in_calibrazione = False
+                esito = ("completata" if event_name == "CalibrationComplete"
+                         else "FALLITA")
+                log.info("Calibrazione %s. Reset statistiche.", esito)
+                analyzer.reset()
+                if controller.diagnostic_engine is not None:
+                    # La calibrazione ha spostato la stella di parecchio, ma non ha
+                    # toccato l'atmosfera: i riferimenti di calma restano validi.
+                    controller.diagnostic_engine.reset("calibrazione")
+                try:
+                    _broadcast({"type": "calibrazione", "ts": time.time(),
+                                "in_corso": False})
+                except Exception:
+                    pass
+
         elif event_name == "GuidingStopped":
             log.info("PHD2 ha fermato la guida")
             _gh("set_guiding_expected", False, "guida fermata (annuncio PHD2)")
@@ -528,6 +581,11 @@ def _event_loop(
         elif event_name == "AppState":
             state = event.get("State", "")
             log.info("PHD2 AppState: %s", state)
+            # §110 — l'Agente agisce solo quando PHD2 sta davvero guidando. E' una
+            # condizione POSITIVA: copre anche gli stati non enumerati (Manual
+            # Guide, Star Cross, strumenti futuri) senza doverli rincorrere.
+            if controller is not None and state:
+                controller.app_state = state
             # §68 — stato autorevole di PHD2. "LostLock" = sta guidando ma ha perso la
             # stella: la guida è comunque ATTESA. Gli altri stati (Stopped/Paused/
             # Looping/Selected/Calibrating) sono pause ANNUNCIATE: nessun allarme.
@@ -576,6 +634,50 @@ def _event_loop(
 
         elif event_name == "GuideParamChange":
             log.debug("PHD2 GuideParamChange: %s", event)
+            _nome = str(event.get("Name", ""))
+            if _nome == "MountGuidingEnabled" and controller is not None:
+                _attiva = bool(event.get("Value"))
+                if not _attiva and not controller.anello_aperto:
+                    controller.anello_aperto = True
+                    log.warning(
+                        "PHD2 ha SOSPESO l'uscita di guida (Guiding Assistant o "
+                        "altro strumento di misura). L'Agente si ferma: niente "
+                        "azioni, niente ingest — l'anello e' aperto e l'RMS non "
+                        "descrive piu' la qualita' della guida.")
+                    try:
+                        _broadcast({"type": "anello_aperto", "ts": time.time(),
+                                    "aperto": True})
+                    except Exception:
+                        pass
+                elif _attiva and controller.anello_aperto:
+                    controller.anello_aperto = False
+                    log.info("PHD2 ha RIPRESO l'uscita di guida. Reset statistiche.")
+                    analyzer.reset()
+                    if controller.diagnostic_engine is not None:
+                        # L'anello aperto non tocca l'atmosfera: i riferimenti di
+                        # calma restano validi, come per il dithering (§39).
+                        controller.diagnostic_engine.reset("anello_aperto")
+                    # §108 — e' il momento in cui una caratterizzazione appena
+                    # conclusa e' gia' nel profilo ma non ancora vista da nessuno.
+                    try:
+                        controller.ricontrolla_baseline_ga()
+                    except Exception as exc:      # noqa: BLE001
+                        log.warning("Rilettura baseline GA fallita: %s", exc)
+                    try:
+                        _broadcast({"type": "anello_aperto", "ts": time.time(),
+                                    "aperto": False})
+                    except Exception:
+                        pass
+            elif controller is not None and (
+                    "minmove" in _nome.lower() or "aggress" in _nome.lower()):
+                # Qualcuno ha toccato una leva fuori dall'Agente (tipicamente
+                # Applica nella finestra del Guiding Assistant, che arriva DOPO la
+                # riapertura dell'anello). Senza questo, lo stato interno resta
+                # indietro e il delta della modifica successiva sarebbe falso.
+                try:
+                    controller.risincronizza_leve()
+                except Exception as exc:      # noqa: BLE001
+                    log.debug("Risincronizzazione leve fallita: %s", exc)
 
         elif event_name == "SettleBegin":
             if not is_settling:

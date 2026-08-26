@@ -551,9 +551,15 @@ class TestAggrMaxShippedConfig(unittest.TestCase):
         cfg = load_config(Path(__file__).resolve().parent.parent / "config.toml")
         self.assertEqual(cfg.ra.aggr_max, 100)
         self.assertEqual(cfg.dec.aggr_max, 100)
-        # MinMove NON è una % -> resta 0.85 su entrambi gli assi
-        self.assertAlmostEqual(cfg.ra.minmove_max, 0.85)
-        self.assertAlmostEqual(cfg.dec.minmove_max, 0.85)
+        # MinMove NON è una % e non segue aggr_max: e' una distanza in pixel, e il
+        # suo tetto dipende da cosa il Guiding Assistant puo' misurare.
+        # §104: alzato da 0.85 a 1.20 perche' la caratterizzazione del 24/08/2026
+        # raccomandava DEC 0.95 px — col vecchio tetto la misura sarebbe stata
+        # limitata prima ancora di entrare in servizio.
+        self.assertAlmostEqual(cfg.ra.minmove_max, 1.20)
+        self.assertAlmostEqual(cfg.dec.minmove_max, 1.20)
+        self.assertGreater(cfg.dec.minmove_max, 0.95,
+                           "il tetto deve lasciar passare la raccomandazione GA reale")
 
 
 @_NEEDS_HTTP

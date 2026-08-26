@@ -121,7 +121,12 @@ class DiagnosisResult:
 # stella, non l'atmosfera; la transizione di modalita' non tocca esposizione/cielo):
 # i riferimenti di calma e le finestre §38 vanno PRESERVATI. Tutte le altre cause
 # (exposure_change/pixel_scale_change/target_change/guiding_restart/manual) AZZERANO.
-_PRESERVE_CAUSES: frozenset[str] = frozenset({"dither", "settle", "mode_transition"})
+# §108 — "anello_aperto" preserva come il dither: sospendere le correzioni
+# non cambia l'atmosfera, e i riferimenti di calma restano validi. Azzerarli
+# costringerebbe il motore a ricostruirli proprio quando la baseline nuova
+# entra in servizio, cioe' quando serve di piu'.
+_PRESERVE_CAUSES: frozenset[str] = frozenset(
+    {"dither", "settle", "mode_transition", "anello_aperto", "calibrazione"})
 
 
 def _ema(prev: Optional[float], new: float, alpha: float) -> float:

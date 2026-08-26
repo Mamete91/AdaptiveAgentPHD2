@@ -121,8 +121,18 @@ class PHD2Client:
                     break
                 buf += chunk
             except OSError:
+                # §105 — `connected = False` anche qui, non solo sulla chiusura
+                # pulita. Il loop principale (main.py: `while ... and client.connected`)
+                # e' l'unico a decidere la riconnessione: se il flag resta True mentre
+                # questo thread e' morto, l'agente gira a vuoto in attesa di eventi
+                # che non arriveranno piu'. Successo il 24/08/2026: la camera di guida
+                # si e' disconnessa alle 00:17, il socket e' caduto alle 00:19:37 e
+                # l'agente e' rimasto inerte 51 minuti — due sole righe di log —
+                # finche' non e' stato toccato dalla dashboard.
+                self.connected = False
                 if self._running:
-                    logger.error("Errore lettura socket PHD2")
+                    logger.error("Errore lettura socket PHD2 — connessione marcata "
+                                 "come caduta, il loop principale riconnettera'")
                 break
 
             # Ogni messaggio termina con CR LF
@@ -298,6 +308,18 @@ class PHD2Client:
 
     def get_current_equipment(self) -> dict:
         return self.call("get_current_equipment")
+
+    def export_config_settings(self) -> str:
+        """§104 — chiede a PHD2 di scrivere l'intera configurazione su file e ne
+        ritorna il percorso. E' l'unico modo di leggere i risultati del Guiding
+        Assistant: il GA non e' esposto sull'API, ma salva nel profilo
+        (`SaveGAResults`) e questo metodo esporta il profilo (`PhdConfig::SaveAll`).
+        Non modifica la configurazione: scrive solo un file nella cartella dati
+        di PHD2 (`GetDefaultFileDir()`)."""
+        result = self.call("export_config_settings")
+        if isinstance(result, dict):
+            return str(result.get("filename", ""))
+        return ""
 
     # ------------------------------------------------------------------ #
     #  Utility                                                             #

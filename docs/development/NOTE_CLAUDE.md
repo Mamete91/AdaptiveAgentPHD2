@@ -4504,3 +4504,1463 @@ x64 (0 errori, 0 avvisi), installato e **verificato per hash**. ZIP **v2.17.0** 
 
 **Il vincolo resta quello del §100:** nessuna di queste colonne entra nelle decisioni. Prima si misura, poi si
 replaya, poi si decide.
+
+---
+
+## 104. La taratura di partenza smette di essere un'ipotesi — agente v2.17.0 (2026-08-24)
+
+*(Il §103 resta il numero riservato al fix `IFocuserMediator.GetInfo()` del §102, non ancora autorizzato.)*
+
+**Il difetto, e non era quello che cercavamo.** Si partiva da un problema noto: `init_to_phd2_standard = true`
+riscriveva le leve a ogni avvio, quindi qualunque valore applicato a mano veniva cancellato. Guardando il
+codice per risolverlo e' emerso che il problema vero e' un altro e sta piu' a monte.
+
+`_STANDARD_INIT = {"ra": (70.0, 0.20), "dec": (100.0, 0.20)}` non e' usato solo all'avvio. E' letto in **tre
+punti**: valore all'INIT (§50), tetto/pavimento del recupero simmetrico (§53) e definizione di "leve
+ammorbidite" (`_levers_softened`). E' la **casa** dell'anello adattivo — partenza, bersaglio del ritorno e
+definizione di normalita'. Disattivare l'init non sarebbe bastato: §53 avrebbe continuato a tirare li'.
+
+E il commento diceva "valori standard PHD2". Non lo sono. L'aggressivita' si', quella e' corretta:
+`DefaultAggression = 0.7` per Hysteresis (`guide_algorithm_hysteresis.cpp:44`) e `1.0` per Resist Switch
+(`guide_algorithm_resistswitch.cpp:43`). Ma il MinMove **0.20** e' il `DefaultMinMove` di *classe*, quello che
+PHD2 usa solo in assenza di qualunque valore salvato. A ogni profilo creato dal wizard PHD2 assegna
+`SmartDefaultMinMove()` (`profile_wizard.cpp:907`):
+
+```
+max(0.1515 + 0.1548 / scala, 0.15)      a 0.508 arcsec/px  ->  0.456 px
+```
+
+**2.28x** il valore che l'Agente applicava. Su setup a campionamento largo i due quasi coincidono (a 3.2
+arcsec/px la formula da' 0.20); e' sui campionamenti fini come l'RC8 che il valore fisso sbaglia di molto.
+
+**La misura che mancava.** Il Guiding Assistant sospende l'uscita di guida (`guiding_assistant.cpp:1668`) e
+osserva il moto **non corretto** della stella: ad anello chiuso quella grandezza non e' osservabile, perche'
+il loop ne rimuove una parte. Il GA non e' raggiungibile dall'API — zero occorrenze in `event_server.cpp` —
+ma **i suoi risultati si**: `SaveGAResults` scrive nel profilo e `export_config_settings` esporta il profilo
+su file restituendone il nome. Percorso verificato sulla macchina reale.
+
+Caratterizzazione del 24/08 00:28, posa 2 s (quella operativa), SNR **64.9**, 256 s, errore polare 1.1':
+
+| | prima | GA misurato | fattore |
+|---|---|---|---|
+| RA MinMove | 0.20 px | **0.6175 px** | 3.1x |
+| DEC MinMove | 0.20 px | **0.95 px** | 4.75x |
+| Backlash DEC | 43 ms | **132 ms** | 3.1x |
+
+Il bersaglio di progetto di PHD2 e' il **20% di attivita'** — quattro frame su cinque senza impulso
+(`multiplier_dec = 1.28`, guiding_assistant.cpp:1167). Misurato sui nostri log: in RA il **18%** dei frame
+aveva impulso zero. L'esatto contrario.
+
+**La convalida incrociata.** I GA in archivio erano tutti a posa 1 s. Rapporto fra la raccomandazione a 2 s e
+quella a 1 s: **0.679 su RA e 0.679 su DEC** — identico sui due assi, contro `1/sqrt(2) = 0.707` atteso per la
+media del seeing su posa doppia. Due misure a due mesi di distanza, condizioni diverse, che concordano sulla
+legge di scala: stanno misurando la stessa grandezza fisica. Da qui il criterio `richiedi_posa_uguale`: una
+caratterizzazione alla posa sbagliata da' il numero sbagliato, e non la si ri-scala a indovinare.
+
+**La gerarchia.** GA valido -> `SmartDefaultMinMove(scala)` -> `DefaultMinMove` di classe. Nessun livello
+blocca l'avvio: in mancanza di dati si scende e si avvisa. L'aggressivita' resta ai default PHD2 in ogni
+ramo, perche' il GA non la caratterizza — le sue dieci raccomandazioni non la toccano.
+
+**Due cose trovate solo scrivendo i test.**
+
+1. `minmove_max = 0.85` avrebbe **limitato a 0.85 la raccomandazione DEC di 0.95**, cioe' tradito la misura
+   prima ancora di metterla in servizio. Alzato a **1.20**.
+2. Avevo messo i limiti fra i motivi di scarto. Sbagliato: un limite nostro non deve far buttare una misura
+   buona. Il GA di giugno raccomandava DEC 1.40 — rifiutarlo avrebbe fatto ripiegare sulla formula (0.456),
+   **piu' lontano dal vero** del valore limitato (1.20). Ora i criteri di qualita' (SNR, durata, campioni,
+   posa) decidono se la misura vale; i limiti la **limitano**, con avviso.
+
+**Un anello che puniva il successo.** Il cap adattivo §51 vale `0.8 x baseline_RMS / scala`: deriva dall'RMS
+*ottenuto*, mentre il nominale deriva dal seeing *misurato*. Sono due grandezze diverse, e migliorando la
+guida la prima scende sotto la seconda — col nominale DEC a 0.95 px il cap lo taglia gia' a baseline 0.60",
+e noi stiamo a 0.664". Correzione: `cap_effettivo = max(cap_px, nominale)`. Il cap conserva il suo scopo,
+frenare la crescita *oltre* il misurato, ma non puo' negarlo.
+
+**Cosa l'Agente non puo' fare.** L'API PHD2 non espone il backlash: nessun metodo. Puo' solo confrontare
+`BLT_pulse` con `DecBacklashPulse` e avvisare. Applicarlo resta un clic nella finestra del Guiding Assistant.
+
+**483 test verdi** (+35). Modulo nuovo `ga_baseline.py`, un metodo nuovo nel client, tre punti d'aggancio nel
+controller, una card in dashboard che dice se la taratura e' **MISURATA** o **STIMATA** — perche' un valore
+dedotto e uno misurato non devono somigliarsi a colpo d'occhio.
+
+**Il vincolo che resta.** Questa modifica sposta il punto da cui l'anello parte e a cui ritorna; **non** tocca
+il ciclo limite §32/§53, che continuera' a oscillare — ma intorno a 0.6175/0.95 invece che intorno a 0.20.
+Una cosa alla volta, e con la baseline giusta e' possibile che oscilli meno, perche' l'RMS scendera' sotto la
+soglia d'innesco piu' spesso. Da verificare sul cielo, non da dedurre.
+
+### 104-bis. Il primo difetto trovato dal campo, poche ore dopo (2026-08-24)
+
+La card e' andata in produzione la notte stessa e ha subito mostrato un allarme: **"backlash: il GA raccomanda
+132ms, PHD2 ne ha 195ms — applicalo dalla finestra del Guiding Assistant"**. Falso, e per giunta con un
+consiglio sbagliato: il valore *era* stato applicato.
+
+`BacklashComp` **adatta il valore a caldo** dentro la banda `[floor, ceiling]` (`AdjustComp`). Confrontare la
+raccomandazione statica del GA con un valore che PHD2 muove da solo genera falsi allarmi per costruzione.
+
+Il valore davvero applicato si ricava dal tetto. Quando si preme Applica, il GA chiama
+`SetBacklashPulseWidth(rec, 0, 0)` e `SetCompValues` (`backlash_comp.cpp:423`) impone
+`ceiling = 1.50 x rec`. Quindi **`ceiling / 1.5` = il valore impostato**. Verificato su due istantanee reali:
+
+| | tetto | / 1.5 | raccomandazione GA arrotondata |
+|---|---|---|---|
+| giugno | 210 | 140 | `floor(147/10)*10` = **140** |
+| agosto | 195 | 130 | `floor(132/10)*10` = **130** |
+
+Esatto in entrambi i casi. E il confronto va fatto con la raccomandazione **arrotondata**: il GA non applica
+`BLT_pulse` grezzo ma `max(floor(blt/10)*10, 10)` (`guiding_assistant.cpp:1506`).
+
+Ora si avvisa solo se la compensazione e' **disattivata** oppure se il valore *applicato* diverge dalla misura.
+Il valore corrente resta mostrato, con la spiegazione che PHD2 lo regola da solo — informazione, non allarme.
+
+**Una tolleranza che ha senso solo guardando la sigma.** Un test che avevo scritto pretendeva l'allarme con
+applicato 140 contro misurato 130: sbagliato il test, non il codice. Il GA misura **132 ± 33 ms**: 10 ms di
+scarto sono dentro il rumore della sua stessa misura. La tolleranza del 20% e' circa una sigma.
+
+**487 test verdi** (+4). La lezione e' la solita di questo progetto: il campo trova in due ore quello che il
+ragionamento non aveva visto, e la card serviva esattamente a questo.
+
+---
+
+## 105. Cinquantun minuti di silenzio, e una riga che mancava — agente v2.17.0 (2026-08-24)
+
+**Il sintomo riferito dal campo:** "l'AA si era frizzato, ho dovuto forzare la chiusura". Ho formulato tre
+ipotesi — due istanze in parallelo, thread non-daemon, restore bloccato dai timeout RPC — e il log le ha
+smentite **tutte e tre**. Vale la pena registrarlo: erano ipotesi ragionevoli, e nessuna reggeva alla prova.
+
+Lo shutdown, per esempio, e' stato impeccabile: `POST /shutdown` alle 01:29:50,652, quattro `set_algo_param`
+riuscite fra 01:29:51,029 e 01:29:51,153, baseline ripristinata, sessione chiusa. **Mezzo secondo in tutto**,
+e il watchdog dei 25 s (§59) non e' mai scattato.
+
+**Quello che il log dice davvero.** La sessione delle 23:56:
+
+```
+00:14:38  PHD2 Alert: "Calibration completed but RA and Dec rates vary by an
+          unexpected amount (often caused by large Dec backlash)"
+00:17:24  PHD2 Alert: Lost connection to camera
+00:17:33  PHD2 Alert: Lost connection to camera
+00:19:37  [ERROR] Errore lettura socket PHD2
+   ...    (nulla)
+01:10:58  [INFO] diagnostic_engine OFF — l'utente tocca la dashboard
+```
+
+**Due righe di log in 51 minuti.** L'agente era vivo — la dashboard rispondeva — ma la sua connessione a PHD2
+era morta e non ha mai provato a riaprirla.
+
+**La causa, in `client.py`.** Il thread lettore aveva due uscite, e solo una faceva il suo dovere:
+
+```python
+if not chunk:                              # chiusura PULITA
+    logger.warning("PHD2 ha chiuso la connessione")
+    self.connected = False                 # <- si
+    break
+except OSError:                            # ERRORE di socket
+    if self._running:
+        logger.error("Errore lettura socket PHD2")
+    break                                  # <- il flag resta True
+```
+
+E la riconnessione la decide **solo** il loop principale, guardando quel flag
+(`main.py:374`: `while not stop_event.is_set() and client.connected`). Flag a True + thread lettore morto =
+attesa perpetua di eventi che non arriveranno. Non e' un blocco del processo: e' un agente perfettamente
+funzionante puntato su un socket cadavere.
+
+Una riga. `self.connected = False` anche sul ramo di errore.
+
+**Perche' e' sfuggito.** Il ramo della chiusura pulita e' quello che si esercita sempre — si chiude PHD2 e
+l'agente riparte. Il ramo di errore vuole che il socket *cada*, e cadere non e' chiudersi: serve che
+qualcosa si rompa a monte. Quella notte e' stata la camera di guida.
+
+**Cinque test di regressione** (`test_client_reconnect.py`), incluso il contratto esplicito con `main.py`:
+qualunque uscita anomala del lettore deve lasciare `connected` a False. **493 test verdi.**
+
+**Un difetto minore rimasto aperto.** Alle 01:10:58 e 01:11:09 il cambio di modalita' dalla dashboard
+(`POST /set_diagnostic_mode` -> `_restore_levers_to_baseline` -> `set_algo_param`) e' esploso con
+`PHD2ConnectionError` non gestita, restituendo 500 al browser. Con questa correzione la finestra si stringe
+molto — il loop riconnette invece di restare inerte — ma l'endpoint andrebbe comunque reso tollerante a una
+connessione assente. Segnato, non ancora fatto.
+
+**E una nota che vale piu' del bug.** L'allarme delle 00:14:38 e' di PHD2, non nostro: *"RA and Dec rates vary
+by an unexpected amount"*. E' esattamente l'anomalia che avevo misurato quella sera sulla calibrazione — rate
+RA al 78% del teorico contro il DEC al 97% — e PHD2 la attribuisce proprio a un backlash DEC grande. Due
+strumenti indipendenti che dicono la stessa cosa.
+
+### 105-bis. Il DebugLog di PHD2 chiude la questione backlash (2026-08-24)
+
+Il guide log non registra gli adattamenti del backlash (§104-bis). Il **DebugLog** si, e ha raccontato la
+notte per intero:
+
+```
+00:15 -> 00:29   PHD2 sale da solo:   47 -> 52 -> 57 -> 63 -> 69 -> 76
+00:35:43         Applica dal GA:      set to 130 ms, Floor 20, Ceiling 195
+00:48 -> 01:18   risale:             142 -> 152 -> 162 -> 176 -> 180 -> 194
+01:19 -> 01:38   INCHIODATO al tetto 195, quattro volte
+01:40:09         intervento manuale:  set to 195 ms, Floor 20, Ceiling 292
+01:40:10         un secondo dopo:     -> 215
+01:51:47         si assesta:          -> 203
+```
+
+**Il GA misura 132 +/- 33 ms in una rampa di pochi secondi; l'anello chiuso, lasciato libero, chiede ~203.**
+Non e' una contraddizione: la rampa del BLT vede il gioco in una singola inversione comandata, il loop lo vede
+su migliaia di correzioni reali. **La misura del GA e' un limite inferiore.** E l'alert di PHD2 delle 00:14:38
+— *"RA and Dec rates vary by an unexpected amount (often caused by large Dec backlash)"* — puntava proprio li'.
+
+Conseguenza sul codice: l'avviso diventa **asimmetrico**. Compensare PIU' del misurato non e' un difetto — e'
+l'anello che ha trovato quello che il test non poteva vedere. Compensare MENO si'. Senza questa correzione
+l'Agente avrebbe sbagliato consiglio una terza volta, suggerendo di tornare dai 195 ai 130.
+
+**495 test verdi.** Ed e' la terza volta in ventiquattr'ore che questo parametro mi smentisce: prima trattando
+un valore dinamico come statico, poi confrontandolo col numero sbagliato, ora assumendo che il GA fosse la
+verita' invece che un pavimento. Il filo comune e' sempre lo stesso — **avevo dato per scontato che una misura
+di riferimento fosse un bersaglio.**
+
+### 105-ter. Un avviso solo, su un fatto — e la domanda che l'ha corretto (2026-08-24)
+
+Alessandro: *"Secondo me il GA produce un numero di BL che poi PHD2 modula al suo interno in maniera
+dinamica. Quindi questo avviso a cosa serve?"* Aveva ragione, e la domanda ha chiuso in una riga tre giorni
+di correzioni sbagliate.
+
+Confrontare il valore configurato con la raccomandazione del GA **non puo' funzionare**, perche' quel numero
+PHD2 lo muove in continuazione. Ogni variante di quel confronto ha prodotto un consiglio errato: prima
+trattando un valore dinamico come statico, poi confrontandolo col numero sbagliato, poi assumendo che il GA
+fosse un bersaglio invece che un pavimento.
+
+**Il perche' del pavimento, dal sorgente.** Il commento sopra `ComputeBacklashPx` (backlash_comp.cpp:788) dice
+che l'obiettivo e' *"establish a good seed value ... not to accurately measure the hardware performance"*. E i
+due meccanismi che lo rendono corto:
+
+1. il test considera il gioco esaurito appena la montatura torna al **90%** della velocita' attesa, e gli
+   bastano **due passi buoni di fila**: il residuo non lo conta;
+2. il test spinge con impulsi da `max(500 ms, durata calibrazione)`, la guida corregge con impulsi vicini al
+   MinMove. Con impulsi piccoli il dente non sempre ingrana del tutto, e il gioco **sentito in esercizio e'
+   maggiore** di quello misurato a spinte robuste.
+
+Il tetto, poi, non e' misurato affatto: e' `1.5 x valore applicato`. Se il valore di partenza e' un pavimento
+per costruzione e la montatura chiede piu' del 50% in piu', l'anello sbatte contro il muro. Non e' un guasto
+del test: i due numeri misurano cose diverse.
+
+**Cosa resta.** Un solo avviso azionabile, su un fatto osservabile e non su una deduzione: **il valore
+corrente e' uguale al tetto**. Piu' quello sulla compensazione disattivata. Nient'altro. Il 24/08 il primo si
+sarebbe acceso alle 01:19, quando PHD2 e' rimasto inchiodato a 195 per venti minuti — un'ora prima che
+Alessandro ci arrivasse da solo.
+
+**Il tooltip e' scritto per chi non conosce il dominio**, non per noi: spiega cos'e' il gioco meccanico, che
+PHD2 regola da solo, che esiste un tetto e da dove viene. La versione proposta diceva "il tetto misurato dal
+GA" — ma il GA il tetto non lo misura, e scriverlo avrebbe insegnato la cosa sbagliata.
+
+**493 test verdi.**
+
+**Una nota sulla notte.** Trasparenza mediana **0.38**, minimo 0.02; **CLOUD nel 52% dei campioni**, HAZE 19%;
+stelle scese a 97 contro una base di ~1500 (−94%); RMS mediano **0.00**, cioe' per meta' sessione non c'era
+guida. Il Safety Monitor era stato forzato a spegnersi per far proseguire le pose, e aveva ragione lui: le
+pose sono state buttate. **Questa notte non e' un riferimento per niente** — ne' a favore ne' contro la
+baseline misurata.
+
+---
+
+## 106. Un recinto invece di un arbitro — agente v2.18.0 (2026-08-24)
+
+Alessandro propone un modello a quattro ruoli: **GA** caratterizza e stabilisce la baseline, **Controller**
+propone l'adattamento, **Guardian** autorizza/attenua/blocca, **PHD2** esegue. E l'intuizione che lo
+accompagna: *"GA stabilisce da dove partire, Guardian controlla quanto ci si puo' allontanare"*.
+
+Il modello e' giusto. Ma tre ruoli su quattro sono veri, e uno no.
+
+**Il Guardian, misurato.** Sessione 22-23/8, letta in diretta: **294 CONFIRM, 0 ATTENUATE, 0 BLOCK**, con la
+motivazione che si scrive da solo nel verdetto — *"diagnosi non confidente -> CONFIRM (fail-safe)"*. Il motivo
+sta a monte: il motore diagnostico finisce su **UNCERTAIN 1226 volte su 1580** (78%). Su tutto l'archivio le
+azioni con una diagnosi confidente sono **185**.
+
+Non e' un difetto: confermare quando non si capisce e' la scelta di sicurezza giusta. Ma "quando non capisce"
+e' diventato il caso normale, quindi la via di sicurezza e' l'unica via. **Oggi il Guardian non limita: timbra.**
+
+Chi svolge davvero il ruolo "quanto ci si puo' allontanare" sono tre cose, e nessuna e' il Guardian: i limiti
+fissi, il cap adattivo §51, e — da §104 — il nominale, tramite la §53 che tira sempre verso di lui.
+
+**La conseguenza della baseline misurata.** Finche' il nominale era un numero fisso, "quanto ti puoi
+allontanare" richiedeva un GIUDIZIO: una diagnosi, una confidenza, un arbitro. Da li' nasce il Guardian. Con un
+nominale MISURATO la domanda ha una risposta molto piu' semplice — **la distanza da un numero noto** — che non
+puo' essere incerta e si verifica con una sottrazione.
+
+Il 24/8 sarebbe servita: con la stella persa per meta' notte, il MinMove RA e' salito da 0.6175 a **0.818**
+(+33% sopra il misurato) e l'aggressivita' e' scesa da 70 al **pavimento 35**. Nessun componente aveva il
+compito di fermarli. E l'escursione piu' grande e' stata quella dell'aggressivita' — cioe' la leva con
+l'ancora **meno** solida, perche' il GA non la caratterizza e il suo nominale resta il default PHD2.
+
+**La banda.** Distanza massima dal nominale: 0.20 px sul MinMove, 20 punti sull'aggressivita'. Con il
+nominale del 24/8 le bande sono `[0.42, 0.82]` e `[50, 90]`: il MinMove si sarebbe fermato a 0.8175 invece di
+0.818, l'aggressivita' a 50 invece di 35.
+
+Applicata in `_apply`, che e' il punto **unico** in cui i percorsi adattivi scrivono le leve — nove chiamanti,
+un solo cancello. Il restore di shutdown non passa nemmeno di li' (scrive diretto sul client), e il ripristino
+dei valori utente in mode-transition ha `bypass_banda=True`: tornare alla configurazione dell'utente non e' un
+adattamento.
+
+**Un errore corretto scrivendo i test.** La prima versione limitava a `[centro-r, centro+r]` sempre — cioe'
+**strattonava dentro** un valore gia' fuori banda. Sbagliato: due test sull'attribuzione del softening sono
+caduti, e avevano ragione loro. La banda e' un **CRICCHETTO contro la deriva, non una molla di richiamo**: la
+distanza concessa e' `max(raggio, distanza_attuale)`, quindi chi e' gia' fuori resta dov'e' e puo' solo
+avvicinarsi. In produzione il caso non dovrebbe presentarsi — l'init scrive il nominale, quindi a inizio
+sessione la distanza e' zero — ma leve ereditate o un intervento manuale lo rendono possibile.
+
+Quando la banda annulla una richiesta, l'azione torna **con la sua attribuzione**: "il controllore ha proposto
+e il recinto ha fermato" e' un fatto che deve restare nei log e nei conteggi.
+
+**520 test verdi** (+17). Versione **2.18.0** — il salto da "parte da un numero fisso" a "parte da un valore
+misurato e non se ne allontana troppo" non e' una patch.
+
+**Il modello di Alessandro, corretto nei ruoli:**
+
+```
+GA        -> dove si parte, e qual e' il centro
+BANDA     -> quanto ci si puo' allontanare       <- regola, non giudizio
+Controller-> propone dentro la banda
+Guardian  -> giudica i casi in cui c'e' evidenza  <- le 185 volte su 5035
+PHD2      -> esegue
+```
+
+Il Guardian non diventa inutile: smette di dover arbitrare *tutto* e torna a fare la cosa per cui ha i mezzi.
+Nel 78% dei casi non serve un arbitro — serve un recinto.
+
+### 106-bis. Il recinto aveva chiuso una porta che serviva — agente v2.18.0 (2026-08-24)
+
+Alessandro, subito dopo la build: *"E se scattano le nostre escalation gate?"*. Difetto trovato in una
+domanda, ed era gia' nel pacchetto.
+
+L'escalation gate si apre quando le leve economiche sono esaurite (`_axis_levers_saturated`):
+
+```python
+aggr_at_min = current_aggr    <= aggr_min + 1.0        # <= 36
+mm_at_max   = current_minmove >= minmove_max - step    # >= 1.15
+```
+
+Ma con il recinto §106 l'aggressivita' non scende sotto **50** e il MinMove non sale sopra **0.8175**.
+**Nessuna delle due condizioni era piu' raggiungibile: gate chiuso per sempre, Path B — l'aumento di
+esposizione a seeing degradato — codice morto.**
+
+**La correzione.** "Leva esaurita" significa *"non puo' andare oltre"*, qualunque sia la ragione. Il confronto
+va fatto con il limite **effettivo**, che e' l'intersezione di tre cose: limiti statici, recinto §106 e cap
+adattivo §51 (quest'ultimo con il suo pavimento al nominale). Nuovo `_limiti_effettivi`, esposto anche su
+`/status` perche' un bordo invisibile e' un bordo che nessuno verifica.
+
+**La conseguenza, voluta.** Il gate ora si apre **prima** di quanto facesse: le leve economiche finiscono
+prima, perche' le abbiamo recintate. Non e' un effetto collaterale, e' la logica del recinto portata fino in
+fondo — fra una zona morta sei volte il valore misurato e una posa piu' lunga, la seconda e' piu' difendibile.
+Il 24/8 il gate si sarebbe aperto: le leve erano finite esattamente sui bordi (0.818 e 35).
+
+**E si lega alla domanda precedente.** Il gate alza l'esposizione, e l'esposizione si allontana da quella a cui
+il GA ha misurato. Sono la stessa catena, quindi le due modifiche vanno insieme.
+
+### 107. La taratura giusta, alla posa sbagliata (2026-08-24)
+
+Alessandro: *"E se invece voglio guidare a 1 secondo?"*. Nessun blocco: la regola e' simmetrica e sceglie la
+caratterizzazione fatta alla posa con cui si guida davvero. Sul profilo reale, oggi:
+
+| posa | GA usato | MinMove |
+|---|---|---|
+| 1000 ms | 12 giugno (1 s) | RA 0.91 · DEC 1.20 (limitato da 1.40) |
+| 2000 ms | 24 agosto (2 s) | RA 0.6175 · DEC 0.95 |
+| 3000 ms | nessuno | formula: 0.456 |
+
+**Il caso che NON era coperto** e' un altro: la posa cambia **durante** la notte — l'Exposure Controller la
+alza (fino a due gradini sulla scala `[1000, 2000, 3000, 4000]`), oppure la cambia l'operatore in PHD2. La
+taratura resta formalmente misurata, ma per un altro regime, e nessuno lo diceva.
+
+Quanto pesa: raddoppiando la posa il seeing si media di piu' dentro il fotogramma, quindi la zona morta
+necessaria si riduce di un fattore fra 1 e 1/sqrt(2). A 4 s la zona morta in vigore sarebbe **fino al 40% piu'
+larga** del necessario.
+
+Avviso in dashboard, **senza toccare il motore**: i tre numeri erano gia' tutti su `/status`
+(`exposure.phd2_ms`, `exposure.current_ms`, `ga_baseline.ga_exposure_ms`). La card resta **MISURATA** — perche'
+lo e' — ma diventa *"MISURATA · altra posa"* in ambra, con la riga che dice le due pose.
+
+**Una correzione a quanto avevo scritto nel §104.** Avevo presentato il rapporto 0.679 fra i GA a 1 s e a 2 s
+come "due misure indipendenti che concordano sulla legge di scala". **E' piu' debole di cosi'**: i due assi
+guardano lo stesso cielo nella stessa notte, quindi un seeing migliore ad agosto produrrebbe lo stesso fattore
+su entrambi. E' **una** osservazione, confusa fra due cause. Ecco perche' l'Agente non ri-scala e preferisce
+dichiarare che quella caratterizzazione non vale per la posa in uso.
+
+**525 test verdi** (+5).
+
+---
+
+## 108. L'Agente mentre PHD2 misura — agente v2.18.0 (2026-08-24)
+
+Alessandro, dopo aver letto che l'Agente legge la caratterizzazione solo all'avvio: *"Ma questo e' un problema
+perche' molto spesso le sessioni vengono accese contemporaneamente sia NINA che mette in moto l'AA
+immediatamente, sia PHD2, e potra' succedere molto spesso che venga eseguito il GA con l'AA in esecuzione"*.
+
+Ha ragione, ed e' il caso normale, non l'eccezione. Il §104 funzionava solo nell'ordine che avevo in testa io.
+
+**Due danni, entrambi silenziosi.**
+
+**Primo, durante la misura.** Il GA sospende l'uscita di guida (`guiding_assistant.cpp:1668`) per 4-5 minuti.
+L'Agente non lo sapeva e continuava a lavorare su un anello **aperto**, dove l'errore che arriva e' il moto
+NON corretto della stella — diversi arcosecondi. Conseguenze a catena:
+
+- la baseline di sessione (§44) e' su 60 frame; una misura GA ne produce 120-150. Sarebbe stata **interamente
+  sostituita** da valori ad anello aperto, e con lei il cap MinMove §51 che ne discende;
+- il controller avrebbe letto quell'RMS come degrado e ammorbidito le leve, o aperto l'escalation gate;
+- e qui il peggio: Path B avrebbe **alzato la posa nel mezzo della misura**, falsando la caratterizzazione che
+  stavamo aspettando — il GA costruisce i propri filtri HPF/LPF sulla posa d'avvio (`OnStart`) e calcola le
+  derive da `dt`;
+- `StarLost` -> `evaluate` -> `find_star` avrebbe potuto **riselezionare la stella** a meta' misura.
+
+**Secondo, dopo.** `_resolve_nominal` girava solo al primo init del processo (`full`), quindi la
+caratterizzazione appena conclusa restava inutilizzata fino al riavvio dell'Agente.
+
+**PHD2 annuncia entrambi i confini da solo.** `event_server.cpp:3022` emette `GuideParamChange` con `Name` e
+`Value` a ogni cambio di parametro:
+
+```
+GuideParamChange  Name=MountGuidingEnabled  Value=false   <- inizio misura
+GuideParamChange  Name=MountGuidingEnabled  Value=true    <- fine misura
+GuideParamChange  Name=RA Hysteresis MinMove  Value=0.62  <- Applica
+```
+
+L'Agente lo riceveva gia' e lo scriveva soltanto in `log.debug`.
+
+**Cosa fa ora.**
+
+1. **Ad anello aperto si ferma**: niente azioni, niente ingest — ne' `GuideStep` ne' `StarLost`. La regola e'
+   piu' generale del GA, ed e' un bene: vale anche per il Polar Drift tool e per la spunta "Enable guide
+   output" tolta a mano. *Anello aperto -> l'Agente non tocca niente.*
+2. **Alla riapertura**: `analyzer.reset()` (la finestra da 30 frame conterrebbe ancora dati ad anello aperto)
+   e reset del motore diagnostico con causa `anello_aperto`, aggiunta a `_PRESERVE_CAUSES` — sospendere le
+   correzioni non cambia l'atmosfera, e azzerare i riferimenti di calma costringerebbe il motore a
+   ricostruirli proprio quando la baseline nuova entra in servizio.
+3. **Rilegge la caratterizzazione** e la adotta se piu' recente. Il tempismo regge: `SaveGAResults` e' chiamato
+   dentro `MakeRecommendations`, **prima** che il GA riabiliti l'uscita — quindi all'arrivo dell'evento i
+   risultati sono gia' nel profilo, anche senza aver premuto Applica.
+4. **Risincronizza le leve** su qualunque `GuideParamChange` che nomini MinMove o Aggressivita': se l'operatore
+   preme Applica mentre l'Agente gira, PHD2 cambia sotto i suoi piedi e senza questo il delta della modifica
+   successiva sarebbe calcolato su uno stato falso.
+5. **Rete di sicurezza all'avvio**: se l'Agente si connette ad anello gia' aperto, l'evento se l'e' perso —
+   quindi `get_guide_output_enabled()` in `initialize`.
+
+**Un ordine che conta.** In `ricontrolla_baseline_ga` il nominale va aggiornato **prima** di scriverlo su PHD2,
+altrimenti il recinto §106 misura la distanza dal nominale VECCHIO e limita l'adozione. Con la
+caratterizzazione di stanotte (0.20 -> 0.6175) il recinto avrebbe tagliato a 0.40. C'e' un test dedicato.
+
+**Il test che si e' impiantato, e cosa insegna.** La suite e' andata in timeout: lo stub del controller in
+`test_event_loop_wiring` e' un `MagicMock`, e su un MagicMock **qualunque attributo non definito e' truthy** —
+quindi `controller.anello_aperto` era sempre vero, ogni frame veniva scartato e il loop non finiva mai. Uno
+stub che non rispecchia i tipi reali non e' uno stub, e' una trappola. Ora l'attributo e' impostato
+esplicitamente, con il commento che spiega perche'.
+
+**In dashboard** un banner dedicato: *"Misura in corso — Agente in pausa"*. Senza, l'Agente sembrerebbe
+semplicemente bloccato per cinque minuti.
+
+**539 test verdi** (+14).
+
+### 108-bis. Il giro di controllo, e il percorso che era rimasto scoperto (2026-08-24)
+
+Alessandro: *"Se ti fa ancora un giro di controllo"*. Fatto, e ne e' uscito un buco.
+
+Le chiamate a `controller.evaluate` in `main.py` sono **tre**, non due. I rami `GuideStep` e `StarLost` li
+avevo chiusi. Il terzo no: il **timer di saturazione** (main.py:382) chiama `evaluate` a intervalli, fuori dai
+rami evento, quando `saturated_lock_since` e' armato. Da li' si arriva a `_evaluate_exposure` e a
+`_evaluate_pathb_restar` — cioe' esattamente a cambiare la posa e a riselezionare la stella, le due cose che
+falsano una misura del Guiding Assistant in corso. Chiuso.
+
+Aggiunta anche una guardia su `ricontrolla_baseline_ga`: prima dell'init non conosciamo ne' la scala pixel ne'
+la posa di base, quindi la validazione girerebbe su presupposti assenti e potrebbe adottare una
+caratterizzazione fatta a un'altra posa.
+
+**Un test scritto male, e sostituito.** Il primo tentativo di test "tutti i percorsi sono protetti" scandiva il
+sorgente cercando `anello_aperto` nelle 12 righe precedenti a ogni `evaluate`. Falliva sul ramo `GuideStep`,
+dove la protezione e' un `continue` 37 righe piu' su — protezione reale, ma strutturale, non testuale. Un test
+che legge il codice invece di eseguirlo verifica come e' scritto, non cosa fa. Riscritto come verifica di
+COMPORTAMENTO: si fa girare davvero il loop con l'anello aperto e si controlla che `ingest_frame`, `evaluate` e
+`log_snapshot` non vengano mai chiamati — con la controprova ad anello chiuso, dove invece devono esserlo tutti.
+
+**543 test verdi** (+4).
+
+## 109. Anche la calibrazione e' una misura — agente v2.18.0 (2026-08-24)
+
+Alessandro: *"Si sottintende che l'AA se ne deve stare fermo anche durante la calibrazione, come durante il
+dithering"*. Non era cosi', e il caso e' peggiore del GA.
+
+**Cosa arriva e cosa no.** Durante la calibrazione PHD2 **non** emette `GuideStep` — le mosse di calibrazione
+passano da `ScheduleAxisMove`, che non costruisce un `GuideStepInfo`. Quindi l'ingest era protetto per
+costruzione. Ma emette **`StarLost`** (`guider.cpp:1337`, stati `CALIBRATING_PRIMARY/SECONDARY`), e il ramo
+`StarLost` dell'Agente chiamava `evaluate` -> `find_star`.
+
+**E `find_star` lato PHD2 non ha alcuna guardia di stato**: `event_server.cpp:1004` chiama
+`pFrame->AutoSelectStar(roi)` e **imposta la lock position**, calibrazione in corso o no. La calibrazione
+misura proprio lo spostamento della stella rispetto al punto di partenza: spostare la lock position sotto di
+lei la corrompe.
+
+**Ed e' successo.** Notte 23-24/8, log dell'Agente:
+
+```
+00:11:14  StarLost - Stella persa per SNR basso
+00:11:14  Errore find_star (tentativo 1)      <- terzo tentativo di calibrazione
+00:11:25  Errore find_star (tentativo 2)
+```
+
+Quella volta e' fallito ("could not find star") perche' c'erano le nubi. Con un cielo parzialmente coperto —
+stella persa per un attimo e poi ritrovata — sarebbe **riuscito**, e avrebbe corrotto la calibrazione in
+silenzio. Non posso dimostrare che sia la causa del rate RA disperso di +/-25% quella notte (13.4 / 16.1 /
+10.5 px/s in mezz'ora, con il DEC stabile allo 0.8%), ma il meccanismo c'e' ed era aperto.
+
+**La correzione.** Nuovo stato `in_calibrazione`, guidato da `StartCalibration` /
+`CalibrationComplete` / `CalibrationFailed`. E i gate non leggono piu' il singolo flag ma una proprieta'
+unica:
+
+```python
+@property
+def sospeso(self) -> bool:
+    return self.anello_aperto or self.in_calibrazione
+```
+
+*PHD2 sta misurando, non guidando: l'Agente non tocca niente.* Alla fine, reset dell'analyzer e del motore
+diagnostico con causa `calibrazione`, aggiunta a `_PRESERVE_CAUSES` — la calibrazione muove la stella parecchio
+ma non tocca l'atmosfera.
+
+**La trappola del MagicMock, ancora, e stavolta ci sono cascato io.** Cambiando i gate da `anello_aperto` a
+`sospeso`, il mio stesso test di copertura ha continuato a impostare solo `anello_aperto`: la controprova ad
+anello chiuso e' fallita perche' `sospeso` su un MagicMock e' truthy e scartava ogni frame. L'avevo scritto nel
+§108 e l'ho rifatto due ore dopo. Ora lo stub imposta i tre attributi in modo coerente, con il commento che
+dice esattamente questo.
+
+**In dashboard** il banner distingue le due pause: *"Calibrazione in corso"* e *"Misura in corso"* sono cose
+diverse per chi guarda.
+
+**545 test verdi** (+2).
+
+## 110. Non rincorrere gli strumenti: chiedere una condizione positiva — v2.18.0 (2026-08-24)
+
+Alessandro: *"Facendo partire l'AA insieme a NINA studia quali altri possibili blocchi devono essere operati,
+per esempio durante l'allineamento polare... comporterebbe sfasamento delle sue logiche rilevando quei
+movimenti come seeing"*.
+
+**La mappa completa**, strumento per strumento:
+
+| situazione | `GuideStep`? | coperto |
+|---|---|---|
+| Dithering / settling | sì, ignorati | gia' (`is_settling`) |
+| Guiding Assistant | sì, anello aperto | §108 |
+| Calibrazione | no, ma `StarLost` sì | §109 |
+| **Polar Drift Align** | anello aperto | **gratis**: usa `SetGuidingEnabled(false)` (polardrift_toolwin.cpp:299) |
+| **Static Polar Alignment** | **no** — `StartLoopingInteractive` (staticpa_toolwin.cpp:244) | per costruzione |
+| **Drift Align, fase di misura** | **sì, guida con DEC spento** (drift_tool.cpp:466-471) | **era scoperto** |
+| Drift Align, fase di regolazione | no — Looping (drift_tool.cpp:505) | per costruzione |
+| Paused / Stopped / Selected / Looping | no | per costruzione |
+
+**Due dei tre strumenti di allineamento polare erano gia' coperti senza saperlo**: il Polar Drift perche'
+sospende l'uscita di guida — la stessa firma del GA — e lo Static PA perche' non guida affatto.
+
+**La correzione, e perche' non e' un elenco.** Avrei potuto aggiungere un caso per ogni strumento. Ma la lista
+degli strumenti di PHD2 cresce, e ogni voce dimenticata e' un buco silenzioso. Meglio ribaltare la condizione:
+
+```python
+@property
+def sospeso(self) -> bool:
+    if self.anello_aperto or self.in_calibrazione:
+        return True
+    if self.app_state is not None and self.app_state not in ("Guiding", "LostLock"):
+        return True
+    return False
+```
+
+**L'Agente agisce solo quando PHD2 sta davvero guidando.** Uno stato che oggi non esiste sospende comunque,
+senza che nessuno debba prevederlo — c'e' un test che lo verifica con un valore inventato.
+
+`LostLock` resta operativo di proposito: PHD2 sta guidando e ha perso la stella, e' una condizione di guida.
+E `None` — stato non ancora ricevuto — **non** sospende: non si sospende su un'ignoranza, si sospende su un fatto.
+
+**Il caso che resta aperto, e che non decido da solo.** Il Drift Align classico, in fase di misura, lascia
+`AppState = "Guiding"` con l'uscita abilitata: nessuna delle due regole lo intercetta. Il segnale distintivo
+c'e' — PHD2 annuncia `GuideParamChange` con `Name="Dec Guide Mode"`, `Value="None"` (scope.cpp:301) — ma
+`DEC_NONE` e' anche una scelta legittima e permanente per chi guida in sola AR. Sospendere l'Agente su quel
+segnale lo disattiverebbe per sempre a quegli utenti. La scelta corretta e' probabilmente escludere il solo
+asse DEC da ingest e diagnosi, non sospendere tutto: e' una decisione di progetto, non una correzione, e va
+discussa prima.
+
+**551 test verdi** (+6).
+
+## 111. La posa smette di essere un numero scelto da noi — agente v2.18.0 (2026-08-24)
+
+Alessandro, dopo aver visto che l'escalation gate non e' praticamente mai scattato: *"il G.A. non da' una
+misura univoca dei tempi posa ma un range ottimizzato... quale causa puo' modificare quei valori? Il seeing,
+non ne trovo altre. Allora ben venga una ottimizzazione dei tempi di posa... l'importante e' che avvengano
+solo in condizioni critiche"*.
+
+**La verifica della premessa, e va oltre il ricordo.** Su tutto l'archivio — 22 notti, ~58.000 frame:
+
+```
+2000 ms   54.848 frame   94.5%
+4000 ms    2.994 frame    5.2%   <- quasi tutti il 18 agosto
+2500 ms      356 frame            <- solo 18 agosto
+transizioni di posa in tutto l'archivio:  3
+```
+
+E le tre transizioni non sono adattamento: il **2500 ms** non e' nemmeno nella scala — e' il vecchio passo
+moltiplicativo che il §98 e' nato per eliminare — e il 18 agosto e' **la notte della paralisi**, base ereditata
+a 4000 = tetto. **1000 e 3000 non sono mai stati usati.**
+
+**Perche' non e' mai scattato.** Il gate richiede aggressivita' al pavimento **E** MinMove al tetto insieme,
+piu' due cooldown. Due leve che si muovono su segnali diversi, entrambe al limite nello stesso istante. Il
+24/8 l'aggressivita' il pavimento l'ha toccato (35), il MinMove era a 0.818 contro gli >=1.15 richiesti.
+
+**E il §106 l'ha appena acceso**: con il recinto i limiti si sono avvicinati (50 e 0.8175). Un meccanismo mai
+girato in 22 notti e' diventato raggiungibile.
+
+**La correzione a una mia proposta, trovata implementando.** Avevo proposto che la posa iniziale la derivasse
+il GA. Non si puo': l'intervallo si calcola da `rarms` e dalla deriva di picco, **misurate alla posa del GA**,
+e il MinMove dello stesso GA vale solo a quella posa. Derivare la posa dal GA per poi usarla come base
+significa mordersi la coda. Quindi **la base resta dichiarata e il GA la valida**.
+
+**Cosa e' stato fatto.**
+
+L'intervallo raccomandato e il limite-deriva sono **ricalcolati dai campi numerici** (`ra_hpf_rms`,
+`ra_peak_drift_rate`, `rec_ra_minmove`) e non letti dal testo — la riga delle raccomandazioni e' testo, e nello
+stesso blocco altre righe sono tradotte. Verificato: riproduce **esattamente** i quattro intervalli che PHD2 ha
+mostrato a schermo (1.5-3.5, 2.0-4.0, 1.5-3.5, 2.0-4.0).
+
+**Il punto giusto dentro l'intervallo non e' la media.** Alessandro proponeva la media, arrotondata a interi.
+I numeri dicono di no:
+
+| GA | intervallo | limite-deriva | media | ancorata al limite |
+|---|---|---|---|---|
+| 24/08 | 1.5-3.5 s | 1.93 s | 2.50 s | **2.0 s** |
+| 12/06 | 2.0-4.0 s | 1.90 s | 3.00 s | **2.0 s** |
+| 08/04 | 1.5-3.5 s | 1.33 s | 2.50 s | **1.5 s** |
+| 07/04 | 2.0-4.0 s | 1.94 s | 3.00 s | **2.0 s** |
+
+**La media supera il limite-deriva in tutti e quattro i casi, fino al 58%** — non per caso: l'intervallo e'
+largo 2 s per costruzione (`minimo + 2.0`), quindi la sua media sta sempre sopra il vincolo fisico. La regola
+ancorata al limite non lo supera mai. E sul GA di stanotte da' **2.0 s**, cioe' esattamente la posa gia' in
+uso: non inventa niente, ratifica.
+
+**Tre avvisi nuovi**, nessuna automazione:
+1. la caratterizzazione e' incoerente con se stessa (misurata a 1 s ma ne raccomanda 1.5 o 2 — i GA di aprile
+   e giugno, davvero);
+2. la posa e' fuori dall'intervallo raccomandato;
+3. la posa e' dentro l'intervallo ma **oltre il limite-deriva** — possibile, perche' l'intervallo del GA e'
+   piu' permissivo del vincolo fisico.
+
+**E un vincolo vero**: Path B non puo' piu' uscire dall'intervallo del GA. Fuori da li' la posa e' sbagliata
+**per misura**, e nessuna condizione di guida lo giustifica. **Path A resta libero**: perdere la stella e'
+peggio di una posa subottimale, e quello e' un mestiere diverso — sopravvivenza, non ottimizzazione.
+
+**Cosa NON e' stato fatto, e perche'.** La direzione bidirezionale (seeing -> posa piu' lunga, deriva -> piu'
+corta) resta una proposta. Il trigger attuale di Path B richiede gia' `DEGRADED_SEEING` sostenuto per 5 frame
+piu' spike, HFD e rapporto picco/RMS sopra soglia — firme di seeing, non di deriva — quindi il rischio di
+allungare quando invece servirebbe accorciare e' gia' contenuto. Aggiungere una direzione di attuazione nuova
+nella stessa versione contraddirebbe l'argomento sull'attribuzione.
+
+**Una precisazione a quanto avevo scritto.** Alessandro dice che il seeing e' l'unica causa che sposta
+l'intervallo. E' il numeratore. Il **denominatore** e' la deriva di picco — errore periodico, flessioni,
+puntamento — che non dipende dal seeing ma cambia lo stesso durante la notte: nei quattro GA va da 0.32 a
+0.67 px/s. E le due cause chiedono cose opposte. Non demolisce la proposta, la completa.
+
+**560 test verdi** (+9).
+
+## 112. La scala dei tempi smette di essere una lista scritta a mano — v2.18.0 (2026-08-24)
+
+Alessandro pone il caso concreto: *"se in un setup eseguissi il GA a 1 s e la misura mi raccomanda 3 s, sarò
+costretto a impostare 3 s. In questo caso come si comporta l'AA?"*.
+
+**Risposta: finiva in un vicolo cieco, e da tre lati.**
+
+1. `target_exposure_ms = 3000` veniva **rifiutato al caricamento**: la regola era "solo i due gradini piu'
+   bassi della scala", cioe' 1000 o 2000. Ripiego automatico a 2000.
+2. Impostarla a mano in PHD2 non serviva: `_reconcile_base_exposure` la riportava a 2000 (§95).
+3. E si restava anche **senza caratterizzazione**: GA fatto a 1 s, si guida a 2 s -> posa diversa -> scartata
+   per intero, MinMove compreso. Card da MISURATA a STIMATA.
+
+La caratterizzazione diceva "guida a 3 s", l'Agente obbligava a 2 s, e per punizione buttava anche la
+caratterizzazione. **Difetto, non scelta.**
+
+**La causa: una regola giusta scritta come posizione.** *"La base deve lasciare margine per salire, e il tetto
+non dev'essere un punto di partenza"* era implementata come `exposure_ladder_ms[:2]` — una **posizione in una
+lista scritta a mano**. Con `[1000, 2000, 3000, 4000]` "i due piu' bassi" significa 1 e 2 secondi, e qualunque
+setup che abbia bisogno di 3 s resta fuori per un motivo senza rapporto con la fisica.
+
+**Le due modifiche.**
+
+*La scala diventa derivata*: i tempi che PHD2 offre davvero (`get_exposure_durations`), ristretti
+all'intervallo che il Guiding Assistant ha misurato. Senza caratterizzazione si ricade sulla scala esplicita
+di configurazione, e il comportamento e' identico a prima.
+
+*L'ammissibilita' diventa derivata*: **una base e' ammessa se ha almeno `max_steps_above_base` gradini sopra
+di se'**. Segue la scala invece di presupporla.
+
+```
+senza GA          scala [1000,2000,3000,4000]        basi ammesse [1000, 2000]     (come prima)
+GA 2.0-4.0 s      scala [2000,2500,3000,3500,4000]   basi ammesse [2000,2500,3000] <- 3000 ora si'
+```
+
+**Un ordine di dipendenze che si mordeva la coda.** L'ammissibilita' della base dipende dall'intervallo del GA;
+ma la validita' del GA dipende dalla base (il confronto sulla posa). Risolto in **due passate**: la prima
+estrae dal GA il solo *intervallo* — che e' una proprieta' del setup e non dipende dalla base — la seconda,
+con la base ormai fissata, stabilisce il nominale applicando anche il confronto sulla posa. Costo: ~1 ms
+ciascuna. E l'intervallo viene ora esposto **sempre**, anche quando la caratterizzazione e' scartata per posa
+diversa: e' proprio quello il caso in cui serve — *"il tuo MinMove non vale a questa posa, ed ecco a quale
+dovresti stare"*.
+
+**Il rifiuto si e' spostato di casa.** Non piu' al caricamento del config (dove il GA non e' ancora noto) ma
+nel controller, con lo stesso carattere esplicito di prima: log di ERRORE e ripiego sul gradino ammesso piu'
+vicino verso il basso. Nel `config.toml` la vecchia regola e' stata **rimossa**, non commentata.
+
+**Tre test presidiavano il punto vecchio** e sono stati riscritti sul punto nuovo — non cancellati:
+l'intenzione ("i 4 s si raggiungono, non ci si parte"; "nessuna degradazione silenziosa a valle") vale ancora,
+e ora e' verificata dove la regola vive davvero. Piu' i casi nuovi: il tetto dell'intervallo non puo' essere
+una base, il margine e' quello configurato, e **3000 diventa ammessa quando il GA lo raccomanda**.
+
+**564 test verdi** (+4).
+
+---
+
+## §113 — La misura viene prima della dichiarazione
+
+Il §112 aveva reso *ammissibile* una base dentro l'intervallo del GA. Restava un passo: chi decide qual e'
+la base. La domanda dell'utente e' stata netta — *"se il GA consiglia 1" sia 2" o 1,5" 3" o 4" io possa
+inserirlo manualmente e l'AA oltre a non ritenerlo errato deve partire proprio da quella misura"*.
+
+**Perche' il vecchio ordine era sbagliato.** Il `target_exposure_ms` era il riferimento primario perche' nel
+§95 era l'unico riferimento *esistente*: senza una misura, l'alternativa era adottare quello che si trovava
+in PHD2 — e cio' che si trovava in PHD2, la notte del 17-18/8, era il residuo di un'emergenza. Ma dal §104
+un riferimento migliore c'e', ed e' misurato. E c'e' un dettaglio del flusso reale che pesa: dopo il GA,
+MinMove e Backlash si applicano col tasto **Applica**; la posa **no**, la posa e' *raccomandata* e la si
+imposta a mano. Quel numero digitato a mano non e' un residuo: e' la raccomandazione dell'Assistente, letta
+e applicata dall'operatore. Riscriverlo con un valore deciso mesi prima in un file di configurazione
+significa dare piu' peso alla dichiarazione che alla misura.
+
+**Il nuovo ordine, in `_reconcile_base_exposure`:**
+
+```
+1. la posa attuale di PHD2, SE il GA la avalla   -> si rispetta, non si riscrive
+2. la posa raccomandata dal GA                    -> si scrive su PHD2
+3. target_exposure_ms                             -> ripiego, senza caratterizzazione
+```
+
+L'avallo deve venire **dalla caratterizzazione, non dalla scala di ripiego**. Senza una misura non esiste
+nessuno che possa dire "questa posa va bene", e prendere quel che si trova in PHD2 e' precisamente cio' che
+il §95 impedisce: `avallo_ga` richiede `posa_min_s is not None`. Senza GA il comportamento e' identico a
+prima, riga per riga. *(Questa condizione e' stata aggiunta dopo: la prima stesura non la aveva, e due test
+del §95 — giustamente — sono caduti.)*
+
+**Il §95 non si perde, ma cambia il custode.** Verificato prima di scrivere il codice, su tutte le scale:
+
+```
+senza GA (scala di config)  scala [1000,2000,3000,4000]        ammesse [1000,2000]        4000 ammessa? No
+GA 1.5-3.5 s                scala [1500..3500]                 ammesse [1500,2000,2500]   4000 ammessa? No
+GA 2.0-4.0 s                scala [2000..4000]                 ammesse [2000..3500]       4000 ammessa? No
+```
+
+Il gradino piu' alto non e' **mai** una base ammessa. La protezione regge da sola, quindi il target dichiarato
+poteva scendere a ripiego senza scoprire nulla. E il difetto del 17-18/8 si legge meglio cosi': non fu
+"4 secondi", fu che 4000 era **anche il tetto** — li' il controller non poteva ne' salire (era in cima) ne'
+scendere (il pavimento della discesa *e'* la base). Zero gradi di liberta'. E' quello l'invariante da
+difendere, ed e' quello che il margine difende.
+
+**Due gradini erano una mia scelta, non un requisito.** Il margine era `max(1, max_steps_above_base)`, cioe' 2:
+confondeva *quanto lontano Path A puo' salire* con *quanto spazio serve alla base*. Il caso che l'ha
+smascherato e' arrivato da un test: GA 1.5-3.5 s, l'operatore imposta 3000 — sopra restano solo i 3500, un
+gradino, e la base veniva **rifiutata**. Cioe' rifiutavamo una posa che il GA avalla, per una nostra comodita'.
+Ora il margine e' **1 gradino quando la caratterizzazione esiste** (l'intervallo misurato e' gia' la garanzia
+di sensatezza; resta da impedire solo la base-al-tetto) e resta `max_steps_above_base` senza. In piu', la posa
+**raccomandata** e' ammessa per definizione: pretendere margine sopra un valore misurato vorrebbe dire
+rifiutare la misura stessa.
+
+**Matrice di comportamento**, verificata:
+
+```
+il GA avalla, la mano dell'operatore vince
+  GA 1.0-3.0, a mano 1000    -> base 1000   PHD2 non toccato
+  GA 1.0-3.0, a mano 1500    -> base 1500   PHD2 non toccato
+  GA 1.5-3.5, a mano 2000    -> base 2000   PHD2 non toccato
+  GA 1.5-3.5, a mano 3000    -> base 3000   PHD2 non toccato
+  GA 2.0-4.0, a mano 2500    -> base 2500   PHD2 non toccato
+  GA 2.0-4.0, a mano 3500    -> base 3500   PHD2 non toccato
+il GA non avalla, si parte dalla misura (non dal target dichiarato)
+  GA 1.5-3.5, PHD2 a 4000    -> base 2000   PHD2 riscritto
+  GA 2.0-4.0, PHD2 a 1000    -> base 2500   PHD2 riscritto
+nessuna caratterizzazione, §95 invariato
+  PHD2 a 4000 (17-18/8)      -> base 2000   PHD2 riscritto
+```
+
+Il log distingue i tre casi: INFO quando la posa e' avallata (e dice anche cosa avrebbe consigliato il GA, se
+diverso), WARNING quando si riscrive PHD2 sul valore misurato, ERRORE solo nel ripiego senza caratterizzazione.
+
+**571 test verdi** (+7). Aggiornati il commento di `target_exposure_ms` — che ora si dichiara ripiego — e il
+tooltip della posa in dashboard.
+
+---
+
+## §114 — Dopo un GA a sessione avviata, anche la posa segue
+
+Il §113 stabilisce che la base si decide dalla misura. Restava una domanda dell'utente, semplice e giusta:
+*"l'AA la imposta direttamente sulla base della misura eseguita da GA? Oppure la devo impostare io
+manualmente?"*. La risposta onesta era **sia l'uno che l'altro, a seconda del momento** — e il momento
+sbagliato era proprio il suo.
+
+**Il buco.** `_reconcile_base_exposure` e' chiamata **solo** da `initialize()`. Ma il flusso reale e':
+
+```
+NINA accende l'Agente  ->  PHD2 parte  ->  l'operatore lancia il GA
+```
+
+Quando il GA finisce, l'Agente e' avviato da un pezzo e la posa l'ha gia' decisa — su una caratterizzazione
+che allora era vecchia o assente. Il §108 rileggeva la misura nuova e adottava **MinMove e backlash**, ma la
+posa restava quella di prima: l'operatore doveva correggerla a mano leggendo la raccomandazione. Cioe'
+l'automatismo del §113 esisteva esattamente nel caso in cui serviva meno (avvio a freddo, con GA gia' vecchio)
+e mancava in quello in cui serviva di piu' (GA appena concluso).
+
+**La correzione** e' `_riallinea_posa_alla_nuova_misura()`, chiamata da `ricontrolla_baseline_ga()` subito dopo
+`_init_to_phd2_standard()`. Applica alla posa la stessa gerarchia del §113 — se la posa attuale e' avallata
+dall'intervallo misurato **non si tocca**, anche quando il GA ne raccomanderebbe un'altra; altrimenti si scrive
+il valore raccomandato. Non aggiunge un momento nuovo in cui l'Agente mette le mani su PHD2: usa quello che
+c'e' gia', lo stesso in cui saltano le altre leve.
+
+**Il momento e' il migliore possibile.** Cambiare posa azzera le statistiche di guida — ma li' sono gia'
+azzerate: il GA ha appena tenuto l'anello aperto per minuti e alla riapertura `analyzer.reset()` e
+`diagnostic_engine.reset("anello_aperto")` sono gia' chiamati (§108). Si aggiorna comunque
+`last_exposure_action_time`, perche' la decisione successiva vada presa su fotogrammi nuovi e non sul
+transitorio, e si riporta `exposure_state` a `NOMINAL`: la base e' stata ridefinita, un boost ereditato dal
+regime precedente non ha piu' un riferimento a cui tornare.
+
+**Tre casi in cui non si tocca nulla**, per costruzione:
+- caratterizzazione senza campi di deriva → nessuna raccomandazione utilizzabile. Non e' un motivo per
+  riscrivere la posa con un ripiego a meta' sessione: si lascia dov'e';
+- posa gia' dentro l'intervallo → nessun comando, la base la segue;
+- `set_exposure` rifiutato da PHD2 → la base **non** si muove. Cambiarla senza la scrittura significherebbe
+  credere a una posa che PHD2 non ha.
+
+**Sette test nuovi** (`TestPosaDopoIlGA`), con un `_export_con_deriva` che porta i campi numerici da cui
+l'intervallo si ricalcola: deriva di picco 0.35 px/s e rms passa-alto 0.45 px danno 1.5-3.5 s, limite-deriva
+1.76 s, raccomandazione 2000 ms. Uno verifica che il §108 continui a valere — la posa e' un'aggiunta, non un
+sostituto.
+
+**578 test verdi** (+7). Aggiornati il tooltip della posa e quello del banner di misura in dashboard, e la
+nota di `target_exposure_ms` nel `config.toml`.
+
+---
+
+## §115 — L'errore polare: misurato, e finora buttato via
+
+Giro di controllo su cosa non fosse ancora ancorato al GA. Il risultato piu' netto: `pa_error_arcmin` veniva
+**letto e scartato**. Non entrava nello `status_block`, non compariva in dashboard, non generava avvisi. Sulle
+tre caratterizzazioni reali del profilo vale 0.1' (7 aprile), **5.8'** (12 giugno) e 1.1' (24 agosto).
+
+**Perche' conta.** Una polare storta produce deriva **costante** in DEC, che non e' seeing. L'Agente non la
+puo' correggere — non e' un parametro di guida — e soprattutto non deve inseguirla: alzare MinMove per
+assorbirla allarga la zona morta contro un errore sistematico, cioe' peggiora la guida invece di aggiustarla.
+E' esattamente il modo di sbagliare descritto da Dale sul forum NINA: intervenire sui parametri per un
+problema che sta a monte. Averlo misurato e non dirlo era la cosa meno difendibile del giro.
+
+**Non e' un criterio di accettazione.** La caratterizzazione con la polare storta resta **valida**: il MinMove
+misura il seeing, non la deriva. L'avviso e' informativo e indirizza dove il problema si risolve davvero —
+"riallineando la montatura", non toccando i parametri. Soglia `pa_error_avviso_arcmin = 5.0`, il valore che
+PHD2 stesso tratta come significativo nel proprio strumento di allineamento.
+
+**Dove vive il dato.** Viaggia con `riferimento_posa`, lo stesso della §112: e' una proprieta' del **setup**,
+non della posa, quindi sopravvive allo scarto per posa diversa. L'avviso si emette prima dei tre rami — una
+polare storta resta storta anche se la caratterizzazione viene scartata per altro. La **soglia** viaggia nello
+`status_block` insieme al valore, cosi' la dashboard colora senza ri-dichiarare il numero.
+
+### Un difetto trovato per strada: la scheda GA non si e' mai disegnata
+
+Lavorando sul renderer e' saltato fuori che `updateGaBaseline` **solleva un'eccezione a ogni chiamata**:
+
+```js
+el('gab-state').textContent = (posaScostata && ...)   // riga 661 — lettura
+...
+const posaScostata = (posaOra && posaGA && ...);      // riga 673 — dichiarazione
+```
+
+`const` in *temporal dead zone*: leggerlo prima della riga di dichiarazione e' un `ReferenceError`, non
+`undefined`. Tre letture, una dichiarazione dodici righe piu' sotto, stesso scope di funzione. La funzione
+moriva li' ogni volta che la baseline era risolta — cioe' **sempre**, da quando il §107 ha aggiunto
+l'etichetta "MISURATA · altra posa". Risolto spostando il calcolo sopra le sue letture.
+
+**Perche' e' passato:** nessun test tocca `app.js`. Zero copertura sul JavaScript della dashboard.
+
+Ho provato a scrivere uno scanner statico che cercasse altri casi di lettura-prima-della-dichiarazione. Su 33
+funzioni ha segnalato 18 casi, poi 4 dopo aver ripulito commenti e stringhe e filtrato i blocchi annidati —
+e tutti e 4 falsi positivi: dichiarazioni omonime in blocchi fratelli (`const ctrl` compare quattro volte in
+scope diversi) e `rh.probes`, che e' un accesso a proprieta' e non l'identificatore. **Non l'ho messo fra i
+test**: e' lo stesso approccio fragile — verificare leggendo il testo del sorgente — che era gia' fallito al
+§109. Il caso vero era uno, ed e' corretto. La copertura del JS resta un buco aperto e dichiarato.
+
+**Sei test nuovi** (`TestErrorePolare`): il valore arriva alla dashboard, sotto soglia tace, sopra soglia
+avvisa **e indirizza a monte**, la soglia viaggia con la baseline, una polare storta non invalida la
+caratterizzazione, e senza il campo non si inventa niente.
+
+**584 test verdi** (+6). Nuova mini-scheda "Polare" con tooltip, chiave `pa_error_avviso_arcmin` nel
+`config.toml`.
+
+### Cosa resta NON ancorato al GA, consapevolmente
+
+- **Soglie RMS** (`rms_high`/`rms_low`): derivate dall'RMS **guidato** osservato in sessione. Il GA misura
+  l'RMS **non guidato** — grandezza diversa e indipendente dalle nostre azioni. Non e' un innesto diretto: le
+  soglie devono giudicare l'RMS guidato. Questione aperta, non difetto.
+- **`ra_drift_exposure_s`**: letto e non usato di proposito — l'intervallo lo ricalcoliamo dalla formula
+  perche' il testo di PHD2 e' localizzato (§112). Al massimo serve come controprova.
+- **Backlash**: resta solo-avviso. PHD2 lo modula da solo dentro la propria forbice.
+
+---
+
+## §116 — La posa prima del nominale (la crepa nell'ordine)
+
+Il §114 faceva assorbire la posa alla fine della rilettura, **dopo** aver risolto il nominale. Provando la
+sequenza "GA eseguito a 1 s che raccomanda 2 s" veniva fuori uno stato incoerente:
+
+```
+prima del GA:  base 1000ms   MinMove nominale 0.2000
+dopo il GA:    base 2000ms   MinMove nominale 0.6175   <- misurato a 1000ms
+```
+
+Restava in vigore un MinMove che la nostra stessa regola (`richiedi_posa_uguale`) considera inutilizzabile a
+quella posa — e che alla rilettura successiva veniva scartato **in silenzio**, ripiegando sulla formula. Il
+`initialize()` questa disciplina ce l'aveva gia' (intervallo → posa → nominale); in `ricontrolla_baseline_ga()`
+me l'ero dimenticata.
+
+**Nuovo ordine:** prima passata silenziosa (serve solo l'intervallo, che non dipende dalla base) → riallineo
+della posa → **seconda passata, con la base definitiva** → scrittura delle leve. Ora o la caratterizzazione
+vale alla posa in vigore, o non vale e lo si dice subito.
+
+**Un dettaglio che stava per rompere tutto.** Il rilevamento "e' arrivato qualcosa di nuovo" si basava sul
+timestamp della corsa *adottata*. Ma con la prima passata quella corsa puo' essere scartata per posa diversa,
+e allora il timestamp e' `None` — l'Agente uscirebbe subito senza fare niente, **proprio nel caso in cui il GA
+ha piu' da dirgli** (che la posa in vigore e' sbagliata). Introdotto `ga_riferimento_timestamp`: il timestamp
+della corsa piu' recente che superi i criteri di QUALITA', indipendente dal filtro sulla posa.
+
+**Il valore di ritorno e' rimasto onesto:** `True` solo se la corsa nuova e' davvero quella in vigore.
+Rilevarla e reagirci non e' averla adottata. (Il chiamante in `main.py` lo ignora — conta solo per i test —
+ma un booleano che mente e' un booleano che prima o poi si legge.)
+
+### La tensione che ne e' emersa
+
+Un test e' cambiato di esito, e non per un difetto: **il §113 e `richiedi_posa_uguale` si tirano per la
+giacca.** Il §113 dice "dentro l'intervallo la posa la scegli tu"; ma se il GA ha misurato a 2 s e tu scegli
+3 s, il MinMove misurato non vale piu' (fra 1 s e 2 s scala di 0.679: non e' un dettaglio). Risolto l'ordine,
+le due regole si incontrano davvero e vince la seconda: la posa resta la tua, il nominale ripiega sulla
+formula.
+
+Non e' un peggioramento — e' lo stesso esito che prima arrivava comunque, una rilettura piu' tardi e in
+silenzio. Ma va detto chiaro, perche' c'e' un costo: si rinuncia a un MinMove *misurato* (0.6175, un po'
+troppo largo a 3 s) per uno *generico* (0.4562, non misurato affatto). Sotto la dottrina §117 il caso non si
+presenta. Fuori dalla dottrina, e' una scelta che va guardata in faccia — **rimandata, non risolta**.
+
+---
+
+## §117 — La dottrina: l'Assistente a ogni sessione
+
+Nasce da un'osservazione dell'utente su un intervento di Dale nel forum NINA: il GA va rieseguito ogni
+sessione, perche' il seeing non e' lo stesso di ieri.
+
+**Perche' e' corretto.** Il seeing e' una proprieta' della **notte**, non del telescopio. La montatura e' la
+stessa da un anno; il cielo cambia da sera a sera — e MinMove e' tarato proprio sul seeing (sul profilo reale:
+seeing 0.43 px, MinMove 0.6175, cioe' 1.44 volte). Una misura di tre settimane fa non diventa sbagliata:
+diventa di un'altra notte.
+
+**E chiude due questioni aperte in un colpo.** (1) Il pavimento RMS di cui si discuteva diventa utilizzabile
+senza dover stimare il seeing dal vivo — niente ritorno sul terreno del lag-1, dove mi ero gia' sbagliato una
+volta. (2) La tensione del §116 non si presenta: se il GA gira alla posa operativa, base e misura coincidono.
+
+**Il criterio cambia natura:** non piu' "quanti giorni ha" ma "e' di questa sessione". Il confine e' l'ultimo
+**mezzogiorno locale** — una sessione attraversa la mezzanotte, e un GA delle 21:30 deve restare valido alle 4
+del mattino. Nessuno osserva a mezzogiorno, quindi il taglio cade sempre fra due notti e mai dentro una.
+
+La soglia in giorni resta, per chi la dottrina non la vuole (`richiedi_ga_di_sessione = false`). Con la
+dottrina attiva i due avvisi non si sovrappongono: ne esce **uno solo**.
+
+**Perche' adesso e' praticabile e prima no.** Fino al §113/§114 rieseguire il GA ogni sera voleva dire:
+premere Applica, leggere la posa raccomandata, impostarla a mano, riavviare l'Agente. Con quell'attrito il
+consiglio era giusto e nessuno lo seguiva — esattamente cio' che Dale dice della guida Best Practices. Ora si
+lancia il GA e basta. **L'infrastruttura che rende praticabile il suo consiglio l'abbiamo costruita senza
+accorgercene.**
+
+### Il banner, e perche' non esce quasi mai
+
+- **verde** — misura di questa sessione, alla posa in vigore: la scheda non dice niente;
+- **ambra tenue, solo nella scheda** — "MISURATA · altra notte": si usa lo stesso, e' il caso normale delle
+  notti in cui non fai in tempo;
+- **banner a scomparsa** — solo quando non c'e' niente di utilizzabile (mai eseguito, o scartato). Sparisce da
+  solo appena l'Agente assorbe una caratterizzazione.
+
+Un banner tutte le sere per una cosa che certe notti e' impossibile fare diventerebbe tappezzeria — e allora
+si smetterebbe di vedere anche i banner che contano. Il tooltip del banner porta il ragionamento completo:
+cosa fa l'Assistente ad anello aperto, cosa ne ricava, perche' ogni sessione, cosa devi fare, e che **se
+stanotte non puoi, la sessione non e' invalida**.
+
+### Un limite della dottrina, corretto in corsa
+
+Avevo scritto che il GA misura il seeing "di quel momento e a quell'altezza". L'utente ha osservato che il GA
+si esegue al meridiano e vicino a Dec 0. Verificato: e' vero che li' i movimenti in AR si vedono per intero
+(salendo in declinazione si comprimono di `cos(Dec)`), quindi la deriva misurata e' quella piena e la
+posa-limite la piu' prudente. **Ma la mia frase era sbagliata su un punto**: al meridiano il seeing e' il
+*migliore* per quell'oggetto, non il peggiore — al meridiano si attraversa la minor atmosfera possibile.
+
+La conclusione dell'utente regge lo stesso, per un'altra strada: alle nostre latitudini Dec 0 al meridiano sta
+a ~45° di altezza, cioe' atmosfera **media**. Il riferimento che ne esce non e' ne' il migliore ne' il
+peggiore del cielo. Conseguenza pratica per il pavimento RMS: servira' una **tolleranza**, non una soglia
+netta — su un oggetto allo zenit l'errore guidato potra' stare legittimamente *sotto* il pavimento.
+
+**595 test verdi** (+10). Nuove chiavi `richiedi_ga_di_sessione` in `config.toml`, `ga_di_stanotte` e
+`ga_riferimento_timestamp` nello `status_block`.
+
+---
+
+## §118 — Verificato sulla sorgente: lo scarto per posa era nostro
+
+L'utente ha messo in dubbio una regola che avevo dato per buona: *"mi sembra strana questa cosa — il GA
+raccomanda un intervallo largo e poi sarebbe in disaccordo con la caratterizzazione MinMove che ha appena
+dichiarato?"*. Verificato leggendo `phd2-master/src/guiding_assistant.cpp`. Il sospetto era fondato.
+
+### Cosa dice il codice
+
+**1. PHD2 salva la posa del GA e non ci fa niente.** `ExposureTime` compare in tre punti: la dichiarazione
+del campo, la lettura da `/GA/<ts>/exposure_time`, e **un solo uso** —
+`m_statusgrid->SetCellValue(m_exposuretime_loc, details.ExposureTime)`, cioe' scriverla in una casella per
+mostrarla. Nessun confronto, nessun gate. Premendo Applica, `SetMinMove(m_ra_minmove_rec)` scrive il valore
+misurato qualunque sia la posa in uso.
+
+**2. L'intervallo di pose non parla del MinMove.** Nasce da costanti:
+
+```c
+double ideal_min_exposure = hasEncoders ? 4.0 : 2.0;
+double ideal_max_exposure = hasEncoders ? 8.0 : 4.0;
+double min_rec_range = 2.0;                    // larghezza FISSA
+m_min_exp_rec = std::max(1.0, std::min(drift_exp, ideal_min_exposure));
+```
+
+E' l'opinione generale di PHD2 sulle buone pose di guida (2-4 s senza encoder), col bordo inferiore abbassato
+quando la deriva lo impone. Non c'era nessuna contraddizione da parte di PHD2: c'era nella mia lettura.
+
+**3. Come nasce il MinMove.** `RecDec = round(bestEstimate * multiplier_dec / 0.05 + 0.5) * 0.05` con
+`multiplier_dec = (pxscale < 1.5) ? 1.28 : 1.65`, e `RecRA = max(minMoveFloor, RecDec * 0.65)`. Verificato
+esatto su tutte e tre le corse reali (2.00→1.30, 1.40→0.91, 0.95→0.6175). Il commento nel sorgente spiega
+l'1.28: *"20% or 10% activity target based on normal distribution"* — MinMove non e' "il livello del seeing",
+e' il livello per cui circa **un fotogramma su cinque** merita una correzione.
+
+### La regola che avevo scritto io
+
+`richiedi_posa_uguale` scartava una caratterizzazione misurata a posa diversa. Si appoggiava a un fattore:
+*"fra 1 s e 2 s il MinMove scala di 0.679"*. Quel numero viene dal confronto fra la corsa del **12/06** (1 s,
+RA 0.91) e quella del **24/08** (2 s, RA 0.6175). Due notti a **73 giorni di distanza**, con SNR 44.0 e 64.9.
+Fra le due era cambiata la posa — ma anche il cielo. Un solo confronto, con le variabili mescolate: lo stesso
+tipo di inferenza confusa in cui ero gia' cascato col lag-1.
+
+La dipendenza dalla posa esiste in linea di principio (la dispersione per fotogramma cala se il fotogramma e'
+piu' lungo), ma non e' quantificata da nessuna misura pulita che abbiamo, **e PHD2 non la corregge**. La
+regola era piu' severa dello strumento che avevamo eletto a riferimento, e faceva buttare una misura vera per
+una formula generica.
+
+### Cosa cambia
+
+Lo scarto per posa e' **spento per difetto** (`richiedi_posa_uguale = false`, l'interruttore resta per chi lo
+vuole). Al suo posto un avviso **graduato**, che usa come confine l'unica soglia che PHD2 dichiara setup per
+setup — il proprio intervallo raccomandato:
+
+```
+GA del 24/08, misurato a 2 s, intervallo 1.5-3.5 s
+  guidi a 1.0s -> MinMove 0.6175 (guide_assistant)  FUORI intervallo  [avviso forte]
+  guidi a 1.5s -> MinMove 0.6175 (guide_assistant)  nota lieve
+  guidi a 2.0s -> MinMove 0.6175 (guide_assistant)  nessuna nota
+  guidi a 3.0s -> MinMove 0.6175 (guide_assistant)  nota lieve
+  guidi a 4.0s -> MinMove 0.6175 (guide_assistant)  FUORI intervallo  [avviso forte]
+```
+
+Prima, a 3.0 s, la stessa situazione dava `formula_phd2` e **0.4562**: si buttava una misura del proprio cielo
+per un numero che dipende solo dalla scala del sensore — lo stesso per chiunque abbia 0.508"/px, nel deserto o
+nella nebbia padana.
+
+**Un accoppiamento da sciogliere.** `base_exposure_ms` serviva sia allo scarto sia agli avvisi, e il vecchio
+interruttore lo azzerava — spegnendo lo scarto si perdevano anche gli avvisi, che sono utili soprattutto
+quando non si scarta niente. Ora la posa vera arriva **sempre**, e lo scarto e' un parametro a se'
+(`scarta_per_posa`).
+
+**Questo chiude la tensione del §116** — non con un compromesso: una delle due regole non era di PHD2.
+
+### Dashboard
+
+Il confine cambia anche a schermo. Spariva l'etichetta ambra "MISURATA · altra posa", che si accendeva a
+ogni differenza di posa; adesso l'ambra e' **"MISURATA · posa fuori intervallo"** e si accende solo davvero
+fuori. Rimosso anche l'avviso generato nel front-end (duplicava quello dell'Agente, che pero' conosce
+l'intervallo e il front-end no). Aggiornati i tooltip della scheda "Taratura di partenza" e della mini-scheda
+"Posa": dicono ora che dentro l'intervallo il MinMove misurato si usa comunque, come fa PHD2.
+
+**596 test verdi** (+1 netto, ma sei riscritti sulla regola verificata — non cancellati: l'intenzione che
+presidiavano vale ancora, cambia il criterio).
+
+---
+
+## §119 — L'export vero, e cosa ci ha insegnato
+
+PHD2 acceso sul Minix100 (192.168.1.16, versione 2.6.14, profilo `CEM70 RC8`), chiamato
+`export_config_settings` via API, file recuperato. **Per la prima volta abbiamo guardato il registro vero
+invece della nostra ricostruzione.** Tre correzioni, tutte a mio carico.
+
+### 1. La fixture non era il presente
+
+`EXPORT_REALE` nei test era una copia scritta a mano mesi fa. PHD2 tiene **tre** caratterizzazioni
+(`MAX_GA_HISTORY`): quando e' arrivata quella del 24/08 ha buttato la piu' vecchia. La corsa di aprile nella
+fixture (`2026-04-07`, SNR 18.8, MinMove 1.30) **non esiste piu'**; quella vera e' `2026-04-08`, SNR 33.6,
+MinMove 0.8125. Giugno e agosto invece corrispondevano.
+
+Da qui erano usciti due miei errori dichiarati al'utente come fatti: *"aprile e giugno non hanno i campi
+della deriva"* e *"`dec_hpf_rms` non esiste nell'export"*. **Falsi tutti e due.** L'utente aveva detto "ci deve
+essere per forza": aveva ragione.
+
+Ora la fixture e' `tests/_fixture_export_reale.txt`, copiata dal file vero. I casi limite che la realta' non
+offre (SNR sotto soglia, `BLT_pulse` non inizializzato) sono fixture **sintetiche dichiarate tali**, tenute
+separate. Quattro test hanno cambiato attese; nessuno e' stato cancellato.
+
+### 2. Il fattore 0.679 e' definitivamente smontato
+
+Con la corsa vera di aprile ci sono **due misure alla stessa posa**, che prima non avevamo:
+
+```
+08/04 a 1 s -> MinMove RA 0.8125      differiscono del 12%, a POSA UGUALE
+12/06 a 1 s -> MinMove RA 0.9100
+da 1 s a 2 s:  0.9100 -> 0.6175 = 0.679      il "fattore posa" vale
+               0.8125 -> 0.6175 = 0.760      fra 0.68 e 0.76
+```
+
+L'effetto attribuito alla posa non e' separabile dal rumore notte-su-notte. Il §118 aveva ragione, e adesso
+ha dati veri sotto invece di un ragionamento.
+
+### 3. Il pavimento c'e', su entrambi gli assi
+
+```
+data        posa   SNR    ra_hpf    dec_hpf   TOTALE    MinMove RA
+08/04       1 s    33.6   0.77 px   0.63 px   1.00 px   0.8125
+12/06       1 s    44.0   0.76 px   0.65 px   1.00 px   0.9100
+24/08       2 s    64.9   0.43 px   0.28 px   0.51 px   0.6175
+```
+
+`total_hpf_rms` — la grandezza direttamente confrontabile con l'RMS che l'Agente gia' calcola — c'e' in tutte
+e tre. Ora la leggiamo (`dec_hpf_rms_px`, `total_hpf_rms_px`) e la mostriamo in dashboard come "Pavimento",
+in secondi d'arco. **Non entra in nessuna decisione**: prima va misurato su piu' notti quanto vale il rapporto
+con l'errore guidato, invece di deciderlo a tavolino.
+
+### Un'osservazione da verificare, non una conclusione
+
+Aprile e giugno hanno il seeing **identico** (0.77/0.76 in AR, 0.63/0.65 in Dec, totale 1.00 e 1.00), ma
+MinMove diverso (1.25 vs 1.40). Cosa cambia fra le due: la deriva in Dec (0.94 vs **2.98** px/min) e l'errore
+polare (1.8' vs **5.8'**).
+
+Ipotesi: una polare storta gonfia il MinMove raccomandato, perche' il calcolo parte dalla dispersione Dec
+corretta per deriva, e la correzione lineare su finestre di 2 minuti non toglie tutto. Se confermata,
+sarebbe la dimostrazione con i dati di cio' che il §115 diceva per ragionamento — una polare storta non
+peggiora solo la guida, peggiora **la taratura da cui la guida parte**.
+
+Sono due punti. Osservazione, non conclusione: e' esattamente il terreno su cui mi sono gia' sbagliato due
+volte (lag-1, fattore 0.679).
+
+### Confermato sui dati veri
+
+- `dec_corrected_rms` e' spazzatura: `0.000000`, `0.000000`, e un numero di 128 cifre. Facevamo bene a non
+  leggerlo, e ora e' verificato.
+- Il backlash: `DecBacklashPulse = 203`, `Ceiling = 292`. Da `ceiling / 1.5 = 194.67` si deduce **195**, che
+  e' esattamente il valore applicato quel giorno. La regola del ceiling regge sui dati reali.
+
+**602 test verdi** (+5).
+
+### Nota di metodo
+
+Nove sessioni di guida sincronizzate fra luglio e il 24 agosto, e in **nessuna** compare un'esecuzione
+dell'Assistente (`gacnt:0` in tutti i log). Le tre caratterizzazioni vengono da sessioni che non sono nei log.
+E' la conferma pratica dell'osservazione di Dale: lo strumento c'e', funziona, e non lo si usa quasi mai —
+ed e' il motivo per cui il banner e la dottrina del §117 hanno senso.
+
+---
+
+## §120 — La baseline si calcola dal pavimento, non si osserva soltanto
+
+Il difetto, formulato dall'utente: *"se un pavimento e' misurato, allora tutta la logica deve stabilirsi
+attorno a quel valore come base di lavoro per qualita' notte"*. Ha ragione, e il difetto che colpisce e'
+strutturale.
+
+Fino alla 2.18 la baseline era **l'RMS che l'Agente osservava guidando** — cioe' il RISULTATO del proprio
+lavoro. Se guidava male saliva, e le soglie (`1.3 x baseline`, `0.75 x baseline`) salivano con lei: l'Agente
+misurava se stesso e concludeva che andava tutto bene. Un metro che si allunga insieme a cio' che deve
+misurare.
+
+### La decomposizione
+
+```
+baseline^2  =  pavimento^2  +  contributo_del_rig^2
+```
+
+- il **pavimento** e' `total_hpf_rms` del GA: dispersione ad anello APERTO, filtrata passa-alto a 1 s
+  (`hp_cutoff = 1.0`). Non contiene niente di cio' che l'Agente ha fatto — in quei minuti era fermo. E' una
+  proprieta' della NOTTE, e con la dottrina §117 si misura ogni sera;
+- il **contributo del rig** e' montatura + guida: proprieta' del SETUP, stabile da una sera all'altra.
+
+Il secondo **non lo dichiara nessuno**: l'Agente lo scorpora dalle notti in cui conosce gli altri due, e lo
+tiene in `rig_contribution.json` per setup. Nessuna costante in secondi d'arco da indovinare — che e' il
+requisito vero, perche' l'Agente gira da 0.35"/px a 4"/px.
+
+Sul rig di riferimento: baseline osservata 0.75" (152 tratti su 16 sessioni), pavimento 0.51" → rig **0.55"**.
+
+### Il tetto assoluto a 1.00" e' stato tolto
+
+Verificato: `cap = clamp(2.0 x scala, 0.70, 1.00)` sembra proporzionale al setup ma **non lo e'**. Appena la
+scala supera 0.50"/px il prodotto sfonda 1.00" e viene troncato, quindi per qualunque setup normale il tetto
+vale **1.00" fisso**:
+
+```
+RC8+OAG 0.51"/px -> 1.00"      cercatore 2.55"/px -> 1.00"
+newton  0.75"/px -> 1.00"      cercatore 3.60"/px -> 1.00"
+```
+
+Su un cercatore che guida fisiologicamente a 1.5" RMS: `rms_high` troncata a 1.00" e `rms_low` a 0.85" per
+anti-inversione — **entrambe sotto la baseline**. Quell'utente avrebbe l'Agente in allarme permanente, con le
+leve spinte tutta la notte per un cielo che non ha niente che non vada. L'intenzione dell'1.00" era giusta
+(benchmark di guida pulita), ma un numero ASSOLUTO non puo' essere giusto per tutti i setup.
+
+Ora il tetto e' `fattore x baseline_prevista`. Senza previsione resta la formula vecchia: e' l'unico riparo
+disponibile, e toglierlo del tutto lascerebbe una notte con la guida rotta a diventare "normale".
+
+### Due errori miei, corretti in corsa
+
+**1. "Il rig e' il minimo delle ultime notti".** Sbagliato, e si vede solo pensando ai setup altrui: il GA si
+esegue a declinazione 0 al meridiano (~45 gradi di altezza); riprendendo piu' in alto il seeing e' migliore e
+l'RMS guidato puo' finire SOTTO il pavimento. Non e' un errore, e' geometria — ma col minimo **una sola notte
+cosi' incolla la costante troppo in basso per sempre**. Si usa la mediana, e le notti degeneri non producono
+campione.
+
+**2. "Il tetto si ancora al pavimento".** Sembrava naturale ed era sbagliato: con pavimento 0.26" e rig 0.55",
+`2 x pavimento = 0.52"` sta SOTTO la baseline prevista di 0.61". Il tetto finiva sotto la prestazione normale
+e ricreava l'allarme permanente dall'altro lato — lo stesso difetto, dall'altro verso. Trovato eseguendo la
+matrice di verifica, non ragionando. Il tetto si ancora alla **previsione**, che include entrambi i termini
+ed e' comunque indipendente da come sta andando stanotte.
+
+### Comportamento verificato
+
+```
+1. prima notte con GA        osservata 0.75" -> usata 0.75"  [impara rig 0.55"]
+2. notte dopo, pavimento 0.26"  -> usata 0.61"  rms_high 0.79"   (prima: 1.00" al tetto)
+3. cercatore 2.55"/px, pavimento 1.20", guida 1.50"
+                                -> rms_high 1.95"  rms_low 1.12"  banda che CONTIENE 1.50"
+4. guida rotta, osservo 3.00"   -> divergenza rilevata, vince l'osservata,
+                                   ma il tetto a 1.50" impedisce di chiamarla normale
+```
+
+Il caso 2 e' il guadagno vero: su una notte buona la soglia si **stringe di due decimi** invece di restare
+incollata al tetto. Oggi l'Agente aspetterebbe 1.00" prima di dire "va male", cioe' quasi il doppio di quanto
+si sta facendo.
+
+### Rete di sicurezza
+
+Se prevista e osservata divergono oltre `ancoraggio_divergenza_max` (50%), **vince l'osservata** e lo si dice
+nel log: e' il segno che quel GA non descrive questa sessione, e un GA fatto male non deve avvelenare le
+soglie di una notte intera.
+
+**625 test verdi** (+23). Nuovo modulo `ancoraggio.py`, nuove chiavi in `[auto_calibration]`, riga "Origine
+baseline" in dashboard con il tooltip che spiega la differenza fra calcolata e osservata.
+
+---
+
+## §121 — La dashboard non si e' mai caricata: `app.js` non compilava
+
+Giro di controllo sulla dashboard dopo le molte manovre. La prima cosa trovata e' la piu' grave del progetto
+finora: **`app.js` conteneva un errore di sintassi, quindi il browser non caricava NIENTE.**
+
+```js
+sub.textContent = 'PHD2 ha sospeso le correzioni: l'errore mostrato è '
+```
+
+L'apostrofo di `l'errore` chiude la stringa: da li' in poi il parser trova identificatori nudi. Verificato
+caricando davvero la pagina in un browser con la versione precedente:
+
+```
+SyntaxError: Unexpected identifier 'errore'
+```
+
+Piu' altre 13 stringhe spezzate da un a capo VERO — residuo di heredoc in cui il `\n` che doveva restare
+letterale e' stato interpretato in scrittura. E' lo stesso difetto gia' visto su `test_exposure_baseline.py`,
+migrato nel JavaScript dove nessun test lo poteva prendere.
+
+**Perche' e' passato:** le funzioni sono dichiarate con `function`, quindi vengono issate — `typeof
+updateGaBaseline` risponde `"function"` anche quando il file non ha finito di eseguire. Uno scanner statico
+"la funzione esiste?" non lo avrebbe mai visto. E la copertura sul JS resta zero (§115).
+
+**Come e' stato trovato**: un tokenizzatore che segue lo stato delle stringhe carattere per carattere e
+segnala ogni a capo dentro un letterale non-template. 14 segnalazioni, 13 vere e 1 falsa (un letterale regex
+`/"/g`).
+
+**Come e' stato verificato**: servendo la dashboard su un server locale con `/static/` e caricandola nel
+browser, prima con la versione vecchia (SyntaxError) e poi con quella riparata (nessun errore, funzioni
+presenti, render eseguito). Non piu' analisi del testo del sorgente — la pagina caricata davvero.
+
+Attenzione a un tranello incontrato durante la verifica: un `Chart is not defined` alla riga 21 (libreria non
+servita nell'ambiente minimo) **interrompe l'esecuzione del file**, quindi tutte le `const` di livello modulo
+restano non inizializzate e ogni chiamata successiva fallisce con "Cannot access ... before initialization".
+Sembra un difetto del nostro codice e non lo e'.
+
+### Il resto dell'audit
+
+Fatto con la pagina viva, chiamando i renderer con dati veri:
+
+| caso | risultato |
+|---|---|
+| GA di stanotte, posa 2 s | `MISURATA`, posa `2.0 s`, polare `1.1'`, pavimento `0.26"`, banner nascosto |
+| origine baseline ancorata | `dal pavimento (0.26" + rig 0.55")` |
+| nessun GA | `STIMATA`, banner VISIBILE, pavimento `—` |
+| altra notte + posa 4 s fuori intervallo | `MISURATA · posa fuori intervallo`, in ambra |
+| baseline non ancorata | `osservata`, col motivo nel tooltip |
+
+**Incongruenze corrette:**
+- il badge `CAP ATTIVO` diceva *"oltre il cap proporzionale alla pixel scale"*: dal §120 il tetto e' due volte
+  la baseline attesa. Tooltip riscritto;
+- `posa_consigliata_ms` veniva emessa dall'Agente e **non mostrata da nessuna parte**, nonostante sia il
+  valore che l'Agente ora imposta da solo. Ora e' nel tooltip della Posa, con la distinzione fra "e' quella
+  che stai usando" e "la tua va bene lo stesso finche' resta dentro l'intervallo".
+
+**Controlli senza rilievi:** nessun id cercato dal renderer e assente dall'HTML (0 su 0); nessuna chiave letta
+dal renderer e mancante nello status; graffe e tonde bilanciate; backtick pari; nessuna lettura prima della
+dichiarazione oltre ai 4 falsi positivi gia' noti (omonimi in blocchi fratelli e `rh.probes`, che e' un
+accesso a proprieta').
+
+---
+
+## §122 — Le fasi della serata, e la differenza fra calibrazione e Assistente
+
+Il banner diceva **"Misura in corso"** ogni volta che PHD2 non stava guidando — compreso `Stopped`, cioe' PHD2
+aperto senza nessuna periferica collegata. Annunciava una misura che non esisteva.
+
+La causa: `sospeso` e' un ottimo **gate di controllo** (non toccare niente se non si sta guidando) ma un
+pessimo **descrittore**. Confondeva "non sto guidando" con "sto misurando".
+
+### Due domande che PHD2 sapeva gia' rispondere
+
+`get_connected()` e `get_calibrated()` **esistevano nel client e non li chiamavamo mai**. Con quelle due,
+piu' `app_state`, `anello_aperto`, `in_calibrazione` e la provenienza della baseline, la serata si descrive in
+dieci fasi. Poll con TTL di 5 s dentro `get_status()`: l'unico momento in cui la fase serve e' quando qualcuno
+la guarda, e il TTL impedisce che una dashboard aperta martelli PHD2. Serve un poll e non basta un evento —
+le fasi 0 e 1 si vivono a guida ferma, e li' il ciclo eventi non gira (`GuideStep` non arriva).
+
+### Calibrazione e Assistente sono due strumenti diversi
+
+Osservazione dell'utente, verificata sulla sorgente. La **calibrazione** (`scope.cpp`) manda impulsi noti e
+misura la risposta:
+
+```c
+m_calibration.xAngle = posizione_iniziale.Angle(posizione_attuale);  // in che DIREZIONE
+m_calibration.xRate  = distanza / (passi * durata_impulso);          // quanti PIXEL/ms
+```
+
+Risponde a *"se spingo, da che parte va la stella e di quanto?"* — la taratura del **braccio**.
+L'**Assistente** spegne le correzioni e misura di quanto la stella si muove **da sola**, separando seeing da
+deriva: e' la misura del **disturbo**.
+
+**E l'ordine non e' un consiglio, e' imposto da PHD2:**
+
+```c
+m_start->Enable(pFrame->pGuider->IsGuiding());     // guiding_assistant.cpp:1738
+```
+
+Il pulsante Inizia dell'Assistente e' grigio se la guida non e' attiva, e la guida non parte senza
+calibrazione (`guider.cpp`, `BeginCalibration`). Quindi: **calibri → guidi → solo allora l'Assistente si
+accende.**
+
+**Questo ha corretto un mio errore nella proposta**: avevo scritto per la fase 2 *"lancia l'Assistente prima
+di far partire la guida"*. E' impossibile — chi avesse seguito quell'istruzione avrebbe trovato il pulsante
+spento, esattamente come nella schermata dell'utente. Ora la fase 2 dice di avviare la guida per primo.
+
+*(Nota pratica: il Calibration Assistant porta la montatura a declinazione 0 vicino al meridiano, che e' anche
+il punto buono per l'Assistente di guida. Un viaggio, due misure.)*
+
+### Le dieci fasi
+
+| fase | quando | tono |
+|---|---|---|
+| `non_connesso` | nessuna periferica | neutro |
+| `non_calibrato` | collegato, non calibrato | neutro |
+| `pronto_senza_ga` | calibrato, guida ferma, mai eseguito | neutro |
+| `pronto_ga_vecchio` | come sopra, misura di un'altra notte | ambra tenue |
+| `pronto_ga_stanotte` | come sopra, misura di stanotte | verde |
+| `calibrazione` | calibrazione in corso | blu |
+| `misura` | anello aperto | blu |
+| `guida_ok` | guida attiva, misura di stanotte | verde |
+| `guida_ga_vecchio` | guida attiva, misura di un'altra notte | ambra tenue |
+| `guida_stimata` | guida attiva su formula | ambra |
+
+L'ordine dei controlli e' quello delle **priorita'**, non del flusso: una misura in corso conta piu' di "non
+ancora calibrato", perche' descrive cosa sta succedendo adesso.
+
+Testi firmati dall'operatore. Date e valori (`{DATA}`, `{ORA}`, `{MINMOVE}`, `{POSA}`) sono sostituiti dai
+dati veri del profilo.
+
+**Un limite dichiarato nel testo**: l'Agente non puo' sapere che l'anello aperto sia l'Assistente e non la
+spunta "Enable guide output" tolta a mano — l'evento `MountGuidingEnabled` e' identico. Per questo la fase
+`misura` dice *"PHD2 ha spento le correzioni per misurare"* e non *"l'Assistente sta misurando"*: nomina
+l'Assistente per quello che fara' dopo, senza affermare cio' che non sappiamo.
+
+### Un banner solo
+
+I due banner precedenti (§108 anello aperto, §117 Assistente da eseguire) sono stati sostituiti da uno solo,
+governato da `FASI` in `app.js`. Durante la guida normale con misura di stanotte il banner resta **verde e
+presente** (scelta dell'operatore); tace solo su una fase sconosciuta.
+
+**642 test verdi** (+17). Verificato caricando la dashboard nel browser: tutte e dieci le fasi rese, date e
+valori sostituiti, fase ignota nasconde il banner.
+
+---
+
+## §123 — Perche' 3.0 e non 2.19
+
+Il salto di versione non e' estetico. Dalla 2.17 alla 3.0 non sono state aggiunte funzioni: e' cambiata la
+**premessa** da cui l'Agente prende i propri numeri.
+
+```
+prima   l'Agente decide da dove partire, e poi adatta
+adesso  PHD2 caratterizza  ->  l'Agente acquisisce  ->  l'Agente lavora sopra quella base
+```
+
+Cosa cambia per chi aggiorna, e che una minor non avrebbe segnalato:
+
+- **default invertito**: `richiedi_posa_uguale` passa da `true` a `false` (§118) — verificato sulla sorgente
+  di PHD2 che scartare per posa diversa non e' una sua regola;
+- **`target_exposure_ms` retrocesso a ripiego** (§113): la posa la decide l'intervallo misurato dal GA;
+- **tetto assoluto rimosso** (§120): l'1.00" che valeva per qualunque setup sopra 0.5"/px non c'e' piu' dove
+  esiste una misura;
+- **nuovo file di stato**: `rig_contribution.json`, la costante del setto appresa notte per notte. Aggiunto a
+  `.gitignore` — e' stato locale della macchina, non del progetto;
+- **due nuovi moduli**: `ga_baseline.py` (§104) e `ancoraggio.py` (§120);
+- **due chiamate nuove a PHD2**: `get_connected` e `get_calibrated` (§122).
+
+### Cosa hanno detto i log, e perche' cambia il racconto
+
+84 sessioni archiviate, **4513 movimenti di parametro** registrati. Mediana **86 per sessione**, massimo 449.
+Il MinMove scritto percorre da 0.15 a 1.00 — fattore 6.7 — con mediana **0.300**, mentre il valore misurato dal
+GA su questo setup e' **0.6175**.
+
+Applicando all'archivio il recinto del §106 (nominale ±0.20, cioe' 0.42–0.82):
+
+```
+75% dei valori scritti sarebbe stato FUORI dal recinto
+di cui il 71% SOTTO
+```
+
+E il 56% dei movimenti viene da `minmove_recovery_§32`, cioe' dal meccanismo di recupero, non da una diagnosi.
+
+**Lettura**: gran parte della "dinamicita'" non era adattamento al cielo — era il sintomo del punto di
+partenza sbagliato. L'Agente ha passato 84 sessioni a risalire da 0.20 verso 0.62 senza mai arrivarci. E'
+esattamente l'obiezione che era stata mossa al progetto nella comunita' N.I.N.A. (*"the need to adjust those in
+a live manner gestures towards other issues... that modifying those parameters just hide"*), e i log le danno
+ragione sulla causa.
+
+### Il rischio che ne deriva, e va sorvegliato
+
+Prima l'Agente si muoveva **verso** il valore vero, e muoversi era quasi sempre un miglioramento. Adesso parte
+gia' sul valore misurato: **ogni movimento e' un movimento via da una misura**. Lo stesso comportamento cambia
+di segno. Il recinto lo limita a ±0.20, ma non si puo' piu' dare per scontato che muoversi aiuti.
+
+Per questo il **conteggio dei movimenti per sessione** non e' una curiosita': e' il primo controllo da fare
+sulle prossime notti, contro la mediana storica di 86. Se crolla, la dinamicita' era il sintomo. Se resta,
+serve l'A/B — reso possibile solo dal §120, perche' prima non esisteva un metro indipendente dal cielo per
+dire se una mossa avesse migliorato qualcosa.
+
+**Terza risposta ammessa**: che a leve ferme si guidi uguale o meglio. In quel caso resta la modalita'
+`monitor-only`, e resta tutto il resto — caratterizzazione acquisita, soglie ancorate, sospensione durante le
+misure, sicurezza sulle nubi, errore polare, guida alle fasi. Un esperimento serve solo se si e' disposti ad
+accettarne il risultato.
+
+**642 test verdi.**

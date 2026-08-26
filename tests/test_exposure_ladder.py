@@ -252,43 +252,75 @@ class TestPathBStessaScala(unittest.TestCase):
 # ===========================================================================
 
 class TestBaseAmmessa(unittest.TestCase):
+    """§112 — l'ammissibilita' della base non e' piu' una posizione in una lista.
 
-    def _carica(self, tmpdir, target):
-        import pathlib
-        from phd2_agent.config import load_config
-        p = pathlib.Path(tmpdir) / "config.toml"
-        p.write_text(
-            "[exposure_dynamic]\n"
-            "enabled = true\n"
-            f"target_exposure_ms = {target}\n"
-            "exposure_ladder_ms = [1000, 2000, 3000, 4000]\n",
-            encoding="utf-8")
-        return load_config(str(p)).exposure_dynamic
+    La regola vera e' sempre stata "la base deve lasciare margine per salire": ora e'
+    espressa cosi', invece che come `scala[:2]`. Ed e' valutata a RUNTIME, perche'
+    dipende dalla scala derivata dall'intervallo misurato dal Guiding Assistant — che
+    al caricamento del config non e' ancora noto.
 
-    def test_1000_e_2000_sono_ammessi(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(self._carica(d, 1000).target_exposure_ms, 1000)
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(self._carica(d, 2000).target_exposure_ms, 2000)
+    La vecchia forma bloccava un setup a cui il GA raccomanda 3 s: non poteva
+    dichiararlo, per un motivo senza rapporto con la fisica.
+    """
 
-    def test_un_valore_intermedio_viene_rifiutato_e_segnalato(self):
-        """2600 non deve diventare in silenzio una base diversa da quella
-        scritta: e' il tipo di sorpresa che il §95 esiste per eliminare."""
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            with self.assertLogs("phd2_agent.config", level="ERROR") as log:
-                ed = self._carica(d, 2600)
-            self.assertEqual(ed.target_exposure_ms, 2000, "ripiego su un gradino ammesso")
-            self.assertIn("NON AMMESSO", "\n".join(log.output))
+    def _ctrl(self, durate=(1000, 1500, 2000, 2500, 3000, 3500, 4000),
+              intervallo=None, margine=2):
+        from unittest.mock import MagicMock
+        from phd2_agent.config import AgentConfig, ControlConfig, SetupConfig
+        from phd2_agent.controller import AdaptiveController
+        from phd2_agent import ga_baseline as gb
+        cfg = AgentConfig()
+        cfg.control = ControlConfig(dry_run=True)
+        cfg.setup = SetupConfig(profile_name="t", guide_pixel_scale_arcsec_native=0.5)
+        cfg.exposure_dynamic.exposure_ladder_ms = [1000, 2000, 3000, 4000]
+        cfg.exposure_dynamic.max_steps_above_base = margine
+        c = AdaptiveController(client=MagicMock(), config=cfg)
+        c._valid_exposures = list(durate)
+        if intervallo:
+            c._baseline = gb.Baseline(70.0, 0.62, 100.0, 0.95, "guide_assistant", "x",
+                                      posa_min_s=intervallo[0], posa_max_s=intervallo[1])
+        return c
+
+    def test_senza_caratterizzazione_il_comportamento_e_quello_storico(self):
+        """Ripiego sulla scala di configurazione: 1000 e 2000, come prima."""
+        self.assertEqual(self._ctrl()._basi_ammesse(), [1000, 2000])
 
     def test_4000_non_puo_essere_una_base(self):
-        """Il cuore della regola: i 4 s si raggiungono, non ci si parte."""
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            with self.assertLogs("phd2_agent.config", level="ERROR"):
-                ed = self._carica(d, 4000)
-            self.assertEqual(ed.target_exposure_ms, 2000)
+        """Il cuore della regola, invariato: i 4 s si raggiungono, non ci si parte."""
+        self.assertNotIn(4000, self._ctrl()._basi_ammesse())
+
+    def test_il_tetto_dell_intervallo_non_puo_essere_una_base(self):
+        """Vale anche sulla scala derivata: il massimo raccomandato dal GA resta un
+        punto d'arrivo."""
+        c = self._ctrl(intervallo=(2.0, 4.0))
+        self.assertNotIn(4000, c._basi_ammesse())
+
+    def test_3000_diventa_ammessa_quando_il_GA_lo_raccomanda(self):
+        """Il caso che con la vecchia regola era un vicolo cieco: il GA raccomanda
+        3 s, e con la scala derivata 3000 ha i due gradini di margine che servono."""
+        c = self._ctrl(intervallo=(2.0, 4.0))
+        self.assertEqual(c._scala_da_ga(), [2000, 2500, 3000, 3500, 4000])
+        self.assertIn(3000, c._basi_ammesse())
+
+    def test_la_scala_non_esce_dall_intervallo_misurato(self):
+        c = self._ctrl(intervallo=(1.5, 3.5))
+        self.assertEqual(c._scala_da_ga(), [1500, 2000, 2500, 3000, 3500])
+
+    def test_il_margine_richiesto_e_quello_configurato(self):
+        c = self._ctrl(intervallo=(2.0, 4.0), margine=1)
+        self.assertIn(3500, c._basi_ammesse())
+        self.assertNotIn(4000, c._basi_ammesse())
+
+    def test_una_base_non_ammessa_viene_corretta_e_segnalata(self):
+        """Non deve diventare in silenzio una base diversa da quella scritta: e' il
+        tipo di sorpresa che il §95 esiste per eliminare."""
+        c = self._ctrl()
+        c.cfg.exposure_dynamic.target_exposure_ms = 4000
+        c.client.get_exposure.return_value = 2000
+        with self.assertLogs("phd2_agent.controller", level="ERROR") as log:
+            c._reconcile_base_exposure(full=True)
+        self.assertEqual(c.base_exposure_ms, 2000)
+        self.assertIn("NON AMMESSA", chr(10).join(log.output))
 
 
 if __name__ == "__main__":
