@@ -5964,3 +5964,72 @@ misure, sicurezza sulle nubi, errore polare, guida alle fasi. Un esperimento ser
 accettarne il risultato.
 
 **642 test verdi.**
+
+---
+
+## §124 — L'Agente era sospeso da sempre: `AppState` arriva una volta sola
+
+Difetto osservato **dal vivo** il 03/10/2026, Minix100 in sessione con la 3.0.0. L'utente chiedeva perche'
+senza Guiding Assistant l'Agente "non funzionasse". Non era il GA.
+
+```
+PHD2  (get_app_state)     "Guiding"
+Agente (/status)          app_state: "Stopped"   sospeso: true
+                          baseline_progress: 0/60
+```
+
+Zero fotogrammi ingeriti in tutta la serata. L'Agente era fermo dall'inizio.
+
+### La causa, verificata sulla sorgente di PHD2
+
+`ev_app_state()` compare in due punti di `event_server.cpp`:
+
+- **riga 541** — nel saluto al client che si connette;
+- **riga 2953** — dentro `NotifyAppState()`, che **non e' chiamata da nessuna parte** nel sorgente.
+
+Quindi PHD2 manda `AppState` **una volta sola, alla connessione**. I cambi di stato successivi li annuncia
+con eventi specifici: `StartGuiding`, `GuidingStopped`, `Paused`, `LoopingExposures`, `StartCalibration`.
+
+Il §110 aveva legato `sospeso` ad `app_state`:
+
+```python
+if self.app_state is not None and self.app_state not in ("Guiding", "LostLock"):
+    return True
+```
+
+Avviando l'Agente **prima** della guida — cioe' sempre, visto che NINA lo accende e PHD2 guida dopo — lo
+stato restava `"Stopped"` per tutta la notte, il gate sospendeva, e `GuideStep` veniva scartato in
+`main.py`. Nessuna baseline, nessuna diagnosi, nessuna azione. Un regresso mio, introdotto da una guardia
+scritta per proteggere le misure.
+
+**Perche' nessun test lo aveva preso:** i test impostavano `app_state` a mano. Nessuno riproduceva la
+sequenza reale — connessione da fermo, poi la guida parte — perche' davo per scontato che PHD2 annunciasse i
+propri cambi di stato. Era una supposizione sul comportamento di un programma di terzi, mai verificata sul
+suo sorgente. La stessa classe di errore del §118.
+
+### La correzione
+
+**Via principale: lo stato si ricava dagli eventi che PHD2 emette davvero.** Nuovo `_stato_phd2()` in
+`main.py`, chiamato da `StartGuiding` → Guiding, `GuideStep` → Guiding, `GuidingStopped` → Stopped,
+`Paused` → Paused, `Resumed` → Guiding, `LoopingExposures` → Looping, `LoopingExposuresStopped` → Stopped,
+`StartCalibration` → Calibrating. Logga ogni transizione.
+
+`GuideStep` e' la rete piu' fitta: arriva solo mentre PHD2 guida, e rimette in riga lo stato anche se un
+evento di transizione si fosse perso. (Ad anello aperto arriva comunque, ma li' sospende `anello_aperto`,
+che resta corretto.)
+
+**Rete secondaria: il sondaggio del §122.** `_aggiorna_fase_phd2()` interrogava gia' `get_connected` e
+`get_calibrated` ogni 5 s; ora chiede anche `get_app_state` e riallinea, dichiarandolo nel log.
+
+**Una guardia sul tipo, imparata rompendo un test.** Il sondaggio accettava qualunque valore "vero":
+`get_app_state()` su un MagicMock ritorna un mock, che e' truthy e finiva dentro il gate di controllo. E' la
+**terza volta** che la verita' dei MagicMock morde questo progetto (§109, poi la copertura del §112). Ora
+passa solo `isinstance(stato, str)`.
+
+### Rimedio immediato per chi ha la 3.0.0 in sessione
+
+Riavviare l'Agente **mentre PHD2 sta gia' guidando**: il saluto di connessione porta `AppState = Guiding` e
+l'Agente lavora per il resto della notte. Non e' una correzione, e' un giro attorno al difetto.
+
+**652 test verdi** (+10, `test_stato_phd2.py`): la sequenza reale — connesso da fermo, poi la guida parte —
+adesso e' coperta, insieme a tutte le transizioni e alle due reti di sicurezza.

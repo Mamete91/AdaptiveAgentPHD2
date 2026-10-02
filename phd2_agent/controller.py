@@ -1180,6 +1180,21 @@ class AdaptiveController:
                 # PHD2 puo' non rispondere: si resta sull'ultimo valore noto
                 # invece di dichiarare una fase su un'ignoranza.
                 pass
+        # §124 — rete di sicurezza sullo stato. La via principale sono gli eventi
+        # (`_stato_phd2` in main.py): PHD2 manda `AppState` solo alla connessione,
+        # quindi fidarsi di quello significava restare su "Stopped" tutta la notte.
+        # Qui si rimette in riga anche se un evento di transizione si fosse perso.
+        try:
+            stato = self.client.get_app_state()
+            # Solo una stringa: un oggetto qualunque (p.es. un mock nei test, o
+            # una risposta malformata) e' "vero" e passerebbe, inquinando il gate
+            # di controllo con un valore che non e' uno stato.
+            if isinstance(stato, str) and stato and stato != self.app_state:
+                logger.info("[fase] stato PHD2 riallineato dal sondaggio: %s -> %s",
+                            self.app_state or "ignoto", stato)
+                self.app_state = stato
+        except Exception:
+            pass
 
     @property
     def fase(self) -> str:

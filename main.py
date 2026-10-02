@@ -332,6 +332,31 @@ def main():
     log.info("   Log CSV: %s", summary.get("csv_file", "-"))
 
 
+def _stato_phd2(controller, nuovo: str, perche: str) -> None:
+    """§124 — aggiorna lo stato di PHD2 ricavandolo dagli eventi.
+
+    PHD2 manda l'evento `AppState` UNA VOLTA SOLA, alla connessione del client:
+    in `event_server.cpp` e' inviato alla riga 541 (saluto al client appena
+    connesso) e dentro `NotifyAppState()`, che non e' chiamata da nessuna parte
+    nel sorgente. Dopo la connessione, i cambi di stato PHD2 li annuncia con
+    eventi SPECIFICI — StartGuiding, GuidingStopped, Paused, LoopingExposures,
+    StartCalibration — non ri-mandando AppState.
+
+    Conseguenza del §110, che ha legato `sospeso` ad `app_state`: avviando
+    l'Agente PRIMA della guida (cioe' sempre: NINA lo accende, PHD2 guida dopo)
+    lo stato restava "Stopped" per tutta la notte e l'Agente non ingeriva un solo
+    fotogramma. Osservato dal vivo il 03/10: PHD2 in "Guiding", Agente sospeso,
+    baseline ferma a 0/60.
+    """
+    if controller is None or not nuovo:
+        return
+    precedente = controller.app_state
+    if precedente == nuovo:
+        return
+    controller.app_state = nuovo
+    log.info("Stato PHD2: %s -> %s (%s)", precedente or "ignoto", nuovo, perche)
+
+
 def _event_loop(
     client: PHD2Client,
     analyzer: StatisticsAnalyzer,
@@ -401,6 +426,10 @@ def _event_loop(
         event_name = event.get("Event", "")
 
         if event_name == "GuideStep":
+            # §124 — il GuideStep arriva SOLO mentre PHD2 guida: e' la conferma
+            # piu' frequente che abbiamo, e rimette in riga lo stato se un
+            # evento di transizione si fosse perso.
+            _stato_phd2(controller, "Guiding", "arrivato un GuideStep")
             if is_settling:
                 # Ignoriamo i GuideStep durante il dithering (falsi errori)
                 continue
@@ -508,22 +537,27 @@ def _event_loop(
                 pass
 
         elif event_name == "LoopingExposures":
+            _stato_phd2(controller, "Looping", "PHD2 espone senza guidare")
             # §68 — la camera espone ma NON si sta guidando (tipico dei tentativi di
             # riaggancio). Prima l'agente ignorava del tutto questo evento: il canale
             # poteva essere VIVO e sembrarci muto. Non tocca analyzer/controller.
             _gh("on_looping_exposure", event)
 
         elif event_name == "LoopingExposuresStopped":
+            _stato_phd2(controller, "Stopped", "PHD2 ha smesso di esporre")
             _gh("set_guiding_expected", False, "PHD2 ha smesso di esporre (looping stopped)")
 
         elif event_name == "Paused":
+            _stato_phd2(controller, "Paused", "guida in pausa")
             _gh("set_guiding_expected", False, "guida in pausa (annuncio PHD2)")
 
         elif event_name == "Resumed":
+            _stato_phd2(controller, "Guiding", "guida ripresa")
             _gh("set_guiding_expected", True, "guida ripresa (annuncio PHD2)")
 
         elif event_name == "StartGuiding":
             log.info("PHD2 ha avviato la guida")
+            _stato_phd2(controller, "Guiding", "annuncio StartGuiding")
             _gh("set_guiding_expected", True, "guida avviata (annuncio PHD2)")
             analyzer.reset()
             if controller.diagnostic_engine is not None:
@@ -536,6 +570,7 @@ def _event_loop(
                 pass
 
         elif event_name == "StartCalibration":
+            _stato_phd2(controller, "Calibrating", "calibrazione avviata")
             # §109 — durante la calibrazione PHD2 comanda spostamenti grandi e
             # misura di quanto la stella si muove rispetto al punto di partenza.
             # Non arrivano GuideStep, ma arrivano gli StarLost — e da li' l'Agente
@@ -570,6 +605,7 @@ def _event_loop(
                     pass
 
         elif event_name == "GuidingStopped":
+            _stato_phd2(controller, "Stopped", "guida fermata")
             log.info("PHD2 ha fermato la guida")
             _gh("set_guiding_expected", False, "guida fermata (annuncio PHD2)")
             controller.mark_uninitialized()
