@@ -225,6 +225,11 @@ class Baseline:
     # caso in cui ha piu' da dirci (la posa in vigore e' sbagliata).
     ga_riferimento_timestamp: Optional[str] = None
     ga_di_stanotte: Optional[bool] = None
+    # §125 — vecchia OLTRE la soglia in giorni. E' questa, non il semplice
+    # "non e' di stanotte", a far scattare l'ambra e l'avviso: una misura di
+    # ieri non e' un problema, una di tre mesi fa si'.
+    ga_vecchia: Optional[bool] = None
+    ga_eta_giorni: Optional[float] = None
     # §119 — il pavimento misurato ad anello aperto, in pixel. Per ora si LEGGE e
     # si MOSTRA soltanto: non entra in nessuna decisione. Prima di usarlo come
     # riferimento va misurato quanto vale il rapporto con l'errore guidato su piu'
@@ -266,6 +271,9 @@ class Baseline:
             "pa_error_soglia_arcmin": self.pa_error_soglia_arcmin,
             "ga_riferimento_timestamp": self.ga_riferimento_timestamp,
             "ga_di_stanotte": self.ga_di_stanotte,
+            "ga_vecchia": self.ga_vecchia,
+            "ga_eta_giorni": (round(self.ga_eta_giorni, 1)
+                              if self.ga_eta_giorni is not None else None),
             "pavimento_ra_px": self.pavimento_ra_px,
             "pavimento_dec_px": self.pavimento_dec_px,
             "pavimento_totale_px": self.pavimento_totale_px,
@@ -487,7 +495,7 @@ def risolvi(*, corse: list[GARun], pixel_scale_arcsec: float,
             base_exposure_ms: Optional[int], minmove_min: float,
             minmove_max: float, snr_min: float, elapsed_min_s: int,
             campioni_min: int,
-            eta_avviso_giorni: int = 14,
+            eta_avviso_giorni: int = 30,
             pa_error_avviso_arcmin: float = 5.0,
             richiedi_ga_di_sessione: bool = True,
             scarta_per_posa: bool = False,
@@ -530,6 +538,8 @@ def risolvi(*, corse: list[GARun], pixel_scale_arcsec: float,
                                   if riferimento_posa else None),
         ga_di_stanotte=(riferimento_posa.di_stanotte(adesso)
                         if riferimento_posa else None),
+        ga_eta_giorni=(riferimento_posa.eta_giorni(adesso)
+                       if riferimento_posa else None),
         pavimento_ra_px=(riferimento_posa.ra_hpf_rms_px if riferimento_posa else None),
         pavimento_dec_px=(riferimento_posa.dec_hpf_rms_px if riferimento_posa else None),
         pavimento_totale_px=(riferimento_posa.total_hpf_rms_px
@@ -543,15 +553,21 @@ def risolvi(*, corse: list[GARun], pixel_scale_arcsec: float,
     # la domanda e' "hai eseguito l'Assistente stanotte?", e la risposta non
     # cambia se poi quella corsa non e' utilizzabile alla posa in uso.
     _fresca = _posa["ga_di_stanotte"]
-    _eta_rif = riferimento_posa.eta_giorni(adesso) if riferimento_posa else None
-    if richiedi_ga_di_sessione and _fresca is False:
-        quanto = (f"{_eta_rif:.0f} giorni fa" if _eta_rif is not None and _eta_rif >= 1
-                  else "in una sessione precedente")
+    _eta_rif = _posa["ga_eta_giorni"]
+    # §125 — la soglia e' l'ETA', non la sessione. Il §117 segnalava ogni misura
+    # che non fosse di stanotte: in campo, una caratterizzazione di IERI faceva
+    # comparire etichetta ambra e spiegazione, che e' sproporzionato. Il seeing
+    # cambia da una notte all'altra, ma una misura di pochi giorni resta un
+    # riferimento onesto — molto meglio della formula generica, che e' l'unica
+    # alternativa. Si avvisa solo oltre `eta_avviso_giorni`.
+    _vecchia = (_eta_rif is not None and _eta_rif > eta_avviso_giorni)
+    _posa["ga_vecchia"] = _vecchia
+    if richiedi_ga_di_sessione and _vecchia:
         avvisi.append(
-            f"l'Assistente di guida non e' stato eseguito in questa sessione "
-            f"(l'ultima misura utile e' di {quanto}). Il seeing cambia da una notte "
-            f"all'altra e la zona morta e' tarata su quello: la misura non diventa "
-            f"sbagliata, diventa di un'altra notte")
+            f"l'Assistente di guida e' stato eseguito {_eta_rif:.0f} giorni fa. "
+            f"Si usa lo stesso — il MinMove segue il seeing TIPICO del sito, non "
+            f"quello della singola notte — ma a questa distanza conviene rifarlo: "
+            f"PHD2 -> Strumenti -> Assistente di guida, alla posa operativa")
 
     # L'avviso si emette qui, prima dei rami: una polare storta resta storta anche
     # se la caratterizzazione viene scartata per altri motivi.
@@ -591,9 +607,9 @@ def risolvi(*, corse: list[GARun], pixel_scale_arcsec: float,
         # la pena rimisurarlo, e senza questo avviso una caratterizzazione di
         # quattro mesi verrebbe usata in silenzio come se fosse di stanotte.
         eta = run.eta_giorni(adesso)
-        # Sotto la dottrina l'avviso di freschezza e' gia' stato emesso sopra e
-        # dice la stessa cosa meglio: qui si tace, per non ripetersi.
-        if (not (richiedi_ga_di_sessione and _fresca is False)
+        # §125 — l'avviso sull'eta' esce da un punto solo. Se la dottrina e'
+        # attiva l'ha gia' emesso il blocco sopra, sulla stessa soglia.
+        if (not richiedi_ga_di_sessione
                 and eta is not None and eta > eta_avviso_giorni):
             avvisi.append(
                 f"la caratterizzazione ha {eta:.0f} giorni: viene usata lo stesso, "

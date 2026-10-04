@@ -1220,13 +1220,15 @@ class AdaptiveController:
             return "non_calibrato"
         b = self._baseline
         misurata = bool(b and b.sorgente == "guide_assistant")
-        stanotte = bool(b and b.ga_di_stanotte)
+        # §125 — la fase ambra la decide l'ETA', non il semplice "non stanotte":
+        # una misura di ieri non merita un banner che chiede di rifarla.
+        recente = bool(b and not b.ga_vecchia)
         if self.app_state in ("Guiding", "LostLock"):
             if misurata:
-                return "guida_ok" if stanotte else "guida_ga_vecchio"
+                return "guida_ok" if recente else "guida_ga_vecchio"
             return "guida_stimata"
         if misurata:
-            return "pronto_ga_stanotte" if stanotte else "pronto_ga_vecchio"
+            return "pronto_ga_stanotte" if recente else "pronto_ga_vecchio"
         return "pronto_senza_ga"
 
     def _pavimento_arcsec(self):

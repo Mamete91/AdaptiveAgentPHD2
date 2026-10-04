@@ -6033,3 +6033,101 @@ l'Agente lavora per il resto della notte. Non e' una correzione, e' un giro atto
 
 **652 test verdi** (+10, `test_stato_phd2.py`): la sequenza reale — connesso da fermo, poi la guida parte —
 adesso e' coperta, insieme a tutte le transizioni e alle due reti di sicurezza.
+
+---
+
+## §125 — La freschezza del GA smette di essere binaria
+
+Il §117 aveva reso il criterio binario: "e' di questa sessione, si o no". In campo e' risultato sproporzionato.
+Schermata dell'utente del 03/10, con una caratterizzazione di **ieri sera**:
+
+```
+MISURATA · altra notte                                    (etichetta ambra)
+"L'Assistente di guida non e' stato eseguito in questa sessione
+ (l'ultima misura utile e' di in una sessione precedente). Il seeing cambia..."
+```
+
+Una misura di un giorno trattata come un problema, con tanto di spiegazione. Piu' un refuso nella
+composizione del messaggio — *"e' di in una sessione precedente"* — perche' il ramo senza giorni interi
+inseriva una frase gia' preposizionata dopo un "di".
+
+**Tre stati invece di due:**
+
+| | etichetta | avviso |
+|---|---|---|
+| di questa sessione | `MISURATA` verde | nessuno |
+| altra notte, entro la soglia | `MISURATA` verde | **nessuno** |
+| oltre `eta_avviso_giorni` | `MISURATA · da rifare` ambra | "eseguito N giorni fa, conviene rifarlo" |
+
+Soglia portata da 14 a **30 giorni**, su indicazione dell'operatore: *"una sessione GA anche di un mese non
+deve essere cosi' drammatica"*. Il ragionamento regge: una misura di pochi giorni resta un riferimento
+onesto, e comunque molto migliore della formula generica — che e' l'unica alternativa. L'alternativa al
+riferimento vecchio non e' un riferimento migliore: e' nessun riferimento.
+
+`ga_di_stanotte` resta e viaggia nello `status_block` (serve all'etichetta verde "fatto stanotte" quando e'
+vero), ma non governa piu' ne' l'ambra ne' il banner: quelli ora dipendono da `ga_vecchia`, che e'
+l'eta' confrontata con la soglia. Aggiunto anche `ga_eta_giorni` per avere il numero a schermo.
+
+**Un default sfuggito**: `config.py` e `config.toml` passavano a 30, ma la firma di `risolvi()` teneva
+`eta_avviso_giorni: int = 14`. In produzione vinceva il config — quindi nessun effetto reale — ma i test che
+non passano il parametro vedevano 14 e la verifica sui dati veri segnalava "vecchia" a 18 giorni. Allineato.
+
+**Quattro test riscritti**, non cancellati: presidiavano la regola binaria e ora presidiano quella graduata,
+con in piu' i casi nuovi (misura di ieri che resta verde, soglia che scatta oltre i 30 giorni, eta' esposta
+nello status). **656 test verdi** (+4).
+
+### Trovato per strada: campi duplicati in `GARun`
+
+`GARun` si porta dietro `ga_riferimento_timestamp`, `ga_di_stanotte` e i quattro `pavimento_*`, che
+appartengono a `Baseline`. Residuo di patch precedenti fatte con `replace()` su un'ancora presente due volte.
+Sono tutti `Optional` con default e nessuno li legge su `GARun`, quindi innocui — ma vanno tolti. Lo stesso
+errore ha colpito questa patch: un `replace()` non asserito e' finito nel vuoto, e la Baseline e' rimasta
+senza i campi nuovi finche' i test non hanno sollevato `TypeError`. **Ogni sostituzione va asserita.**
+
+### Osservazioni di campo della stessa sessione
+
+Dallo `/status` dal vivo, profilo CEM70 RC8, GA del 02/10 23:12:
+
+```
+pa_error_arcmin      24.3'     <- contro 1.8 / 5.8 / 1.1 delle corse di agosto
+backlash_pulse_ms    210       = backlash_ceiling_ms 210  (fermo contro il tetto)
+posa_consigliata_ms  1000      (limite-deriva 0.9 s, contro i 1.93 s di agosto)
+pavimento            0.224"
+```
+
+I tre numeri raccontano la stessa cosa: un errore polare molto grande produce una deriva in declinazione che
+spinge il backlash contro il proprio tetto e taglia la posa raccomandata. Gli avvisi del §115 e del backlash
+sono scattati entrambi, correttamente. E' la prima volta che la catena GA → avvisi diagnostica una condizione
+reale sul campo.
+
+### Correzione (04/10) — la polare non spiega il backlash al tetto
+
+Il paragrafo sopra lega errore polare, deriva in DEC e backlash al tetto in un'unica storia. I dati della
+sera dopo la smentiscono, e l'operatore l'aveva obiettato subito: polare fatta con NINA a circa 1' dal polo.
+
+**1. L'errore polare del GA non e' una misura indipendente.** `guiding_assistant.cpp:1991`:
+
+```
+alignmentError = 3.8197 * fabs(decDriftPerMin) * pxscale / cosdec;
+```
+
+E' la deriva in DEC convertita in primi d'arco, nient'altro. Infatti il rapporto e' lo stesso nelle due
+corse: 24.3' / 12.51 px/min = 1.94 e 1.2' / 0.62 px/min = 1.94, cioe' 3.8197 x 0.508 a declinazione
+circa 0. Il 02/10 la deriva in DEC c'era davvero; che fosse POLARE e' un'attribuzione della formula,
+non una misura.
+
+**2. Il backlash non dipende da quella deriva.**
+
+| GA | errore polare | deriva DEC | backlash misurato |
+|---|---|---|---|
+| 02/10 23:12 | 24.3' | -12.51 px/min | 147 +/- 48 ms |
+| 03/10 | 1.2' | 0.62 px/min | 183 +/- 23 ms (consigliato 180) |
+
+Deriva divisa per venti, backlash uguale o maggiore: il gioco e' meccanico, una proprieta' del rig.
+
+**Lettura corretta:** il 02/10 una deriva in DEC reale ma transitoria, di causa non identificata; il
+backlash vicino al tetto e' del rig e non di quella notte. Gli avvisi del §115 e del backlash restano
+giusti — hanno segnalato misure vere — ma la catena causale che ci avevo costruito sopra no. Tre numeri
+che si muovevano insieme presi per una causa, senza controllare come PHD2 calcola il primo: la stessa
+classe di errore del §118 e del §124, una supposizione su un programma di terzi non verificata sul suo
+sorgente.

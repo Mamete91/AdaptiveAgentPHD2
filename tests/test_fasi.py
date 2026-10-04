@@ -29,7 +29,7 @@ from phd2_agent.ga_baseline import Baseline
 
 
 def _ctrl(*, connesso=True, calibrato=True, app_state="Stopped",
-          sorgente=None, di_stanotte=False):
+          sorgente=None, di_stanotte=False, vecchia=False):
     cfg = AgentConfig()
     cfg.control = ControlConfig(dry_run=True)
     cfg.setup = SetupConfig(profile_name="t", guide_pixel_scale_arcsec_native=0.508)
@@ -41,7 +41,7 @@ def _ctrl(*, connesso=True, calibrato=True, app_state="Stopped",
     c.in_calibrazione = False
     if sorgente:
         c._baseline = Baseline(70.0, 0.6175, 100.0, 0.95, sorgente, "x",
-                               ga_di_stanotte=di_stanotte)
+                               ga_di_stanotte=di_stanotte, ga_vecchia=vecchia)
     return c
 
 
@@ -58,8 +58,15 @@ class TestFasiPrimaDellaGuida(unittest.TestCase):
     def test_pronto_senza_nessuna_caratterizzazione(self):
         self.assertEqual(_ctrl().fase, "pronto_senza_ga")
 
+    def test_pronto_con_misura_di_ieri_e_verde(self):
+        """§125 — una misura di un'altra notte, ma recente, non e' un problema:
+        niente ambra, niente banner che chiede di rifarla."""
+        c = _ctrl(sorgente="guide_assistant", di_stanotte=False, vecchia=False)
+        self.assertEqual(c.fase, "pronto_ga_stanotte")
+
     def test_pronto_con_caratterizzazione_vecchia(self):
-        c = _ctrl(sorgente="guide_assistant", di_stanotte=False)
+        """Oltre la soglia in giorni, invece, lo si dice."""
+        c = _ctrl(sorgente="guide_assistant", di_stanotte=False, vecchia=True)
         self.assertEqual(c.fase, "pronto_ga_vecchio")
 
     def test_pronto_con_caratterizzazione_di_stanotte(self):
@@ -96,8 +103,14 @@ class TestFasiDuranteLaGuida(unittest.TestCase):
         c = _ctrl(app_state="Guiding", sorgente="guide_assistant", di_stanotte=True)
         self.assertEqual(c.fase, "guida_ok")
 
+    def test_guida_con_misura_di_ieri_resta_verde(self):
+        c = _ctrl(app_state="Guiding", sorgente="guide_assistant",
+                  di_stanotte=False, vecchia=False)
+        self.assertEqual(c.fase, "guida_ok")
+
     def test_guida_con_misura_vecchia(self):
-        c = _ctrl(app_state="Guiding", sorgente="guide_assistant", di_stanotte=False)
+        c = _ctrl(app_state="Guiding", sorgente="guide_assistant",
+                  di_stanotte=False, vecchia=True)
         self.assertEqual(c.fase, "guida_ga_vecchio")
 
     def test_guida_su_valori_stimati(self):

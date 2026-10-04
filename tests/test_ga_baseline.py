@@ -505,7 +505,11 @@ class TestAvvisiSullaPosa(unittest.TestCase):
     def test_posa_coerente_nessun_avviso(self):
         """Il caso reale del 24/08: GA misurato a 2 s, raccomanda 2 s, si guida a 2 s."""
         b = self._risolvi(2000)
-        self.assertFalse([a for a in b.avvisi if "posa" in a or "guidi" in a], b.avvisi)
+        # §125 — si filtrano i soli avvisi sulla POSA: l'avviso sull'eta' della
+        # misura e' un'altra cosa e qui non c'entra.
+        self.assertFalse([a for a in b.avvisi
+                          if ("posa" in a or "guidi" in a) and "giorni fa" not in a],
+                         b.avvisi)
 
     def test_ga_incoerente_con_se_stesso(self):
         """I GA di aprile e giugno erano misurati a 1 s ma raccomandavano 1.5 e 2 s:
@@ -636,30 +640,46 @@ class TestFreschezzaDiSessione(unittest.TestCase):
         self.assertTrue(b.ga_di_stanotte)
         self.assertFalse([a for a in b.avvisi if "sessione" in a], b.avvisi)
 
-    def test_di_un_altra_notte_avvisa_ma_la_usa(self):
+    def test_di_un_altra_notte_ma_recente_non_si_dice_niente(self):
+        """§125 — il §117 segnalava ogni misura che non fosse di stanotte. In campo
+        era sproporzionato: una caratterizzazione di IERI faceva comparire
+        etichetta ambra e spiegazione. Sotto la soglia in giorni si tace."""
         b = self._risolvi("2026-08-20 21:30:00", dt.datetime(2026, 8, 26, 2, 0, 0))
-        self.assertFalse(b.ga_di_stanotte)
-        self.assertEqual(b.sorgente, "guide_assistant")     # usata comunque
+        self.assertFalse(b.ga_di_stanotte)                  # non e' di stanotte
+        self.assertFalse(b.ga_vecchia)                      # ma e' recente
+        self.assertEqual(b.sorgente, "guide_assistant")     # e si usa
         self.assertAlmostEqual(b.ra_minmove, 0.6175)
-        avvisi = [a for a in b.avvisi if "sessione" in a]
-        self.assertEqual(len(avvisi), 1)
-        # deve spiegare il PERCHE', non solo constatare
-        self.assertIn("seeing", avvisi[0])
+        self.assertFalse([a for a in b.avvisi if "giorni fa" in a], b.avvisi)
 
-    def test_senza_dottrina_nessun_avviso_di_sessione(self):
-        b = self._risolvi("2026-08-20 21:30:00", dt.datetime(2026, 8, 26, 2, 0, 0),
+    def test_oltre_la_soglia_lo_dice(self):
+        b = self._risolvi("2026-06-20 21:30:00", dt.datetime(2026, 8, 26, 2, 0, 0))
+        self.assertTrue(b.ga_vecchia)
+        self.assertEqual(b.sorgente, "guide_assistant")     # usata lo stesso
+        avvisi = [a for a in b.avvisi if "giorni fa" in a]
+        self.assertEqual(len(avvisi), 1)
+        self.assertIn("conviene rifarlo", avvisi[0])
+
+    def test_l_eta_viaggia_con_la_baseline(self):
+        b = self._risolvi("2026-08-20 21:30:00", dt.datetime(2026, 8, 26, 2, 0, 0))
+        self.assertAlmostEqual(b.ga_eta_giorni, 5.19, places=1)
+        self.assertAlmostEqual(b.status_block()["ga_eta_giorni"], 5.2, places=1)
+
+    def test_senza_dottrina_resta_la_sola_soglia_in_giorni(self):
+        b = self._risolvi("2026-04-24 22:00:00", dt.datetime(2026, 8, 26, 2, 0, 0),
                           dottrina=False)
-        self.assertFalse([a for a in b.avvisi if "sessione" in a], b.avvisi)
+        self.assertEqual(len([a for a in b.avvisi if "giorni" in a]), 1, b.avvisi)
 
     def test_i_due_avvisi_non_si_sovrappongono(self):
-        """Con la dottrina attiva e una misura di mesi fa, il messaggio e' UNO."""
+        """Con una misura di mesi fa il messaggio esce da UN punto solo."""
         b = self._risolvi("2026-04-24 22:00:00", dt.datetime(2026, 8, 26, 2, 0, 0))
-        detti = [a for a in b.avvisi if "sessione" in a or "giorni" in a]
+        detti = [a for a in b.avvisi if "giorni" in a]
         self.assertEqual(len(detti), 1, detti)
 
     def test_lo_stato_arriva_alla_dashboard(self):
         b = self._risolvi("2026-08-20 21:30:00", dt.datetime(2026, 8, 26, 2, 0, 0))
-        self.assertIs(b.status_block()["ga_di_stanotte"], False)
+        s = b.status_block()
+        self.assertIs(s["ga_di_stanotte"], False)
+        self.assertIs(s["ga_vecchia"], False)
 
 
 class TestPavimentoRMS(unittest.TestCase):

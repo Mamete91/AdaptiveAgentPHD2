@@ -802,14 +802,16 @@ function updateGaBaseline(gab, ctrlExp) {
   // su quello. Una misura di un'altra notte resta valida e si usa — l'etichetta
   // dice solo che è di un'altra notte.
   const misurata = (gab.sorgente === 'guide_assistant');
-  const altraNotte = (misurata && gab.ga_di_stanotte === false);
+  // §125 — ambra solo quando la misura e' VECCHIA (oltre la soglia in giorni),
+  // non per il semplice "non e' di stanotte": una di ieri non merita un allarme.
+  const vecchia = (misurata && gab.ga_vecchia === true);
 
   setGlyph('gab-icon', cfg.icon);
   let etichetta = cfg.label;
   if (misurata && fuoriIntervallo) { etichetta = 'MISURATA · posa fuori intervallo'; }
-  else if (altraNotte) { etichetta = 'MISURATA · altra notte'; }
+  else if (vecchia) { etichetta = 'MISURATA · da rifare'; }
   el('gab-state').textContent = etichetta;
-  el('gab-state').style.color = ((misurata && fuoriIntervallo) || altraNotte)
+  el('gab-state').style.color = ((misurata && fuoriIntervallo) || vecchia)
     ? '#fbbf24' : cfg.color;
 
   // §122 — il banner non si governa più da qui: c'è un unico banner delle fasi

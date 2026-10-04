@@ -166,7 +166,12 @@ richiedi_posa_uguale = false
 # Oltre questi giorni la caratterizzazione si usa lo stesso, ma l'Agente
 # avvisa che conviene rifarla: il MinMove segue il seeing tipico del sito,
 # che nel giro di settimane puo' essere cambiato.
-eta_avviso_giorni    = 14
+# §125 — soglia in GIORNI, non "e' di stanotte". Sotto questa distanza la
+# misura si usa senza dire niente: il seeing cambia da una notte all'altra, ma
+# una caratterizzazione di pochi giorni resta un riferimento onesto, e molto
+# migliore della formula generica che e' l'unica alternativa. Oltre, l'Agente
+# consiglia di rifarla — senza mai rifiutarla.
+eta_avviso_giorni    = 30
 
 # §115 — errore di allineamento polare, misurato dall'Assistente di guida.
 # Non invalida la caratterizzazione: il MinMove misura il seeing, non la deriva.

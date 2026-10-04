@@ -197,7 +197,7 @@ class GABaselineConfig:
     # notte) ma si avvisa che conviene rifarla. Senza questa regola una
     # misura di mesi prima verrebbe adottata in silenzio come se fosse
     # di stanotte.
-    eta_avviso_giorni: int = 14
+    eta_avviso_giorni: int = 30
     # §117 — dottrina "Assistente a ogni sessione". Il seeing e' una proprieta'
     # della NOTTE, non del telescopio: la montatura e' la stessa da un anno, il
     # cielo cambia da sera a sera. Con questo attivo il criterio non e' piu'
@@ -747,7 +747,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             elapsed_min_s=int(gb.get("elapsed_min_s", 144)),
             campioni_min=int(gb.get("campioni_min", 60)),
             richiedi_posa_uguale=bool(gb.get("richiedi_posa_uguale", False)),
-            eta_avviso_giorni=int(gb.get("eta_avviso_giorni", 14)),
+            eta_avviso_giorni=int(gb.get("eta_avviso_giorni", 30)),
             pa_error_avviso_arcmin=float(gb.get("pa_error_avviso_arcmin", 5.0)),
             richiedi_ga_di_sessione=bool(gb.get("richiedi_ga_di_sessione", True)),
             backlash_tolleranza=float(gb.get("backlash_tolleranza", 0.20)),
