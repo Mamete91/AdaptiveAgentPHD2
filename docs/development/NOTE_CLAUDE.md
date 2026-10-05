@@ -6311,3 +6311,20 @@ Costo dichiarato: dopo una nube in cui l'Agente ha alzato la posa (Path A, SNR <
 l'UNSAFE e' un cambio di posa e riazzera la conferma: il SAFE arriva circa 5 minuti dopo l'ultimo gradino.
 
 Test: Agente 749 (+24), plugin 106 (+8).
+
+### §126-septies (05/10) — testi della dashboard e del plugin allineati al giudice guida (Agente 3.2.1, plugin 1.14.2.0)
+
+Revisione di tutti i tooltip su richiesta dell'operatore, dopo il §126-sexies. Solo testi e stati mostrati: nessuna
+regola cambia.
+- Dashboard: SNR e scheda Trasparenza (la camera di ripresa e' informativa); scheda "Cielo dalla guida" (tempi di
+  sospensione e ripartenza, 5 minuti dopo un cambio di stella o di posa in UNSAFE, regole del riferimento); slot GUIDA
+  (e' la qualita' della guida secondo l'Agente, non il giudizio sul cielo); NUBI e TELEMETRIA FERMA dichiarate solo
+  per la camera giudice; il rientro da STELLA PERSA, AGENTE PERSO e CANALE GUIDA CIECO passa dalla conferma del
+  sereno (nel plugin il rilascio satura il cielo della guida, SafetyDecisionEngine.SaturateGuideSky). Stato nuovo
+  "Sereno in conferma" (x/60 o x/300 s) distinto da "Sereno confermato"; chip "Conferma lunga" con il motivo.
+- Plugin: descrizione del monitor, aiuto Sicurezza nubi, tooltip Sereno -> safe (governa anche il ritorno dalle altre
+  cause), aiuti Agente perso, Canale di guida, Stella persa.
+- Verificati in anteprima tre scenari (conferma lunga, sereno confermato, Agente perso) con le funzioni vere di app.js.
+- Errori "unknown sequence container: TriggerRunnerRootContextContainer" nel log di NINA (064 e 065): innocui. Il
+  convertitore dei contenitori non conosce quel tipo, ma Trigger On Unsafe riaggancia i suoi rami a un contesto nuovo
+  (TriggerOnUnsafe.cs, AttachInstructionSetsToContext) e la Recovery probe si carica (nessun "unknown sequence item").

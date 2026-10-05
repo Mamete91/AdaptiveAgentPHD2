@@ -98,7 +98,7 @@
 
         <div class="separator"></div>
         <div class="mini-stats">
-          <div class="mini-stat" title="Quanto la stella di guida si stacca dal fondo cielo, secondo PHD2. È il primo segnale di velature: se cala, l'Agente può allungare l'esposizione per non perdere la stella.">
+          <div class="mini-stat" title="Quanto la stella di guida si stacca dal fondo cielo, secondo PHD2. Dal plugin 1.14 è anche il giudice del cielo: se resta sotto metà del suo sereno la sequenza viene sospesa, e riparte quando torna sopra l'80% (vedi la scheda «Cielo dalla guida»). Se crolla, l'Agente può anche allungare la posa di guida per non perdere la stella.">
             <span class="mini-label">SNR</span>
             <span class="mini-val" id="snr-val">—</span>
           </div>
@@ -189,7 +189,8 @@
       </div>
 
       <!-- Trasparenza NINA (§45 N1) -->
-      <div class="condition-card" id="transparency-card" style="display:none">
+      <div class="condition-card" id="transparency-card" style="display:none"
+           title="L'indice di trasparenza dalle pose di NINA: le stelle contate rispetto al sereno recente dello stesso filtro.&#10;Con la guida come giudice (predefinito dal plugin 1.14) è solo informativo: non sospende e non fa ripartire la sequenza. Torna a decidere solo con l'opzione «Anche la camera di ripresa può dichiarare unsafe».">
         <div class="condition-label">Trasparenza (NINA)</div>
         <div class="condition-icon" id="transp-icon">❔</div>
         <div class="condition-name" id="transp-state">In attesa…</div>
@@ -219,18 +220,18 @@
 
       <!-- §57 — card Recovery: hint SNR-guida (S2, solo osservazione) + storico sonde (S1/S2) -->
       <div class="condition-card" id="recovery-card" style="display:none"
-           title="§126 — il cielo visto dalla guida. Dal plugin 1.14 è la stella di guida a giudicare il cielo in entrambi i versi: sotto metà del sereno si sospende (circa 3 minuti e mezzo con i valori di fabbrica), sopra l'80% per un minuto con la stella tracciata stabilmente si riparte (circa 2 minuti). Le pose di verifica non servono più.">
+           title="Il cielo visto dalla guida. Dal plugin 1.14 è la stella di guida a giudicare il cielo, in entrambi i versi.&#10;&#10;SOSPENSIONE — il segnale resta sotto metà del sereno per 90 s, poi il monitor lo conferma: in tutto circa 3 minuti e mezzo con i valori di fabbrica.&#10;&#10;RIPARTENZA — il segnale resta sopra l'80% del sereno per un minuto, con la stella tracciata stabilmente, poi il monitor lo conferma: circa 2 minuti con i valori di fabbrica. Se durante la sospensione è cambiata la stella di guida o la posa, il sereno deve durare 5 minuti: con la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno.&#10;&#10;Le pose di verifica non servono più.">
         <div class="condition-label">Cielo dalla guida</div>
         <svg class="condition-icon" id="recovery-icon" aria-hidden="true"><use id="recovery-icon-u" href="#i-nubeFerma"/></svg>
         <div class="condition-name" id="recovery-state">—</div>
         <div class="condition-desc" id="recovery-reason"></div>
         <div class="separator"></div>
         <div class="mini-stats">
-          <div class="mini-stat" title="SNR della stella di guida / riferimento di sereno (si reimpara a ogni nuova stella e non scende mentre il cielo è degradato)">
+          <div class="mini-stat" title="SNR della stella di guida / il suo riferimento di sereno.&#10;Il riferimento sale subito quando la stella migliora e non scende mentre la stella è sotto il sereno (al massimo per 90 minuti). Quando PHD2 cambia stella, o cambia la posa di guida, decide il primo dato dopo il cambio: il riferimento si riscala, si tiene o si reimpara.">
             <span class="mini-label">SNR / rif</span>
             <span class="mini-val" id="recovery-snr">—</span>
           </div>
-          <div class="mini-stat" title="Secondi di segnale sopra l'80% del sereno accumulati (servono 60 s per confermare il sereno)">
+          <div class="mini-stat" title="Secondi di segnale sopra l'80% del sereno accumulati, su quelli richiesti: 60 s di norma, 300 s se durante la sospensione è cambiata la stella di guida o la posa.">
             <span class="mini-label">Accumulo</span>
             <span class="mini-val" id="recovery-acc">—</span>
           </div>
@@ -329,7 +330,7 @@
             <span class="param-val" id="exp-steps">—</span>
           </div>
         </div>
-        <div class="cooldown-section" title="Attesa prima che l'esposizione possa cambiare di nuovo. Ogni cambio azzera le statistiche della guida: la decisione successiva va presa su fotogrammi nuovi, non sul transitorio.">
+        <div class="cooldown-section" title="Attesa prima che l'esposizione possa cambiare di nuovo. Ogni cambio azzera le statistiche della guida: la decisione successiva va presa su fotogrammi nuovi, non sul transitorio. Ogni cambio di posa riscala anche il riferimento del cielo dalla guida.">
           <div class="cooldown-label-row">
             <span class="param-label">Cooldown</span>
             <span class="param-val mono" id="exp-cooldown-text">—</span>
