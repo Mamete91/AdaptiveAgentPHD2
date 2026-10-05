@@ -9,6 +9,9 @@ serviva quindi un flusso plugin -> agente: il plugin lo PUBBLICA a ogni tick
 
 Confine invariato: questo store e' un RIFLESSO, non una fonte. Nessuna decisione
 di sicurezza nasce o cambia qui; l'agente non consuma questi dati per il motore.
+§126-sexies — un solo uso fuori dalla dashboard: il sensore del cielo legge se il
+monitor e' UNSAFE (monitor_in_unsafe) per chiedere un sereno piu' lungo dopo un
+cambio di stella o di posa avvenuto durante l'UNSAFE. Decide sempre il plugin.
 Se il canale si interrompe (NINA chiusa, plugin scollegato) lo stato diventa
 STANTIO e la dashboard lo dichiara sconosciuto — mai "verde per assenza di
 notizie": e' la lezione §55/§68 applicata anche alla sola presentazione.
@@ -104,6 +107,27 @@ class SafetyStateStore:
             # il campo e la dashboard deve tornare a raccontare la camera giudice.
             self._judge = (judge or "").strip().upper() or None
         return True
+
+    def monitor_in_unsafe(self) -> Optional[bool]:
+        """§126-sexies — il monitor e' in UNSAFE con la guida giudice del cielo?
+
+        True / False solo con una notizia FRESCA da un monitor collegato che usa la
+        guida come giudice; None quando non si sa (nessun plugin, stato stantio,
+        monitor scollegato, giudice camera o plugin fino al 1.13). Nella finestra del
+        meridiano (§72) conta lo stato INTERNO, non quello riportato.
+        """
+        b = self.status_block()
+        if not b.get("fresh") or not b.get("connected") or b.get("judge") != "GUIDE":
+            return None
+        stato = b.get("state")
+        if stato == STATE_UNSAFE:
+            return True
+        if stato == STATE_SAFE:
+            return False
+        if stato == STATE_MERIDIAN:
+            interno = b.get("internal_safe")
+            return None if interno is None else (not interno)
+        return None
 
     def status_block(self) -> dict[str, Any]:
         with self._lock:

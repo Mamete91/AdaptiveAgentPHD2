@@ -72,6 +72,7 @@ class RecoveryHintTracker:
         state_provider: Optional[Callable[[], tuple[Optional[str], Optional[float]]]] = None,
         now_fn: Callable[[], float] = time.time,
         stato_file: Optional[Path] = None,
+        unsafe_provider: Optional[Callable[[], Optional[bool]]] = None,
     ) -> None:
         self.cfg = config
         # provider read-only dell'ultimo (state, index) di N1; None => gating inerte.
@@ -135,6 +136,12 @@ class RecoveryHintTracker:
         # nubi a chiazze il degrado arrivava ~20 s piu' tardi e l'UNSAFE delle
         # 23:13:45 non scattava prima che NINA fermasse la guida.
         self._last_lost_ts: Optional[float] = None
+        # §126-sexies — il monitor del plugin e' in UNSAFE? (True/False, None se non si
+        # sa). Serve a una cosa sola: dopo un cambio di stella o di posa avvenuto
+        # durante un UNSAFE il sereno deve durare di piu' prima di valere.
+        self._unsafe_provider = unsafe_provider
+        self._conferma_lunga: bool = False
+        self._conferma_lunga_motivo: Optional[str] = None
 
         # §126-bis — memoria su disco del giudizio, per un riavvio dell'Agente a
         # notte in corso: senza, il primo frame fissava il metro al cielo di quel
@@ -163,6 +170,9 @@ class RecoveryHintTracker:
         state, _index = self._read_state()
         now = self._now()
         snr = float(snr)
+        # §126-sexies — lo stato del monitor si legge solo se serve (conferma lunga in
+        # corso) e FUORI dal lock: e' un altro oggetto, con il suo lock.
+        monitor = self._monitor_in_unsafe() if self._conferma_lunga else None
         with self._lock:
             # dt reale dal frame precedente, clampato (buchi lunghi non accreditano tempo).
             dt = 0.0
@@ -172,6 +182,13 @@ class RecoveryHintTracker:
             self._last_snr = snr
             self._ultimo_snr_ts = now
             self._last_seen_state = state
+            if self._conferma_lunga and monitor is False:
+                # Il monitor e' tornato SAFE per un'altra via (ricollegato, sicurezza
+                # nubi spenta): non c'e' piu' un UNSAFE da chiudere con cautela.
+                self._conferma_lunga = False
+                self._conferma_lunga_motivo = None
+                logger.info("[cielo-guida] il monitor e' SAFE: il sereno torna a bastare "
+                            "per %.0f s", self.cfg.sustained_seconds)
 
             # L'ORDINE CONTA: il frame si giudica col metro di PRIMA, poi il metro
             # si aggiorna — altrimenti il frame eroderebbe il riferimento con cui
@@ -230,6 +247,28 @@ class RecoveryHintTracker:
             return self.cfg.snr_recover_floor
         return self.cfg.snr_recover_frac * self._snr_ref
 
+    def _sereno_lungo_s(self) -> float:
+        """§126-sexies — la conferma lunga, mai piu' corta di quella normale."""
+        return max(self.cfg.sustained_seconds, self.cfg.sustained_seconds_dopo_cambio_in_unsafe)
+
+    def _sereno_richiesto_s(self) -> float:
+        """§126-sexies — secondi di sereno sostenuto chiesti per sky_ok: di norma
+        `sustained_seconds`, dopo un cambio di stella o di posa avvenuto durante un
+        UNSAFE `sustained_seconds_dopo_cambio_in_unsafe`."""
+        return self._sereno_lungo_s() if self._conferma_lunga else self.cfg.sustained_seconds
+
+    def _monitor_in_unsafe(self) -> Optional[bool]:
+        """§126-sexies — il monitor del plugin e' in UNSAFE? None se non si sa (nessun
+        plugin, stato stantio, giudice camera). Un provider guasto vale "non so":
+        il sensore non deve mai cadere per questo."""
+        if self._unsafe_provider is None:
+            return None
+        try:
+            v = self._unsafe_provider()
+        except Exception:
+            return None
+        return v if isinstance(v, bool) else None
+
     def _update_recover(self, snr: float, dt: float, now: float) -> None:
         """Evidenza di SERENO dalla guida (chiamata sotto lock).
 
@@ -238,7 +277,7 @@ class RecoveryHintTracker:
         con il §126 e' l'evidenza con cui il plugin riporta SAFE.
         """
         threshold = self._recover_threshold()
-        target = max(1.0, self.cfg.sustained_seconds)
+        target = max(1.0, self._sereno_richiesto_s())
         if snr >= threshold:
             self._accumulator_s = min(target, self._accumulator_s + dt)
         else:
@@ -248,6 +287,14 @@ class RecoveryHintTracker:
             self._set_active(True, now,
                              f"snr {snr:.1f} >= {threshold:.1f} sostenuta per "
                              f"{self._accumulator_s:.0f}s")
+            if self._conferma_lunga:
+                # §126-sexies — la conferma lunga e' stata data: da qui vale di nuovo
+                # quella normale (l'accumulatore si riallinea al primo frame).
+                self._conferma_lunga = False
+                self._conferma_lunga_motivo = None
+                logger.info("[cielo-guida] sereno confermato per %.0f s dopo il cambio in "
+                            "UNSAFE: si torna alla conferma di %.0f s", target,
+                            self.cfg.sustained_seconds)
             # §126-bis — il sereno confermato chiude il degrado residuo: prima il
             # flag restava acceso fino a 90 s dopo il ritorno della SNR e il plugin
             # continuava a contare verso un UNSAFE a nube gia' passata.
@@ -384,11 +431,20 @@ class RecoveryHintTracker:
              metro_nuovo = metro_vecchio x (snr_nuova / snr_vecchia). E' il caso della
              sonda di guida, che agisce solo durante l'UNSAFE.
              §126-quinquies — SOLO a cielo degradato. A cielo sereno il rapporto si
-             misura su due pose singole e il rumore lo gonfia: rigioco del 17/8 alle
-             02:53, ultima posa della stella vecchia al 75% del suo metro (32.6 su
-             43.3, la stella oscillava attorno all'80%), metro alzato da 43.3 a 52.3,
-             stella nuova ferma al 65-70% e un calo breve alle 03:22 dava UNSAFE fino
-             a fine notte. Reimparando (giro 4) nessun UNSAFE.
+             misura su due pose singole e tutto cio' che ha spostato la stella vecchia
+             dal suo metro finisce nel metro nuovo: rigioco del 17/8 alle 02:53, stella
+             vecchia al 75% del suo metro (32.6 su 43.3), metro alzato da 43.3 a 52.3,
+             stella nuova ferma al 65-70% e UNSAFE fino a fine notte. Reimparando
+             (giro 4) nessun UNSAFE. §126-sexies — la causa vera di quel 75% era la
+             posa di guida, scesa da 4 a 2.5 s alle 02:38:05 (PHD2_DebugLog), con il
+             metro rimasto quello dei 4 s; il "calo" delle 03:22 era la posa portata a
+             1 s alle 03:20:45. Ora un cambio di posa passa da qui (cambio_posa).
+             §126-sexies — per un cambio di POSA la stella e' la stessa: il trasporto
+             vale anche a cielo sereno, perche' le due medie (l'analizzatore si azzera
+             al cambio) misurano la stessa stella a pochi secondi di distanza e il loro
+             rapporto e' l'effetto della posa. Trattata come una stella diversa, una
+             posa da 4 a 1 s (SNR circa dimezzata) cadrebbe nell'eredita' qui sotto e
+             darebbe un UNSAFE fino al tetto con il cielo sereno.
           2. EREDITA' — la stella nuova parte sotto il 50% del metro vecchio (per
              quel metro e' una nube): si tiene il metro vecchio, con il tetto contato
              da adesso. NON basta che la guida vedesse gia' il cielo degradato: il
@@ -405,19 +461,21 @@ class RecoveryHintTracker:
         vecchio = cambio["ref"]
         snr_vecchia = cambio.get("snr")
         ts_vecchia = cambio.get("ts")
+        chi = cambio.get("chi", "stella nuova")
         frac = self.cfg.snr_degrade_frac
         degradato = bool(cambio.get("degradato"))
+        stessa_stella = bool(cambio.get("stessa_stella"))
         recente = ts_vecchia is not None and now - ts_vecchia <= self.cfg.ponte_stella_max_s
         credibile = snr_vecchia is not None and snr_vecchia >= frac * vecchio
-        if degradato and recente and credibile:
+        if (degradato or stessa_stella) and recente and credibile:
             self._snr_ref = vecchio * snr / snr_vecchia
             self._ref_ereditato = False
             self._ereditato_dal = None
-            self._ref_reset_reason = (f"{self._ref_reset_reason or 'nuova stella'} "
+            self._ref_reset_reason = (f"{self._ref_reset_reason or chi} "
                                       f"(riferimento trasportato: {vecchio:.1f} x "
                                       f"{snr:.1f}/{snr_vecchia:.1f})")
-            logger.info("[cielo-guida] stella nuova: riferimento TRASPORTATO %.1f -> %.1f "
-                        "(rapporto %.2f misurato fra le due stelle)", vecchio,
+            logger.info("[cielo-guida] %s: riferimento TRASPORTATO %.1f -> %.1f "
+                        "(rapporto %.2f misurato prima e dopo il cambio)", chi, vecchio,
                         self._snr_ref, snr / snr_vecchia)
             return
         if snr <= frac * vecchio:
@@ -425,12 +483,12 @@ class RecoveryHintTracker:
             self._ref_ereditato = True
             self._ereditato_dal = now
             perche = f"{snr:.1f} <= {frac:.0%} di {vecchio:.1f}"
-            self._ref_reset_reason = (f"{self._ref_reset_reason or 'nuova stella'} "
+            self._ref_reset_reason = (f"{self._ref_reset_reason or chi} "
                                       f"(riferimento ereditato: {perche})")
-            logger.info("[cielo-guida] stella nuova: tengo il riferimento %.1f (%s)", vecchio, perche)
+            logger.info("[cielo-guida] %s: tengo il riferimento %.1f (%s)", chi, vecchio, perche)
             return
-        logger.info("[cielo-guida] stella nuova a %.1f (riferimento precedente %.1f): "
-                    "si reimpara", snr, vecchio)
+        logger.info("[cielo-guida] %s a %.1f (riferimento precedente %.1f): "
+                    "si reimpara", chi, snr, vecchio)
         self._snr_ref = snr
         self._below_recover_since = None
         self._ref_ereditato = False
@@ -528,12 +586,46 @@ class RecoveryHintTracker:
         non conferma il sereno; il tetto al congelamento limita l'attesa se la
         stella nuova e' piu' debole di natura.
         """
+        self._nuovo_metro(motivo, "stella nuova", stessa_stella=False)
+
+    def cambio_posa(self, motivo: str) -> None:
+        """§126-sexies — PHD2 ha cambiato la posa di guida (GuideParamChange
+        "Exposure"). La SNR cambia con la posa, il riferimento no: un 4 s -> 1 s
+        dimezza circa la SNR e sembra una nube (17/8 03:20:45), un 1 s -> 4 s nasconde
+        una nube vera. Decisione dell'operatore (05/10): si tratta come un cambio di
+        stella — stesso registro, stesso primo dato che decide — con una differenza
+        dovuta ai fatti: la stella e' la STESSA, quindi il rapporto misurato prima e
+        dopo e' l'effetto della posa e il riferimento si riscala anche a cielo sereno
+        (vedi _decidi_stella_nuova). main.py azzera l'analizzatore al cambio, come gia'
+        per i cambi di posa dell'Agente (§95): prima e dopo sono medie pulite."""
+        self._nuovo_metro(motivo, "nuova posa di guida", stessa_stella=True)
+
+    def _nuovo_metro(self, motivo: str, chi: str, stessa_stella: bool) -> None:
+        """Il riferimento non descrive piu' la misura: lo decide il primo dato dopo
+        il cambio (_decidi_stella_nuova). Comune a stella nuova e posa nuova."""
+        # §126-sexies — fuori dal lock: e' lo stato di un altro oggetto.
+        in_unsafe = self._monitor_in_unsafe()
         with self._lock:
             now = self._now()
             self._last_frame_ts = None
             self._accumulator_s = 0.0
-            self._set_active(False, now, f"nuova stella: {motivo}")
-            self._reset_degrade(now, f"nuova stella: {motivo}")
+            self._set_active(False, now, f"{chi}: {motivo}")
+            self._reset_degrade(now, f"{chi}: {motivo}")
+            # §126-sexies — cambio DURANTE un UNSAFE (tipicamente la ripartenza della
+            # sonda di guida): con la sola SNR una stella piu' luminosa sotto la nube
+            # non si distingue da una piu' debole a cielo sereno (19/7 02:53, sereno
+            # vero), quindi il sereno deve durare di piu' prima di valere. Con lo
+            # stato del monitor ignoto non si cambia niente.
+            if in_unsafe is True:
+                if not self._conferma_lunga:
+                    logger.info("[cielo-guida] %s durante un UNSAFE (%s): il sereno dovra' "
+                                "durare %.0f s invece di %.0f s", chi, motivo,
+                                self._sereno_lungo_s(), self.cfg.sustained_seconds)
+                self._conferma_lunga = True
+                self._conferma_lunga_motivo = f"{chi}: {motivo}"
+            elif in_unsafe is False:
+                self._conferma_lunga = False
+                self._conferma_lunga_motivo = None
             # §126-quater — il cambio si registra SEMPRE e decide il primo dato della
             # stella nuova (_decidi_stella_nuova). Il vecchio ramo "cielo confermato
             # sereno -> si reimpara" e' stato tolto: quella conferma era una
@@ -546,12 +638,18 @@ class RecoveryHintTracker:
                     "snr": self._last_snr,
                     "ts": self._ultimo_snr_ts,
                     "degradato": self._sky_state == "DEGRADED" or self._degrading,
+                    "chi": chi,
+                    "stessa_stella": stessa_stella,
                 }
                 self._ref_prima_del_cambio = self._snr_ref
-                logger.info("[cielo-guida] stella nuova (%s): il primo dato decide il "
-                            "riferimento (era %.1f)", motivo, self._snr_ref)
+                logger.info("[cielo-guida] %s (%s): il primo dato decide il "
+                            "riferimento (era %.1f)", chi, motivo, self._snr_ref)
             # (con _snr_ref gia' None un cambio in sospeso resta: piu' selezioni di
             # fila prima del primo dato non lo perdono, §126-ter)
+            elif self._cambio is not None and not stessa_stella:
+                # §126-sexies — un cambio di posa in sospeso seguito da una stella
+                # nuova: il confronto e' ormai fra due stelle diverse.
+                self._cambio["stessa_stella"] = False
             self._ref_reset_reason = motivo
             self._snr_ref = None
             self._ref_ereditato = False
@@ -718,7 +816,9 @@ class RecoveryHintTracker:
                 "snr": round(self._last_snr, 1) if self._last_snr is not None else None,
                 "snr_ref": round(self._snr_ref, 1) if self._snr_ref is not None else None,
                 "accumulator_s": round(self._accumulator_s, 1),
-                "sustained_target_s": self.cfg.sustained_seconds,
+                # §126-sexies — il sereno chiesto ADESSO (piu' lungo dopo un cambio di
+                # stella o di posa durante un UNSAFE).
+                "sustained_target_s": self._sereno_richiesto_s(),
                 "since": self._active_since,
                 "reason": self._reason,
                 "probes": list(self._probes),
@@ -741,4 +841,10 @@ class RecoveryHintTracker:
                 # cambio e' avvenuto a cielo non confermato sereno.
                 "ref_ereditato": self._ref_ereditato,
                 "sotto_il_sereno": self._below_recover_since is not None,
+                # §126-sexies — conferma lunga in corso e perche'; `sereno_in_conferma`
+                # dice al plugin che la guida sta accumulando sereno: la sonda non
+                # riavvia la guida in quel momento (il riavvio azzererebbe la conferma).
+                "conferma_lunga": self._conferma_lunga,
+                "conferma_lunga_motivo": self._conferma_lunga_motivo,
+                "sereno_in_conferma": (not self._active) and self._accumulator_s > 0.0,
             }

@@ -673,10 +673,10 @@ class TestCambioStellaQuater(unittest.TestCase):
         self.assertIn("trasportato", b["ref_reset_reason"])
 
     def test_a_cielo_sereno_non_si_trasporta(self):
-        """§126-quinquies, rigioco del 17/8 02:53: cielo sereno, ultima posa della
-        stella vecchia al 75% del suo metro (rumore). Trasportando il metro saliva da
-        43.3 a 52 e un calo breve alle 03:22 dava UNSAFE fino a fine notte: a cielo
-        sereno si reimpara."""
+        """§126-quinquies, rigioco del 17/8 02:53: cielo sereno, stella vecchia al 75%
+        del suo metro (§126-sexies: per la posa scesa da 4 a 2.5 s alle 02:38:05, non
+        per rumore). Trasportando il metro saliva da 43.3 a 52 e UNSAFE fino a fine
+        notte: fra stelle diverse a cielo sereno si reimpara."""
         c = _Clock()
         t = _cielo(c)
         _feed(t, c, 43.3, 900)
@@ -1012,6 +1012,316 @@ class TestGiudicePronto(unittest.TestCase):
             self.assertFalse(server._con_giudice_pronto({"enabled": True}, {"enabled": True})["giudice_pronto"])
         finally:
             server._recovery_hint_tracker = vecchio
+
+
+# ================================================ §126-sexies: conferma lunga e posa
+class _Monitor:
+    """Provider dello stato del monitor del plugin: True = UNSAFE, False = SAFE,
+    None = non si sa (nessun plugin, stato stantio, giudice camera)."""
+
+    def __init__(self, valore=None) -> None:
+        self.valore = valore
+
+    def __call__(self):
+        return self.valore
+
+
+def _cielo_m(clock, monitor, **kw) -> RecoveryHintTracker:
+    return RecoveryHintTracker(RecoveryHintConfig(**kw), state_provider=_State(),
+                               now_fn=clock, unsafe_provider=monitor)
+
+
+class TestConfermaLunga(unittest.TestCase):
+    """Dopo un cambio di stella o di posa avvenuto mentre il monitor e' UNSAFE il
+    sereno deve durare 5 minuti, non 1: con la sola SNR una stella piu' luminosa
+    sotto la nube sembra una stella normale a cielo sereno."""
+
+    def _dopo_la_ripartenza_in_unsafe(self):
+        c = _Clock()
+        m = _Monitor(None)
+        t = _cielo_m(c, m)
+        _feed(t, c, 60.0, 900)                      # sereno: riferimento 60
+        _feed(t, c, 18.0, 300)                      # nube al 30%: DEGRADED
+        self.assertEqual(t.status_block()["sky_state"], "DEGRADED")
+        m.valore = True                             # il monitor e' UNSAFE
+        t.sospendi("guida fermata")                 # la sonda ferma la guida...
+        c.advance(600)                              # ...e la fa ripartire tardi
+        t.reset_stella("StarSelected")
+        return t, c, m
+
+    def test_stella_piu_luminosa_dopo_la_ripartenza_in_unsafe(self):
+        """Il limite 1 dichiarato al §126: stella 2.2 volte piu' luminosa sotto la
+        stessa nube, al 66% del metro vecchio -> si reimpara. Prima bastava un
+        minuto per il SAFE sotto la nube; ora ne servono cinque."""
+        t, c, _ = self._dopo_la_ripartenza_in_unsafe()
+        _feed(t, c, 39.6, 120)
+        b = t.status_block()
+        self.assertFalse(b["sky_ok"], "un minuto non basta dopo un cambio in UNSAFE")
+        self.assertTrue(b["conferma_lunga"])
+        self.assertEqual(b["sustained_target_s"], 300.0)
+        self.assertTrue(b["sereno_in_conferma"])
+        self.assertIn("StarSelected", b["conferma_lunga_motivo"])
+        _feed(t, c, 39.6, 200)
+        b = t.status_block()
+        self.assertTrue(b["sky_ok"])
+        self.assertFalse(b["conferma_lunga"])
+        self.assertEqual(b["sustained_target_s"], 60.0)
+        self.assertFalse(b["sereno_in_conferma"])
+
+    def test_cambio_a_monitor_safe_basta_un_minuto(self):
+        """3/10 22:55 — stella piu' debole dopo l'autofocus a cielo sereno: niente
+        UNSAFE in corso, la conferma resta di un minuto."""
+        c = _Clock()
+        t = _cielo_m(c, _Monitor(False))
+        _feed(t, c, 60.0, 900)
+        t.sospendi("guida fermata")
+        c.advance(60)
+        t.reset_stella("StarSelected")
+        _feed(t, c, 40.0, 90)
+        b = t.status_block()
+        self.assertTrue(b["sky_ok"])
+        self.assertFalse(b["conferma_lunga"])
+
+    def test_senza_notizie_dal_monitor_niente_cambia(self):
+        """Nessun plugin, stato stantio o giudice camera: come prima."""
+        c = _Clock()
+        t = _cielo_m(c, _Monitor(None))
+        _feed(t, c, 60.0, 900)
+        _feed(t, c, 18.0, 300)
+        t.sospendi("guida fermata")
+        c.advance(600)
+        t.reset_stella("StarSelected")
+        _feed(t, c, 39.6, 90)
+        self.assertTrue(t.status_block()["sky_ok"])
+
+    def test_il_monitor_tornato_safe_chiude_la_conferma_lunga(self):
+        """Il monitor torna SAFE per un'altra via (ricollegato): la conferma lunga non
+        ha piu' un UNSAFE da chiudere."""
+        t, c, m = self._dopo_la_ripartenza_in_unsafe()
+        _feed(t, c, 39.6, 30)
+        self.assertTrue(t.status_block()["conferma_lunga"])
+        m.valore = False
+        _feed(t, c, 39.6, 60)
+        b = t.status_block()
+        self.assertFalse(b["conferma_lunga"])
+        self.assertTrue(b["sky_ok"])
+
+    def test_un_provider_guasto_vale_non_so(self):
+        def guasto():
+            raise RuntimeError("boom")
+        c = _Clock()
+        t = _cielo_m(c, guasto)
+        _feed(t, c, 60.0, 300)
+        t.reset_stella("StarSelected")
+        _feed(t, c, 40.0, 90)
+        b = t.status_block()
+        self.assertFalse(b["conferma_lunga"])
+        self.assertTrue(b["sky_ok"])
+
+    def test_anche_il_cambio_di_posa_in_unsafe_chiede_cinque_minuti(self):
+        c = _Clock()
+        m = _Monitor(None)
+        t = _cielo_m(c, m)
+        _feed(t, c, 60.0, 900)
+        m.valore = True
+        t.cambio_posa("posa di guida 2000 ms -> 3000 ms")
+        c.advance(20)
+        _feed(t, c, 73.0, 120)
+        b = t.status_block()
+        self.assertTrue(b["conferma_lunga"])
+        self.assertIn("posa", b["conferma_lunga_motivo"])
+        self.assertFalse(b["sky_ok"])
+
+    def test_lo_stato_del_monitor_arriva_dallo_store_del_plugin(self):
+        """Il provider vero: lo stato che il plugin pubblica su /nina/safety."""
+        from phd2_agent.safety_state import SafetyStateStore
+        c = _Clock()
+        s = SafetyStateStore(staleness_seconds=45.0, now_fn=c)
+        t = _cielo_m(c, s.monitor_in_unsafe)
+        _feed(t, c, 60.0, 300)
+        s.update("UNSAFE", cause="CLOUD", judge="GUIDE")
+        t.reset_stella("StarSelected")
+        self.assertTrue(t.status_block()["conferma_lunga"])
+
+
+class TestMonitorInUnsafe(unittest.TestCase):
+    """SafetyStateStore.monitor_in_unsafe: True/False solo con notizie fresche da un
+    monitor collegato che usa la guida come giudice."""
+
+    def setUp(self):
+        from phd2_agent.safety_state import SafetyStateStore
+        self.c = _Clock()
+        self.s = SafetyStateStore(staleness_seconds=45.0, now_fn=self.c)
+
+    def test_nessuna_notizia(self):
+        self.assertIsNone(self.s.monitor_in_unsafe())
+
+    def test_unsafe_e_safe_con_la_guida_giudice(self):
+        self.s.update("UNSAFE", cause="STAR_LOST", judge="GUIDE")
+        self.assertIs(self.s.monitor_in_unsafe(), True)
+        self.s.update("SAFE", judge="GUIDE")
+        self.assertIs(self.s.monitor_in_unsafe(), False)
+
+    def test_giudice_camera_o_plugin_vecchio(self):
+        self.s.update("UNSAFE", cause="CLOUD", judge="CAMERA")
+        self.assertIsNone(self.s.monitor_in_unsafe())
+        self.s.update("UNSAFE", cause="CLOUD")              # plugin fino al 1.13
+        self.assertIsNone(self.s.monitor_in_unsafe())
+
+    def test_monitor_scollegato_o_notizia_stantia(self):
+        self.s.update("UNSAFE", judge="GUIDE", connected=False)
+        self.assertIsNone(self.s.monitor_in_unsafe())
+        self.s.update("UNSAFE", judge="GUIDE")
+        self.c.advance(60)
+        self.assertIsNone(self.s.monitor_in_unsafe())
+
+    def test_finestra_del_meridiano_conta_lo_stato_interno(self):
+        self.s.update("MERIDIAN_PROTECTION", judge="GUIDE", internal_safe=False)
+        self.assertIs(self.s.monitor_in_unsafe(), True)
+        self.s.update("MERIDIAN_PROTECTION", judge="GUIDE", internal_safe=True)
+        self.assertIs(self.s.monitor_in_unsafe(), False)
+        self.s.update("MERIDIAN_PROTECTION", judge="GUIDE")
+        self.assertIsNone(self.s.monitor_in_unsafe())
+
+
+class TestCambioPosa(unittest.TestCase):
+    """Il cambio della posa di guida si tratta come un cambio di stella; essendo la
+    stessa stella, il riferimento si riscala con il rapporto misurato."""
+
+    def test_posa_accorciata_a_cielo_sereno_si_riscala(self):
+        """17/8 03:20:45 — posa da 4 s a 1 s: la SNR scende a circa la meta' con il
+        cielo invariato. Il riferimento segue la posa: nessuna nube."""
+        c = _Clock()
+        t = _cielo(c)
+        _feed(t, c, 38.0, 900)
+        t.cambio_posa("posa di guida 4000 ms -> 1000 ms")
+        c.advance(20)                               # l'analizzatore si riempie
+        _feed(t, c, 19.0, 300)
+        b = t.status_block()
+        self.assertAlmostEqual(b["snr_ref"], 19.0, delta=0.5)
+        self.assertIn("trasportato", b["ref_reset_reason"])
+        self.assertFalse(b["degrading"])
+        self.assertEqual(b["sky_state"], "CLEAR")
+        self.assertTrue(b["sky_ok"])
+
+    def test_senza_il_cambio_di_posa_sembrava_una_nube(self):
+        """Lo stesso caso con il codice di prima (nessun cambio_posa): degrado."""
+        c = _Clock()
+        t = _cielo(c)
+        _feed(t, c, 38.0, 900)
+        c.advance(20)
+        _feed(t, c, 19.0, 300)
+        self.assertTrue(t.status_block()["degrading"])
+
+    def test_posa_allungata_riscala_subito(self):
+        c = _Clock()
+        t = _cielo(c)
+        _feed(t, c, 40.0, 900)
+        t.cambio_posa("posa di guida 1000 ms -> 4000 ms")
+        c.advance(30)
+        _feed(t, c, 80.0, 30)
+        self.assertAlmostEqual(t.status_block()["snr_ref"], 80.0, delta=1.0)
+        _feed(t, c, 30.0, 150)                      # nube al 37% con la posa nuova
+        self.assertTrue(t.status_block()["degrading"])
+
+    def test_posa_poi_stella_nuova_non_trasporta_a_cielo_sereno(self):
+        """Cambio di posa e, prima del primo dato, una stella nuova: il confronto e'
+        fra due stelle diverse e a cielo sereno si reimpara (§126-quinquies)."""
+        c = _Clock()
+        t = _cielo(c)
+        _feed(t, c, 40.0, 900)
+        t.cambio_posa("posa di guida 2000 ms -> 3000 ms")
+        t.reset_stella("StarSelected")
+        c.advance(20)
+        _feed(t, c, 55.0, 30)
+        b = t.status_block()
+        self.assertAlmostEqual(b["snr_ref"], 55.0, delta=0.5)
+        self.assertNotIn("trasportato", b["ref_reset_reason"])
+
+    def test_sotto_una_nube_fitta_si_eredita(self):
+        """L'Agente alza la posa con la SNR sotto 8 (Path A): l'ultimo dato e' sotto la
+        meta' del metro, il rapporto non e' credibile e si tiene il metro vecchio."""
+        c = _Clock()
+        t = _cielo(c)
+        _feed(t, c, 60.0, 900)
+        _feed(t, c, 7.0, 200)
+        t.cambio_posa("posa di guida 2000 ms -> 3000 ms")
+        c.advance(30)
+        _feed(t, c, 8.5, 60)
+        b = t.status_block()
+        self.assertTrue(b["ref_ereditato"])
+        self.assertAlmostEqual(b["snr_ref"], 60.0, delta=1.0)
+        self.assertEqual(b["sky_state"], "DEGRADED")
+
+
+def _gira_posa(eventi):
+    """Il VERO _event_loop con analizzatore, controller e sensore del cielo finti."""
+    stop = threading.Event()
+    client = MagicMock()
+    client.connected = True
+    client.event_queue = _CodaCheFinisce(eventi, stop)
+    analyzer = MagicMock()
+    analyzer.is_ready = False
+    controller = MagicMock()
+    controller.anello_aperto = False
+    controller.sospeso = False
+    controller.app_state = "Guiding"
+    cielo = MagicMock()
+    with patch("server.sync_broadcast", lambda msg: None):
+        _event_loop(client=client, analyzer=analyzer, controller=controller,
+                    session_logger=MagicMock(), stop_event=stop,
+                    eval_interval=0.0, monitor_only=False,
+                    recovery_hint_tracker=cielo, guide_health=None)
+    return cielo, analyzer, controller
+
+
+def _posa(valore):
+    return {"Event": "GuideParamChange", "Name": "Exposure", "Value": valore}
+
+
+class TestCablaggioPosa(unittest.TestCase):
+
+    def test_il_cambio_di_posa_azzera_le_statistiche_e_avvisa_il_cielo(self):
+        cielo, analyzer, controller = _gira_posa([_posa("2000 ms")])
+        cielo.cambio_posa.assert_called_once_with("posa di guida ? -> 2000 ms")
+        analyzer.reset.assert_called_once()
+        controller.diagnostic_engine.reset.assert_called_once_with("exposure_change")
+
+    def test_la_stessa_posa_non_e_un_cambio(self):
+        cielo, _, _ = _gira_posa([_posa("2000 ms"), _posa("2000 ms")])
+        self.assertEqual(cielo.cambio_posa.call_count, 1)
+
+    def test_posa_con_vardelay(self):
+        cielo, _, _ = _gira_posa([_posa("2000 ms"),
+                                  _posa("4000 ms, VarDelay (short = 1000 ms, long = 2000 ms)")])
+        cielo.cambio_posa.assert_called_with("posa di guida 2000 ms -> 4000 ms")
+
+    def test_posa_numerica(self):
+        cielo, _, _ = _gira_posa([_posa(2500)])
+        cielo.cambio_posa.assert_called_once_with("posa di guida ? -> 2500 ms")
+
+    def test_posa_automatica_avvisa(self):
+        with self.assertLogs("phd2_agent.main", level="WARNING") as cm:
+            cielo, _, _ = _gira_posa([_posa("2000 ms"),
+                                      _posa("Auto (min = 1000 ms, max = 5000 ms, SNR = 20.00)")])
+        cielo.cambio_posa.assert_called_with("posa di guida 2000 ms -> Auto")
+        self.assertTrue(any("AUTOMATICA" in r for r in cm.output))
+
+    def test_valore_incomprensibile_ignorato(self):
+        cielo, analyzer, _ = _gira_posa([_posa("boh")])
+        cielo.cambio_posa.assert_not_called()
+        analyzer.reset.assert_not_called()
+
+    def test_leggi_posa(self):
+        from main import _leggi_posa
+        self.assertEqual(_leggi_posa("2000 ms"), 2000)
+        self.assertEqual(_leggi_posa("4000 ms, VarDelay (short = 1000 ms, long = 2000 ms)"), 4000)
+        self.assertEqual(_leggi_posa("Auto (min = 1000 ms, max = 5000 ms, SNR = 20.00)"), "auto")
+        self.assertEqual(_leggi_posa(3000), 3000)
+        self.assertIsNone(_leggi_posa(True))
+        self.assertIsNone(_leggi_posa(0))
+        self.assertIsNone(_leggi_posa(""))
+        self.assertIsNone(_leggi_posa(None))
 
 
 def pathlib_path(s):

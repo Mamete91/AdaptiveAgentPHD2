@@ -140,9 +140,11 @@ class TestStructuralNoSafetyPath(unittest.TestCase):
         public = [n for n in dir(t) if not n.startswith("_")]
         # §126 — due ingressi in piu', entrambi di MISURA: la guida si e' fermata
         # (sospendi) e PHD2 ha scelto un'altra stella (reset_stella).
+        # §126-sexies — e PHD2 ha cambiato la posa di guida (cambio_posa). Lo stato del
+        # monitor arriva da un provider iniettato: il modulo non importa nulla di safety.
         self.assertEqual(sorted(public),
-                         ["cfg", "conferma_memoria", "observe_probe", "on_star_lost",
-                          "posizione_stella", "reset_stella", "sospendi",
+                         ["cambio_posa", "cfg", "conferma_memoria", "observe_probe",
+                          "on_star_lost", "posizione_stella", "reset_stella", "sospendi",
                           "status_block", "update"])
 
     def test_active_hint_never_touches_transparency(self):

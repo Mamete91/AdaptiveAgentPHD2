@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import signal
 import sys
 import threading
@@ -179,17 +180,20 @@ def main():
         except Exception:
             return (None, None)
 
+    # §73 — riflesso dello stato del Safety Monitor del plugin (dashboard; dal
+    # §126-sexies anche la durata del sereno chiesto dopo un cambio in UNSAFE).
+    safety_state = SafetyStateStore()
+
     # §126-bis — il giudizio del cielo sopravvive a un riavvio dell'Agente a notte in
     # corso (file accanto a rig_contribution.json, ignorato da git).
     recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state,
-                                                stato_file=Path("cielo_guida.json"))
+                                                stato_file=Path("cielo_guida.json"),
+                                                unsafe_provider=safety_state.monitor_in_unsafe)
 
     # §68 — osservabilità del canale di guida: misura soltanto (il latch vive nel
     # plugin). Alimentato dagli eventi PHD2 nel loop, incluso LoopingExposures che
     # fino a ora l'agente ignorava del tutto.
     guide_health = GuideHealthTracker(cfg.guide_health)
-    # §73 — riflesso dello stato del Safety Monitor del plugin (solo dashboard).
-    safety_state = SafetyStateStore()
 
     # --- Dashboard ---
 
@@ -360,6 +364,36 @@ def _stato_phd2(controller, nuovo: str, perche: str) -> None:
     log.info("Stato PHD2: %s -> %s (%s)", precedente or "ignoto", nuovo, perche)
 
 
+_RE_POSA = re.compile(r"^\s*(\d+)\s*ms")
+
+
+def _leggi_posa(valore) -> "int | str | None":
+    """§126-sexies — la posa di guida dal GuideParamChange "Exposure" di PHD2.
+
+    PHD2 manda una stringa (myframe.cpp, ExposureDurationSummary): "2000 ms", con
+    ", VarDelay (...)" se attivo, oppure "Auto (min = ..., max = ..., SNR = ...)".
+    Ritorna i millisecondi, "auto", o None se il valore non si capisce."""
+    if isinstance(valore, bool):
+        return None
+    if isinstance(valore, (int, float)):
+        return int(valore) if valore > 0 else None
+    if isinstance(valore, str):
+        m = _RE_POSA.match(valore)
+        if m:
+            return int(m.group(1))
+        if valore.strip().lower().startswith("auto"):
+            return "auto"
+    return None
+
+
+def _testo_posa(posa) -> str:
+    if posa is None:
+        return "?"
+    if posa == "auto":
+        return "Auto"
+    return f"{posa} ms"
+
+
 def _event_loop(
     client: PHD2Client,
     analyzer: StatisticsAnalyzer,
@@ -410,6 +444,8 @@ def _event_loop(
     calib_in_corso = [False]
     _px = getattr(getattr(guide_health, "cfg", None), "stessa_stella_px", None)
     soglia_stessa_stella = float(_px) if isinstance(_px, (int, float)) else 15.0
+    # §126-sexies — ultima posa di guida annunciata da PHD2 (GuideParamChange).
+    ultima_posa: list = [None]
 
     def _cambio_stella(x, y, motivo: str, se_ignota: bool) -> None:
         """Nuova posizione di aggancio: se lontana dalla precedente e' un'altra
@@ -852,6 +888,37 @@ def _event_loop(
                                     "aperto": False})
                     except Exception:
                         pass
+            elif _nome == "Exposure":
+                # §126-sexies — PHD2 annuncia la posa SOLO quando cambia davvero
+                # (myframe_events.cpp: OnExposureDurationSelected -> NotifyExposureChanged)
+                # e mai nel saluto alla connessione (event_server.cpp,
+                # send_catchup_events). La SNR cambia con la posa, il riferimento del
+                # cielo no: decisione dell'operatore, si tratta come un cambio di stella.
+                _posa = _leggi_posa(event.get("Value"))
+                if _posa is None:
+                    log.debug("GuideParamChange Exposure non interpretabile: %r",
+                              event.get("Value"))
+                elif _posa != ultima_posa[0]:
+                    _prima = ultima_posa[0]
+                    ultima_posa[0] = _posa
+                    log.info("PHD2: posa di guida %s -> %s. Reset statistiche.",
+                             _testo_posa(_prima), _testo_posa(_posa))
+                    # Come per i cambi di posa dell'Agente (§95, _consolida) e a ogni
+                    # ripartenza della guida: le statistiche della posa vecchia non
+                    # descrivono la nuova (§39: il jitter scala con la posa). Senza, il
+                    # sensore del cielo deciderebbe su una media ancora quasi tutta
+                    # della posa vecchia.
+                    analyzer.reset()
+                    if controller is not None and controller.diagnostic_engine is not None:
+                        controller.diagnostic_engine.reset("exposure_change")
+                    _rh("cambio_posa", f"posa di guida {_testo_posa(_prima)} -> "
+                                       f"{_testo_posa(_posa)}")
+                    if _posa == "auto":
+                        log.warning(
+                            "PHD2 usa la posa di guida AUTOMATICA: la regola per tenere la "
+                            "SNR al bersaglio (myframe.cpp, AdjustAutoExposure), quindi la "
+                            "SNR non misura piu' le nubi finche' la posa non arriva al "
+                            "massimo. Con la guida giudice del cielo serve una posa fissa.")
             elif controller is not None and (
                     "minmove" in _nome.lower() or "aggress" in _nome.lower()):
                 # Qualcuno ha toccato una leva fuori dall'Agente (tipicamente

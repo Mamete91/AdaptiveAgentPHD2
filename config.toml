@@ -569,6 +569,11 @@ enabled            = true
 snr_recover_frac   = 0.8         # PROVVISORIO — sereno se snr >= frac × riferimento
 snr_recover_floor  = 25.0        # PROVVISORIO — soglia usata SOLO senza riferimento (primo frame)
 sustained_seconds  = 60.0        # PROVVISORIO — secondi di sereno sostenuto per sky_ok (= active)
+# §126-sexies — dopo un cambio di stella o di posa di guida avvenuto mentre il monitor e'
+# UNSAFE (tipicamente la ripartenza della sonda) il sereno deve durare questi secondi
+# invece di sustained_seconds: con la sola SNR una stella piu' luminosa sotto la nube
+# sembra una stella normale a cielo sereno.
+sustained_seconds_dopo_cambio_in_unsafe = 300.0
 drain_factor       = 2.0         # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
 
 # §76 — polarità OPPOSTA: evidenza che il cielo sta PEGGIORANDO (nata per vedere le
@@ -593,6 +598,7 @@ snr_ref_freeze_max_min    = 90.0
 # della nuova: (1) se la guida vedeva gia' il cielo degradato e l'ultimo dato della
 # stella vecchia ha al massimo questi secondi, il riferimento si TRASPORTA col rapporto
 # fra le due (una nube resta una nube); (2) se la nuova parte sotto il 50% del
-# riferimento vecchio lo si tiene; (3) altrimenti si reimpara.
+# riferimento vecchio lo si tiene; (3) altrimenti si reimpara. §126-sexies: un cambio
+# della posa di guida in PHD2 segue le stesse regole (la SNR cambia con la posa).
 ponte_stella_max_s        = 120.0
 

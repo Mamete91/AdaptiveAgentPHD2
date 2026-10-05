@@ -6226,10 +6226,11 @@ rapporto `RAPPORTO_GUIDA_SOLA_2026-10-04.md` (7 analisti, 12 affermazioni verifi
    Due correzioni respinte dal rigioco stesso:
    - "a cielo gia' DEGRADATO la stella nuova eredita sempre" (giro 5): il 3/10, guasto della camera di guida e poi
      stella nuova, quasi tre ore di UNSAFE a cielo sereno. Tolta;
-   - il trasporto anche a cielo sereno (giro 6): il 17/8 alle 02:53 l'ultima posa della stella vecchia era al 75%
-     del suo metro (32.6 su 43.3, rumore: quella stella oscillava attorno all'80%), il metro saliva da 43.3 a 52.3,
-     la stella nuova restava al 65-70% e un calo breve alle 03:22 dava UNSAFE fino a fine log. Trasporto ristretto
-     al cielo gia' degradato (§126-quinquies).
+   - il trasporto anche a cielo sereno (giro 6): il 17/8 alle 02:53 la stella vecchia era al 75% del suo metro
+     (32.6 su 43.3), il metro saliva da 43.3 a 52.3, la stella nuova restava al 65-70% e il calo delle 03:22 dava
+     UNSAFE fino a fine log. Trasporto ristretto al cielo gia' degradato (§126-quinquies). La causa vera, trovata
+     dopo (§126-sexies): non rumore, ma la posa di guida scesa da 4 a 2.5 s alle 02:38:05 con il metro ancora dei
+     4 s; e il calo delle 03:22 era la posa portata a 1 s alle 03:20:45.
 6. Giro 7, codice finale: **18 episodi, identici al giro 4**. Sulle 25 notti non c'e' nessun cambio di stella a cielo
    degradato: il trasporto serve alle ripartenze della sonda, che il rigioco non contiene.
 
@@ -6242,9 +6243,11 @@ rapporto `RAPPORTO_GUIDA_SOLA_2026-10-04.md` (7 analisti, 12 affermazioni verifi
   camera di guida".
 - Finestra meridiano §72 invariata: se un UNSAFE interrompe la ripresa della guida dopo il flip, la sonda la fa
   ripartire.
-- Cambi di esposizione della guida: non gestiti nel riferimento (1 cambio in 91 file di decisioni).
+- Cambi di esposizione della guida: gestiti dal §126-sexies (piu' frequenti di quanto pensassi: 14-15/6, 9-10/7,
+  11-12/7, 15-16/8, 17-18/8 nei PHD2_DebugLog).
 - Limiti noti del cambio stella (solo SNR, nessun'altra misura): una stella nuova piu' luminosa sotto la stessa nube,
-  senza un dato recente della vecchia, si reimpara (possibile SAFE sotto la nube); guasto della camera di guida +
+  senza un dato recente della vecchia, si reimpara (possibile SAFE sotto la nube; dal §126-sexies, se il cambio
+  avviene durante un UNSAFE, il sereno deve durare 5 minuti invece di 1); guasto della camera di guida +
   stella diversa piu' debole resta UNSAFE al massimo fino al tetto di 90 minuti. Scelta dell'operatore: meglio
   qualche posa sotto una nube che una notte ferma a cielo sereno.
 - Da validare sul campo: un Calibration Assistant, un Guide Assistant e un autofocus con il monitor connesso e NINA
@@ -6257,3 +6260,54 @@ monitor resta UNSAFE. Va spostato nel contenitore del target (DSO) che porta la 
 fine notte il contenitore si chiude e l'area finale gira sempre.
 
 Test: Agente 725 (+69), plugin 98 (+25).
+
+### §126-sexies (05/10) — conferma lunga dopo un cambio in UNSAFE; il cambio di posa e' un cambio di stella (Agente 3.2.0, plugin 1.14.1.0)
+
+Dei limiti residui spiegati all'operatore (05/10) ha scelto di correggerne due; gli altri restano dichiarati sopra.
+
+**1. Cambio di stella o di posa durante un UNSAFE: 5 minuti di sereno invece di 1.**
+Con la sola SNR una stella piu' luminosa sotto la nube non si distingue da una piu' debole a cielo sereno (19/7
+02:53: stella nuova al 66% a cielo sereno, reimparare era giusto). Succede alle ripartenze della sonda di guida, che
+agisce solo in UNSAFE.
+- `recovery_hint.py`: al cambio (`reset_stella` / `cambio_posa`) si legge se il monitor e' UNSAFE; se si', `sky_ok`
+  chiede `sustained_seconds_dopo_cambio_in_unsafe = 300` s invece di `sustained_seconds = 60`. La conferma lunga si
+  chiude quando il sereno arriva (o se il monitor risulta SAFE per un'altra via). Stato ignoto: nessun cambiamento.
+- Fonte: `SafetyStateStore.monitor_in_unsafe()`, cioe' lo stato che il plugin pubblica a ogni tick su `/nina/safety`
+  (§73). True/False solo con notizia fresca, monitor collegato e giudice GUIDE; nella finestra del meridiano conta lo
+  stato interno. Confine: lo store resta un riflesso, il sensore lo usa solo per la durata della conferma.
+- `/status.recovery_hint`: `sustained_target_s` (quello chiesto adesso), `conferma_lunga`, `conferma_lunga_motivo`,
+  `sereno_in_conferma`. Dashboard: "per un minuto" / "per 5 minuti" e la spiegazione.
+- Plugin 1.14.1: la sonda RIMANDA il riavvio periodico (una volta per TimeoutMinutes) mentre `sereno_in_conferma` e'
+  vero. Il riavvio sospende la guida e azzera la conferma: con una cadenza piu' corta della conferma il SAFE non
+  arriverebbe mai, notte ferma a cielo sereno. Un guasto della camera di guida non da' sereno, quindi il riavvio
+  contro il guasto resta. Decisione estratta in `GuideRestartPolicy` (pura, 8 test). Con un Agente < 3.2 il campo
+  manca e vale la regola del 1.14. Sequenza reale (NGC 7635): TimeoutMinutes 12, MinInterval 5.
+
+**2. Il cambio della posa di guida si tratta come un cambio di stella.**
+- PHD2 annuncia la posa solo quando cambia davvero: `GuideParamChange`, Name `Exposure`, Value "2000 ms" (con
+  ", VarDelay (...)") o "Auto (...)" (myframe_events.cpp, OnExposureDurationSelected -> NotifyExposureChanged;
+  myframe.cpp, ExposureDurationSummary), mai nel saluto alla connessione (event_server.cpp, send_catchup_events).
+  main.py prima lo ignorava; ora chiama `recovery_hint.cambio_posa()`.
+- Il sensore riceve la media della finestra dell'analizzatore (`snr_avg`, 30 frame): senza azzerarla il primo dato
+  dopo il cambio era ancora quasi tutto della posa vecchia. Al cambio si azzerano analizzatore e motore diagnostico,
+  come gia' per i cambi di posa dell'Agente (§95, `_consolida`) e a ogni ripartenza della guida.
+- Stessa stella: il trasporto (rapporto misurato prima/dopo) vale anche a cielo sereno, purche' recente e credibile.
+  Trattato come una stella diversa, un 4 s -> 1 s (SNR circa dimezzata) cadeva nell'eredita' e dava UNSAFE fino al
+  tetto. Un cambio di posa seguito da una stella nuova prima del primo dato torna alle regole fra stelle diverse.
+- Posa Auto in PHD2: avviso nel log. PHD2 la regola per tenere la SNR al bersaglio (myframe.cpp, AdjustAutoExposure):
+  la SNR non misura le nubi finche' la posa non arriva al massimo.
+
+**Correzione del §126-quinquies.** Il 75% della stella vecchia alle 02:53 del 17/8 non era rumore: la posa era scesa
+da 4 a 2.5 s alle 02:38:05 (PHD2_DebugLog_2026-08-17_212821, OnExposureDurationSelected) con il metro ancora dei 4 s;
+il "calo" delle 03:22 era la posa portata a 1 s alle 03:20:45. Il trasporto fra stelle DIVERSE resta limitato al
+cielo degradato (giro 7 = giro 4: non toglie nessun episodio).
+
+**Verifica.** Rigioco giro 8 (codice finale; i cambi di posa veri arrivano dai GuideLog): **18 episodi, identici al
+giro 7**. Il 17/8 alle 03:20:44 il riferimento si riscala da 38.4 a 25.0 (posa 2.5 -> 1 s) invece di vedere una nube;
+il 16/8 alle 03:04 (nube fitta, posa alzata dall'Agente) si tiene il metro. La conferma lunga e la sonda non sono nel
+rigioco (servirebbe il ciclo chiuso plugin-Agente): le coprono i test.
+
+Costo dichiarato: dopo una nube in cui l'Agente ha alzato la posa (Path A, SNR < 8), ogni gradino di discesa durante
+l'UNSAFE e' un cambio di posa e riazzera la conferma: il SAFE arriva circa 5 minuti dopo l'ultimo gradino.
+
+Test: Agente 749 (+24), plugin 106 (+8).

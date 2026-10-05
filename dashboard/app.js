@@ -1030,6 +1030,15 @@ const SAFETY_UI = {
 // §126 — chi giudica il cielo nel plugin: "GUIDE" dal 1.14 (default), "CAMERA" se
 // l'operatore ha riattivato il comportamento fino al 1.13. Il racconto del recupero
 // cambia: con la guida giudice non esistono pose di verifica.
+// §126-sexies — quanto deve durare il sereno ADESSO (1 minuto di norma, 5 dopo un
+// cambio di stella o di posa avvenuto durante l'UNSAFE).
+function durataSereno(rh) {
+  const s = rh && rh.sustained_target_s != null ? Number(rh.sustained_target_s) : 60;
+  if (s <= 60) return 'un minuto';
+  const m = Math.round(s / 60);
+  return `${m} minuti`;
+}
+
 function giudiceGuida(safety) {
   // §126-bis — senza il campo (plugin fino al 1.13) il giudice e' la camera.
   return !!(safety && safety.judge === 'GUIDE');
@@ -1332,7 +1341,10 @@ function updateLevel1(data) {
          "RECUPERO — SERENO IN CONFERMA\nLa stella di guida è tornata sopra l'80% del sereno: appena è tracciata stabilmente la sequenza riparte da sola.");
     } else if (unsafeOra) {
       l1('recup', 'nubeFerma', 'tone-orange', 'Attendo il sereno', snrRif,
-         "RECUPERO — IN ATTESA\nLa guida continua a osservare il cielo anche a sequenza ferma. Si riparte quando la stella torna sopra l'80% del sereno per un minuto.");
+         "RECUPERO — IN ATTESA\nLa guida continua a osservare il cielo anche a sequenza ferma. Si riparte quando la stella torna sopra l'80% del sereno per " + durataSereno(rh) + "." +
+         (rh.conferma_lunga
+           ? "\nDopo un cambio di stella o di posa durante l'UNSAFE il sereno deve durare di più: con la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno."
+           : ''));
     } else if (rh.sky_state === 'DEGRADED' || rh.sotto_il_sereno) {
       l1('recup', 'nubeFerma', 'tone-yellow', 'Sotto il sereno', snrRif,
          "RECUPERO — CIELO SOTTO IL SERENO\nLa stella di guida è sotto l'80% del suo sereno. Si sospende solo sotto la metà, e solo se dura; per dirlo di nuovo sereno deve tornare sopra l'80% per un minuto.");

@@ -592,6 +592,10 @@ class RecoveryHintConfig:
     snr_recover_frac: float = 0.8      # PROVVISORIO — buono se snr >= frac × snr_ref (pre-nube)
     snr_recover_floor: float = 25.0    # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
     sustained_seconds: float = 60.0    # PROVVISORIO — secondi di segnale buono per active=true
+    # §126-sexies — dopo un cambio di stella o di posa di guida avvenuto mentre il
+    # monitor e' UNSAFE il sereno deve durare di piu': con la sola SNR una stella piu'
+    # luminosa sotto la nube non si distingue da una piu' debole a cielo sereno.
+    sustained_seconds_dopo_cambio_in_unsafe: float = 300.0
     # §76 — POLARITÀ OPPOSTA: evidenza che il cielo sta PEGGIORANDO, mentre N1 è
     # ancora fermo all'ultima posa buona. Tarati sulla notte 2026-08-04, dove la
     # SNR è crollata da ~70 a ~22 (31% del riferimento) fra le 23:07 e le 23:11,
@@ -609,7 +613,8 @@ class RecoveryHintConfig:
     # DEGRADATO e l'ultimo dato della stella vecchia e' piu' recente di cosi' quando
     # arriva il primo della nuova, il riferimento si TRASPORTA col rapporto misurato
     # fra le due (stessa nube, stelle diverse). A cielo sereno si reimpara
-    # (§126-quinquies: rigioco del 17/8, il rapporto fra due pose singole gonfiava il metro).
+    # (§126-quinquies: rigioco del 17/8, il rapporto fra due pose singole portava nel
+    # metro nuovo un cambio di posa non visto, §126-sexies).
     # 120 s copre una ripartenza riuscita della sonda di guida (~80 s misurati sui
     # profili del Minix: timeout 50 s, assestamento) e un cambio filtro (~25 s).
     ponte_stella_max_s: float = 120.0
@@ -1023,5 +1028,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rh.get("snr_ref_freeze_max_min", cfg.recovery_hint.snr_ref_freeze_max_min))
         cfg.recovery_hint.ponte_stella_max_s = float(
             rh.get("ponte_stella_max_s", cfg.recovery_hint.ponte_stella_max_s))
+        cfg.recovery_hint.sustained_seconds_dopo_cambio_in_unsafe = float(
+            rh.get("sustained_seconds_dopo_cambio_in_unsafe",
+                   cfg.recovery_hint.sustained_seconds_dopo_cambio_in_unsafe))
 
     return cfg
