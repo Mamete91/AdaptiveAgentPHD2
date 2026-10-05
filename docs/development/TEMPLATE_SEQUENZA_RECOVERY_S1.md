@@ -1,5 +1,14 @@
 # §57 — Template di sequenza: RECOVERY AUTO-STARTING da UNSAFE-nubi (rev. §57-bis)
 
+> **§126 (plugin 1.14, Agente 3.1) — leggere prima.** Dal 04/10/2026 il cielo lo giudica la camera di GUIDA,
+> in entrambi i versi; la camera di ripresa e' informativa. Con questa impostazione (predefinita) la Recovery
+> probe NON scatta pose: e' una sonda di guida, che durante l'UNSAFE fa ripartire la guida se si ferma o se la
+> stella resta persa, e il ritorno a SAFE lo concede la guida quando conferma il sereno. La configurazione della
+> sequenza resta la stessa (Trigger On Unsafe -> Before Waiting For Safety -> Recovery probe), ma **nel ramo
+> UNSAFE non vanno istruzioni che fermano la guida o parcheggiano** (Park, Find Home, Stop Guiding): il
+> "park su UNSAFE prolungato" previsto piu' sotto e' superato. Quanto segue descrive il funzionamento con
+> l'opzione legacy "la camera di ripresa puo' dichiarare unsafe". Dettagli: NOTE_CLAUDE §126.
+
 > **Cosa risolve.** Quando N6 va UNSAFE per nubi, il `Wait Until Safe` di NINA è un puro
 > loop di attesa (poll `IsSafe` ogni 5 s, **nessuna posa**): senza light salvati N1 resta
 > congelato e N6 non può mai tornare SAFE (deadlock provato il 12/7: indice fermo a 0.115

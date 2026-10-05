@@ -239,6 +239,14 @@ class PHD2Client:
         """Ritorna lo stato corrente di PHD2 (es. 'Guiding', 'Stopped')."""
         return self.call("get_app_state")
 
+    def get_guide_output_enabled(self) -> bool:
+        """§126-bis — l'uscita di guida e' attiva? (RPC `get_guide_output_enabled`,
+        event_server.cpp). La usava gia' la rete di sicurezza del §108 in
+        controller.initialize(), ma il metodo mancava: l'AttributeError veniva
+        assorbito e un Agente avviato a Guiding Assistant gia' in corso non se ne
+        accorgeva."""
+        return bool(self.call("get_guide_output_enabled"))
+
     def get_pixel_scale(self) -> float | None:
         """Pixel scale di guida (arcsec/px) dal profilo PHD2 attivo.
 

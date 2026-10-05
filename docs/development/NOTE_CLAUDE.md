@@ -6131,3 +6131,129 @@ giusti — hanno segnalato misure vere — ma la catena causale che ci avevo cos
 che si muovevano insieme presi per una causa, senza controllare come PHD2 calcola il primo: la stessa
 classe di errore del §118 e del §124, una supposizione su un programma di terzi non verificata sul suo
 sorgente.
+
+---
+
+## §126 — La guida giudica il cielo; la camera di ripresa diventa informativa (Agente 3.1.0, plugin 1.14.0.0)
+
+### Perche'
+
+Notte 3-4/10 (forense: `LOG PER AGENTE ADATTIVO/2026-10-03/RAPPORTO_FORENSE_UNSAFE_2026-10-03.md`): UNA posa con
+stelle allungate (525 stelle, ECC 0.65) porta l'indice N1 a 0.457; il plugin la rilegge a ogni poll e dopo 8 poll
+dichiara UNSAFE "nubi" alle 00:26:32. La stella di guida — stesso tubo (OAG), stesso cielo — e' a SNR 66.3 contro
+un riferimento di 65.5. La Recovery Probe era diventata `UnknownSequenceItem` (sequenza risalvata senza plugin):
+tre ore di fermo con il cielo sereno.
+
+Decisione dell'operatore (04/10): **la camera di guida e' l'unico giudice del cielo, in entrambi i versi; la camera
+di ripresa resta informativa**. Prima di firmare ha chiesto di verificare calibrazione, Guide Assistant e autofocus:
+rapporto `RAPPORTO_GUIDA_SOLA_2026-10-04.md` (7 analisti, 12 affermazioni verificate, replay su 25 notti).
+
+### Cosa cambia
+
+**Agente (misura).**
+- `recovery_hint.py` diventa il sensore del giudice: degrado (SNR <= 50% del riferimento per 90 s), sereno `sky_ok`
+  (SNR >= 80% per 60 s), riferimento e stato `sky_state` CLEAR/DEGRADED valutati a ogni frame, **senza dipendere
+  da N1**. Il riferimento non scende mentre la stella e' sotto il sereno (sotto l'80%, o DEGRADED), con il tetto
+  `snr_ref_freeze_max_min = 90` che vale sempre (stesso principio di `[n1] ref_freeze_max_min`, §66). La soglia di
+  sereno e' l'80% del riferimento; il floor assoluto (25) vale solo senza riferimento (primo frame).
+- Nuova stella (StarSelected, o LockPositionSet con la posizione precedente ignota o lontana piu' di
+  `stessa_stella_px = 15`, la regione di ricerca di PHD2; il LockPositionSet arriva PRIMA dello StarSelected,
+  guider.cpp): il cambio si registra sempre e decide il primo dato della stella nuova, in tre casi:
+  1. **trasporto** — solo se la guida vedeva gia' il cielo DEGRADATO e l'ultimo dato della stella vecchia ha al
+     massimo `ponte_stella_max_s = 120` s ed e' credibile (>= 50% del suo metro): metro_nuovo = metro_vecchio x
+     (snr_nuova / snr_vecchia). E' il caso della sonda di guida, che riavvia durante l'UNSAFE: una nube resta una
+     nube anche se PHD2 cambia stella;
+  2. **eredita'** — la stella nuova parte sotto il 50% del metro vecchio (per quel metro e' una nube): si tiene il
+     metro vecchio, con il tetto di 90 minuti contato dal cambio; a tetto scaduto si reimpara subito;
+  3. altrimenti **si reimpara** (19/7 02:53: stella nuova al 66% a cielo sereno; 3/10 22:55: stella piu' debole
+     dopo l'autofocus).
+  Selezioni ripetute prima del primo dato non perdono il cambio in sospeso. Lo StarSelected del saluto alla
+  connessione (prima di AppState) non e' una stella nuova; i lock durante una calibrazione nemmeno (si registrano
+  solo le posizioni).
+- `sospendi()` a calibrazione, guida fermata, Guide Assistant: flag e accumulatori si spengono, il riferimento resta.
+  Il giudizio si salva in `cielo_guida.json` (scrittura atomica, valido 90 min) e sopravvive a un riavvio
+  dell'Agente; si applica solo se la stella del saluto alla connessione e' entro 15 px da quella salvata.
+- `guide_health.py`: stella persa misurata sugli EVENTI (StarLost apre; GuideStep, passo "Calibrating" — PHD2 lo
+  manda solo a stella trovata, `scope.cpp` — StarSelected, ripartenza chiudono), con la durata `star_lost_s`;
+  NON si congela a guida ferma (il 24/8 l'allarme nato prima della calibrazione era con ogni probabilita' giusto);
+  `star_tracked` con un orologio dei soli frame con stella; la stella SATURA non e' un errore del canale (4/8:
+  93.5% di frame saturi a cielo sereno); SettleDone fallito a guida non attesa e non annullato (testi di
+  `AbortController`, o stesso istante dello stop) = ripartenza fallita = stella persa.
+- `main.py`: l'orologio del canale si aggiorna su ogni GuideStep PRIMA dei filtri (il 2/10 alle 23:13:42 il
+  Guide Assistant dava UNSAFE "guida non osservabile" perche' i frame venivano scartati senza segnarli);
+  StartCalibration e Guide Assistant (MountGuidingEnabled=false, fino alla fine del test del backlash,
+  `guiding_assistant.cpp` DoStop) = guida non attesa; StarLost scarica l'evidenza di sereno; il sensore del cielo
+  lavora anche con `--monitor-only`.
+- `server.py`: `recovery_hint.giudice_pronto` (l'Agente dichiara di poter fare da giudice); il plugin pubblica
+  `judge` in `/nina/safety`. `client.get_guide_output_enabled` (la rete §108 lo chiamava, ma mancava).
+- Dashboard: racconto del recupero dalla guida (stella persa / guida ferma / canale muto / sereno in conferma),
+  nube mai data per certa ("nubi o camera di guida"), camera di ripresa dichiarata informativa.
+
+**Plugin 1.14 (decisione).**
+- Giudice EFFETTIVO deciso per collegamento all'Agente: guida se l'opzione lo chiede
+  (`ImagingCameraUnsafeEnabled = false`, default) E l'Agente dichiara `giudice_pronto`; altrimenti camera, come
+  il 1.13. Al cambio di giudice a latch acceso il latch si trasferisce, non si spegne.
+- Con la guida giudice: niente percorso CLOUD sull'indice ne' STALE; il cielo e' un accumulatore solo
+  (`SkyDegrading` +1/poll, `SkyOk` + canale pronto §71 drena, congelato a guida non attesa); STAR_LOST dagli eventi;
+  al rientro di STAR_LOST, AGENT_LOST e GUIDE_UNOBSERVABLE il latch passa al cielo della guida (il SAFE lo concede il
+  sereno confermato, non il solo ritorno dei dati). Sicurezza nubi spenta spegne il latch del cielo.
+- `_internalSafe` e finestra meridiano riazzerati a Connect/Disconnect (il monitor ricollegato dopo un UNSAFE restava
+  UNSAFE per sempre — ipotesi della forense, provata dalla verifica). Riga dei contatori a Info sulle transizioni.
+- **RecoveryProbe = sonda di guida**: con la guida giudice non scatta pose; durante l'UNSAFE fa ripartire la guida
+  se e' ferma da MinInterval, se la stella e' persa da MinInterval (Stop+Start: dopo una nube lunga la stella puo'
+  essere uscita dalla regione di ricerca), o una volta per TimeoutMinutes di UNSAFE con la guida che gira (il 3/10
+  il guasto della camera di guida si e' risolto a una ripartenza). Prima di agire ricontrolla di essere ancora in
+  UNSAFE e che la montatura sia collegata, non parcheggiata, in tracking e ferma; MinInterval mai sotto 1 minuto.
+  Con la camera giudice resta il ciclo di pose-sonda del 1.13.
+- Se l'Agente non puo' fare da giudice (versione < 3.1, sensore spento) il ritorno alla camera non e' silenzioso:
+  avviso a schermo `Toast_CameraJudgeFallback`. `SkyDegradingUnsafePolls` ora si salva (tornava a 8 a ogni avvio).
+
+### Verifica
+
+1. Rapporto "guida sola" (04/10): condizioni del si'.
+2. Verifica del codice (05/10, `scratchpad/verifica126`): rigioco col codice vero (`_event_loop`, tracker veri,
+   `SafetyDecisionEngine` C# vero) su 25 notti + 4 revisori: 37 difetti confermati, 0 respinti -> §126-bis.
+3. Rigioco del codice corretto: sono emersi tre difetti miei (orologio dello StarLost che ritardava il degrado: 4/8
+   23:13:45 mancato; metro ereditato sempre: 19/7 sereno vero dalle 02:53 lasciato UNSAFE fino a fine notte;
+   selezioni ripetute che perdevano il metro in sospeso) -> §126-ter.
+4. Rigioco con le posizioni vere delle stelle (righe "setting lock position" dei debug log), giro 4: **18 episodi
+   su 25 notti**: i 17 del primo giro, con gli stessi orari, + la nube del 3/8 00:14 durante un cambio filtro (prima
+   invisibile); il 3/8 23:49 non torna piu' SAFE sotto le nubi (alle 23:55 l'autofocus vedeva 0-6 stelle).
+   Nessun falso allarme nuovo. La notte 3-4/10 non ha UNSAFE alle 00:26.
+5. Revisione finale (11 difetti confermati) -> §126-quater: lock prima dello StarSelected (AG-2), tetto dell'eredita'
+   dal cambio (AG-3), memoria legata alla stella (AG-4), trasporto del metro (AG-5/N3), freni della sonda (S4/S5/N5),
+   STALE trasferito al cambio di giudice (S7), avviso del giudice camera (N2), `SkyDegradingUnsafePolls` salvato (N6).
+   Due correzioni respinte dal rigioco stesso:
+   - "a cielo gia' DEGRADATO la stella nuova eredita sempre" (giro 5): il 3/10, guasto della camera di guida e poi
+     stella nuova, quasi tre ore di UNSAFE a cielo sereno. Tolta;
+   - il trasporto anche a cielo sereno (giro 6): il 17/8 alle 02:53 l'ultima posa della stella vecchia era al 75%
+     del suo metro (32.6 su 43.3, rumore: quella stella oscillava attorno all'80%), il metro saliva da 43.3 a 52.3,
+     la stella nuova restava al 65-70% e un calo breve alle 03:22 dava UNSAFE fino a fine log. Trasporto ristretto
+     al cielo gia' degradato (§126-quinquies).
+6. Giro 7, codice finale: **18 episodi, identici al giro 4**. Sulle 25 notti non c'e' nessun cambio di stella a cielo
+   degradato: il trasporto serve alle ripartenze della sonda, che il rigioco non contiene.
+
+### Cosa NON e' stato fatto (scelte dichiarate)
+
+- Stella persa contata come degrado e SNR per singolo frame (verifica D1): piu' sensibilita' alle nubi a chiazze,
+  ma con episodi nuovi non ancora classificati — da decidere sui dati.
+- Ritorno a SAFE piu' prudente (`sustained_seconds` 60 -> 300, verifica D4): taratura, decisione dell'operatore.
+- Nessun discriminatore guasto/nube: la sonda riavvia la guida ogni 12 minuti di UNSAFE; i testi dicono "nubi o
+  camera di guida".
+- Finestra meridiano §72 invariata: se un UNSAFE interrompe la ripresa della guida dopo il flip, la sonda la fa
+  ripartire.
+- Cambi di esposizione della guida: non gestiti nel riferimento (1 cambio in 91 file di decisioni).
+- Limiti noti del cambio stella (solo SNR, nessun'altra misura): una stella nuova piu' luminosa sotto la stessa nube,
+  senza un dato recente della vecchia, si reimpara (possibile SAFE sotto la nube); guasto della camera di guida +
+  stella diversa piu' debole resta UNSAFE al massimo fino al tetto di 90 minuti. Scelta dell'operatore: meglio
+  qualche posa sotto una nube che una notte ferma a cielo sereno.
+- Da validare sul campo: un Calibration Assistant, un Guide Assistant e un autofocus con il monitor connesso e NINA
+  a livello Debug; il primo UNSAFE vero con la sonda di guida.
+
+### Consiglio di sequenza (revisione N4, nessun codice)
+
+Il Trigger On Unsafe alla RADICE della sequenza blocca anche l'area finale (park, copertura, spegnimento) finche' il
+monitor resta UNSAFE. Va spostato nel contenitore del target (DSO) che porta la condizione di fine notte: cosi' a
+fine notte il contenitore si chiude e l'area finale gira sempre.
+
+Test: Agente 725 (+69), plugin 98 (+25).

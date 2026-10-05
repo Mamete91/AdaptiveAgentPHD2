@@ -12,8 +12,11 @@ copre la finestra in cui il sensore veloce sa già e quello lento non ancora.
 
 Asimmetria deliberata rispetto all'hint di recupero (§57): soglia più severa
 (50% contro 80%) e sostegno più lungo (90 s contro 60 s). Un falso positivo qui
-mette in pausa la sequenza, quindi si chiede più evidenza — e nel verso opposto
-(recupero) il giudice resta la posa-sonda, mai questo segnale.
+mette in pausa la sequenza, quindi si chiede più evidenza.
+
+§126 — nel verso opposto (recupero) il giudice NON e' piu' la posa-sonda: dal
+04/10/2026 la guida giudica il cielo in entrambi i versi e la camera di ripresa
+resta informativa. Il degrado resta acceso anche quando N1 ha visto le nubi.
 """
 from __future__ import annotations
 
@@ -178,9 +181,11 @@ class TestReferenceRatchet(unittest.TestCase):
 class TestBoundaries(unittest.TestCase):
     """I confini con gli altri sottosistemi: il §76 non deve invadere."""
 
-    def test_inert_once_n1_has_noticed(self):
-        """A N1 già degradato l'accumulatore §55 sta già lavorando: qui si rientra,
-        così l'evidenza non resta armata durante il recupero."""
+    def test_n1_no_longer_switches_off_the_evidence(self):
+        """§126 — prima, a N1 degradato, l'evidenza rientrava e il testimone passava
+        all'accumulatore della camera (§55). Oggi la camera e' informativa: se il
+        degrado si spegnesse quando N1 vede le nubi, il giudice resterebbe cieco
+        proprio mentre il cielo e' coperto."""
         c = _Clock()
         st = _State("CLEAR")
         t = _tracker(c, st)
@@ -191,7 +196,8 @@ class TestBoundaries(unittest.TestCase):
         st.state = "CLOUD"                 # N1 ha visto le nubi
         t.update(20.0)
         b = t.status_block()
-        self.assertFalse(b["degrading"], "il testimone passa all'accumulatore §55")
+        self.assertTrue(b["degrading"], "la guida resta il giudice anche a N1 CLOUD")
+        self.assertEqual(b["sky_state"], "DEGRADED")
 
     def test_recovery_hint_still_works_unchanged(self):
         """Il §76 non deve toccare la polarità di recupero (§57)."""

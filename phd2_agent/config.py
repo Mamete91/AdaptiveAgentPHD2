@@ -570,6 +570,12 @@ class GuideHealthConfig:
     ready_frame_max_age_s: float = 10.0     # frame che fluiscono ADESSO (≈2 esposizioni guida)
     ready_max_errors: int = 2               # ErrorCode recenti tollerati (finestra error_window_s)
     ready_min_samples: int = 10             # sotto questa base statistica: NON pronto
+    # §126-bis — entro questa distanza (px) dalla posizione precedente la stella
+    # selezionata da PHD2 e' la STESSA: il riferimento SNR resta. 15 px e' la regione
+    # di ricerca di PHD2 di fabbrica ("Search region = 15 px" nell'intestazione dei
+    # guide log del Minix). Un cambio filtro o un autofocus con la stessa stella non
+    # deve piu' far reimparare il metro sotto le nubi (3/8 00:08).
+    stessa_stella_px: float = 15.0
 
 
 @dataclass
@@ -595,6 +601,18 @@ class RecoveryHintConfig:
     snr_degrade_frac: float = 0.5      # peggiora se snr <= frac × snr_ref (era 31% quella notte)
     degrade_sustained_seconds: float = 90.0   # sostegno richiesto: più lungo del recupero (60 s)
     degrade_min_ref: float = 15.0      # sotto questo snr_ref il rapporto non è affidabile
+    # §126 — tetto al congelamento del riferimento SNR mentre la guida vede il cielo
+    # degradato. Stesso principio e stesso valore di [n1] ref_freeze_max_min (§66):
+    # oltre, il degrado stabile e' la nuova normalita' e il riferimento riprende a scendere.
+    snr_ref_freeze_max_min: float = 90.0
+    # §126-quater — "ponte" fra due stelle: se la guida vedeva gia' il cielo
+    # DEGRADATO e l'ultimo dato della stella vecchia e' piu' recente di cosi' quando
+    # arriva il primo della nuova, il riferimento si TRASPORTA col rapporto misurato
+    # fra le due (stessa nube, stelle diverse). A cielo sereno si reimpara
+    # (§126-quinquies: rigioco del 17/8, il rapporto fra due pose singole gonfiava il metro).
+    # 120 s copre una ripartenza riuscita della sonda di guida (~80 s misurati sui
+    # profili del Minix: timeout 50 s, assestamento) e un cambio filtro (~25 s).
+    ponte_stella_max_s: float = 120.0
     drain_factor: float = 2.0          # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
 
 
@@ -970,6 +988,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             gh.get("ready_frame_max_age_s", cfg.guide_health.ready_frame_max_age_s))
         cfg.guide_health.ready_max_errors = int(gh.get("ready_max_errors", cfg.guide_health.ready_max_errors))
         cfg.guide_health.ready_min_samples = int(gh.get("ready_min_samples", cfg.guide_health.ready_min_samples))
+        cfg.guide_health.stessa_stella_px = float(
+            gh.get("stessa_stella_px", cfg.guide_health.stessa_stella_px))
 
     # §57 — recovery auto-starting: S1 (sonda fail-safe, parametri di riferimento del
     # template) + S2 (hint SNR-guida). Retrocompat: sezioni assenti -> default.
@@ -999,5 +1019,9 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             rh.get("degrade_sustained_seconds", cfg.recovery_hint.degrade_sustained_seconds))
         cfg.recovery_hint.degrade_min_ref = float(
             rh.get("degrade_min_ref", cfg.recovery_hint.degrade_min_ref))
+        cfg.recovery_hint.snr_ref_freeze_max_min = float(
+            rh.get("snr_ref_freeze_max_min", cfg.recovery_hint.snr_ref_freeze_max_min))
+        cfg.recovery_hint.ponte_stella_max_s = float(
+            rh.get("ponte_stella_max_s", cfg.recovery_hint.ponte_stella_max_s))
 
     return cfg

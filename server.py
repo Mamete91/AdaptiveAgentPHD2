@@ -290,7 +290,7 @@ async def get_status():
         "controller": ctrl_status,
         "analyzer": analyzer_status,
         "nina": nina_status,
-        "recovery_hint": recovery_hint,
+        "recovery_hint": _con_giudice_pronto(recovery_hint, guide_health),
         "guide_health": guide_health,
         "safety": safety,
     })
@@ -303,6 +303,25 @@ async def get_history(limit: int = 100):
         return JSONResponse({"actions": []})
     history = [a.to_dict() for a in _controller.action_history[-limit:]]
     return JSONResponse({"actions": history})
+
+
+def _con_giudice_pronto(recovery_hint: dict, guide_health: dict) -> dict:
+    """§126-bis — l'Agente dichiara ESPLICITAMENTE se puo' fare da giudice del cielo.
+
+    Il plugin non deve dedurlo dalla presenza dei campi: `sky_ok` c'e' anche con il
+    sensore spento. Pronto = sensore del cielo acceso con il degrado attivo e canale
+    di guida osservato. Senza, il plugin 1.14 torna al giudice camera (1.13).
+    """
+    try:
+        rh = dict(recovery_hint or {})
+        tracker = _recovery_hint_tracker
+        rh["giudice_pronto"] = bool(
+            tracker is not None and rh.get("enabled")
+            and getattr(tracker.cfg, "degrade_enabled", False)
+            and (guide_health or {}).get("enabled"))
+        return rh
+    except Exception:
+        return dict(recovery_hint or {}, giudice_pronto=False)
 
 
 class DryRunPayload(BaseModel):
@@ -387,6 +406,9 @@ class SafetyStatePayload(BaseModel):
     # §73-ter — cadenza del battito dichiarata dal plugin: l'Agente ne deriva la
     # finestra di freschezza invece di indovinarla (vedi SafetyStateStore).
     poll_interval_s: Optional[float] = Field(default=None, ge=0)
+    # §126 — chi giudica il cielo nel plugin: "GUIDE" (default dal 1.14) o
+    # "CAMERA" (comportamento fino al 1.13, riattivabile dalle opzioni).
+    judge: Optional[str] = None
 
 
 @app.post("/nina/safety")
@@ -401,7 +423,7 @@ async def ingest_safety_state(payload: SafetyStatePayload):
         return JSONResponse({"accepted": False, "reason": "no store"})
     ok = store.update(payload.state, payload.cause, payload.detail,
                       payload.connected, payload.internal_safe,
-                      payload.poll_interval_s)
+                      payload.poll_interval_s, payload.judge)
     return JSONResponse({"accepted": ok})
 
 

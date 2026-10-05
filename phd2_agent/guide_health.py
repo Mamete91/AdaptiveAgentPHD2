@@ -57,6 +57,21 @@ STAR_ERROR_NAMES = {
 # Severità Alert che consideriamo corroboranti (le altre sono informative).
 _ALERT_SEVERE = ("warning", "error")
 
+# §126 — la stella SATURA non e' un guasto del canale: PHD2 la guida lo stesso
+# (ErrorCode 1 accompagna un GuideStep regolare). Il 4/8, fra le 23:23 e le 23:42, il
+# 93.5% dei frame era saturo: contati come errori tenevano il canale "non pronto" a
+# cielo sereno (81 interrogazioni su 106) e dimezzavano la soglia del silenzio.
+_SATURATED = 1
+
+# §126-bis — SettleDone fallito: PHD2 usa gli stessi campi per due cose diverse.
+# Questi sono i motivi di ANNULLAMENTO (PhdController::AbortController: stop della
+# guida o della cattura, myframe.cpp:2293, myframe_events.cpp:412 e 556,
+# phdcontrol.cpp:232): la guida e' stata fermata, non ha fallito la ripartenza.
+# Tutti gli altri ("failed to find a suitable guide star", "could not start
+# guiding", "timed-out waiting for guider to settle", ...) sono una ripartenza fallita.
+_SETTLE_ANNULLATO = ("Guiding stopped", "Stopped capturing", "Image capture stopped",
+                     "manual or phd1-style dither")
+
 
 class GuideHealthTracker:
     """Osservabilità del canale di guida PHD2. Solo misura, nessuna decisione."""
@@ -94,6 +109,23 @@ class GuideHealthTracker:
         # aprire il gate della sonda. Cadenza guida ~3 s => 400 campioni ≈ 20 min.
         self._frames: deque[tuple[float, bool]] = deque(maxlen=400)
 
+        # §126 — stella persa misurata sugli EVENTI, non sullo stato del controller.
+        # Lo stato STAR_LOST del controller usciva solo con l'RMS fuori dalla banda
+        # neutra: il 10/8 UN frame perso alle 22:32:03, poi 126 frame buoni, e UNSAFE
+        # alle 22:34:55. Qui: il primo GuideStep dopo la perdita la chiude.
+        self._lost_since: Optional[float] = None       # inizio della perdita continua
+        self._last_frame_tracked: Optional[bool] = None
+        # §126-bis — orologio dei soli frame CON stella: i frame di looping (camera
+        # viva ma nessuna stella agganciata) non devono rendere "tracciata" la stella.
+        self._last_tracked_ts: Optional[float] = None
+        self._ripartenza_fallita: bool = False
+        # §126-ter — quando la guida e' stata annunciata ferma: PHD2 manda
+        # GuidingStopped e SUBITO DOPO il SettleDone di annullamento
+        # (myframe.cpp:2292-2293). Un fallimento che arriva insieme allo stop e'
+        # un annullamento, qualunque sia il testo.
+        self._stop_ts: Optional[float] = None
+        self._last_settle: Optional[tuple[float, int, str]] = None  # (ts, status, errore)
+
     # ------------------------------------------------------------------ #
     #  Ingest dagli eventi PHD2 (thread del loop eventi)                  #
     # ------------------------------------------------------------------ #
@@ -107,6 +139,10 @@ class GuideHealthTracker:
             self._last_guide_step = now
             self._last_frame = now
             self._frames.append((now, True))
+            self._lost_since = None
+            self._last_frame_tracked = True
+            self._last_tracked_ts = now
+            self._ripartenza_fallita = False
             self._note_frame_quality(event, now)
 
     def on_star_lost(self, event: dict) -> None:
@@ -121,6 +157,9 @@ class GuideHealthTracker:
         with self._lock:
             self._last_frame = now
             self._frames.append((now, False))
+            if self._lost_since is None:
+                self._lost_since = now
+            self._last_frame_tracked = False
             self._note_frame_quality(event, now)
 
     def on_looping_exposure(self, event: dict) -> None:
@@ -164,11 +203,77 @@ class GuideHealthTracker:
                 # Ripartenza: gli orologi valgono da adesso, non dall'era precedente.
                 self._last_guide_step = now
                 self._last_frame = now
+                # §126 — e anche la stella: lo dira' il primo frame della ripartenza.
+                self._lost_since = None
+                self._last_frame_tracked = None
+                self._last_tracked_ts = None
+                self._ripartenza_fallita = False
             elif not expected:
                 self._expected_since = None
+                if self._guiding_expected:
+                    self._stop_ts = now
             self._guiding_expected = bool(expected)
             self._last_reason = reason
         logger.info("[guide_health] guida attesa=%s — %s", expected, reason)
+
+    def on_calibration_step(self, event: dict) -> None:
+        """§126 — evento "Calibrating": PHD2 lo emette solo quando il passo di
+        calibrazione ha TROVATO la stella (scope.cpp, CalibrationStatus; a stella
+        persa la calibrazione "blunders on" e manda StarLost). E' quindi prova che
+        la stella c'e': chiude una perdita in corso. Non entra nella frazione
+        tracciata del "canale pronto", che descrive la guida."""
+        if not self.cfg.enabled:
+            return
+        now = self._now()
+        with self._lock:
+            self._last_frame = now
+            self._lost_since = None
+            self._last_frame_tracked = True
+            self._last_tracked_ts = now
+            self._ripartenza_fallita = False
+
+    def reset_stella(self, reason: str) -> None:
+        """§126 — PHD2 ha selezionato una stella: lo stato della precedente (persa
+        o tracciata, frazione nella finestra) non descrive quella nuova."""
+        if not self.cfg.enabled:
+            return
+        with self._lock:
+            self._lost_since = None
+            self._last_frame_tracked = None
+            self._last_tracked_ts = None
+            self._ripartenza_fallita = False
+            self._frames.clear()
+        logger.info("[guide_health] nuova stella — %s", reason)
+
+    def on_settle_done(self, status: int, error: str) -> None:
+        """§126 — esito dell'assestamento annunciato da PHD2 (SettleDone).
+
+        Status != 0 significa che la guida NON e' ripartita come richiesto (p.es.
+        stella non trovata dopo un flip). Prima l'evento si ignorava: con la guida
+        ferma nessuna regola scatta e NINA, che avvia la guida con "continua in
+        caso di errore", prosegue senza guida. Qui si MISURA e si espone; la
+        decisione resta fuori da questo modulo."""
+        if not self.cfg.enabled:
+            return
+        now = self._now()
+        with self._lock:
+            self._last_settle = (now, int(status), error or "")
+            # §126-bis — la guida doveva ripartire e non e' ripartita (la stella non
+            # si trova, la guida non parte): e' letteralmente una stella persa. Si
+            # apre la perdita, che NON si congela a guida ferma: senza, il monitor
+            # restava SAFE mentre NINA (StartGuiding "continua in caso di errore")
+            # esponeva senza guida. Solo a guida NON attesa: un timeout di
+            # assestamento durante un dither, a guida attiva, non e' una ripartenza.
+            insieme_allo_stop = (self._stop_ts is not None and now - self._stop_ts <= 2.0)
+            if (int(status) != 0 and not self._guiding_expected and not insieme_allo_stop
+                    and (error or "").strip() not in _SETTLE_ANNULLATO):
+                self._ripartenza_fallita = True
+                if self._lost_since is None:
+                    self._lost_since = now
+                self._last_frame_tracked = False
+        if self._ripartenza_fallita and int(status) != 0:
+            logger.warning("[guide_health] la guida NON e' ripartita (%s): conta come "
+                           "stella persa", error)
 
     # ------------------------------------------------------------------ #
     #  Lettura per /status (thread uvicorn)                               #
@@ -229,12 +334,16 @@ class GuideHealthTracker:
     def status_block(self) -> dict[str, Any]:
         with self._lock:
             now = self._now()
-            recent = [(ts, e) for ts, e in self._errors
+            window = [(ts, e) for ts, e in self._errors
                       if now - ts <= self.cfg.error_window_s]
             counts: dict[str, int] = {}
-            for _ts, e in recent:
+            for _ts, e in window:
                 counts[STAR_ERROR_NAMES.get(e, str(e))] = \
                     counts.get(STAR_ERROR_NAMES.get(e, str(e)), 0) + 1
+            # §126 — la saturazione resta visibile (counts) ma non e' un errore del
+            # canale: fuori dal conteggio che corrobora il silenzio e dal "pronto".
+            recent = [(ts, e) for ts, e in window if e != _SATURATED]
+            saturated = len(window) - len(recent)
 
             alert_type = alert_age = alert_msg = None
             if self._last_alert is not None:
@@ -276,4 +385,21 @@ class GuideHealthTracker:
                 "channel_ready": ready,
                 "channel_not_ready_reasons": reasons,
                 "tracked_fraction": tracked_fraction,
+                # §126 — stella persa misurata sugli eventi (vedi __init__).
+                "star_saturated_recent": saturated,
+                "star_lost": self._last_frame_tracked is False,
+                "star_lost_s": (round(max(0.0, now - self._lost_since), 1)
+                                if (self._last_frame_tracked is False
+                                    and self._lost_since is not None) else 0.0),
+                "star_tracked": bool(self._last_frame_tracked is True
+                                     and self._last_tracked_ts is not None
+                                     and now - self._last_tracked_ts
+                                     <= self.cfg.ready_frame_max_age_s),
+                "guide_restart_failed": self._ripartenza_fallita,
+                "last_settle_status": (self._last_settle[1]
+                                       if self._last_settle else None),
+                "last_settle_error": (self._last_settle[2] or None
+                                      if self._last_settle else None),
+                "last_settle_age_s": (self._age(self._last_settle[0], now)
+                                      if self._last_settle else None),
             }

@@ -27,6 +27,7 @@ baseline.json
 # §120 — costante del rig appresa notte per notte: stato locale del setup,
 # non del progetto. Su un'altra macchina non significherebbe niente.
 rig_contribution.json
+cielo_guida.json
 runtime_state.json
 
 # Generated distribution package

@@ -69,6 +69,7 @@ class SafetyStateStore:
         self._detail: Optional[str] = None
         self._connected: bool = False
         self._internal_safe: Optional[bool] = None
+        self._judge: Optional[str] = None
 
     @property
     def staleness_seconds(self) -> float:
@@ -83,7 +84,8 @@ class SafetyStateStore:
     def update(self, state: str, cause: Optional[str] = None,
                detail: Optional[str] = None, connected: bool = True,
                internal_safe: Optional[bool] = None,
-               poll_interval_s: Optional[float] = None) -> bool:
+               poll_interval_s: Optional[float] = None,
+               judge: Optional[str] = None) -> bool:
         """Registra una pubblicazione del plugin. Ritorna False se lo stato non e'
         riconosciuto (payload di una versione futura: si ignora, non si indovina)."""
         state = (state or "").strip().upper()
@@ -98,6 +100,9 @@ class SafetyStateStore:
             self._detail = (detail or "").strip() or None
             self._connected = bool(connected)
             self._internal_safe = internal_safe
+            # §126-bis — si registra anche l'ASSENZA: un plugin fino al 1.13 non manda
+            # il campo e la dashboard deve tornare a raccontare la camera giudice.
+            self._judge = (judge or "").strip().upper() or None
         return True
 
     def status_block(self) -> dict[str, Any]:
@@ -128,4 +133,7 @@ class SafetyStateStore:
                 # dicesse UNKNOWN a torto, questi due numeri lo spiegano subito.
                 "staleness_window_s": round(self.staleness_seconds, 1),
                 "poll_interval_s": self._poll_interval,
+                # §126 — chi giudica il cielo nel plugin ("GUIDE"/"CAMERA"); l'ultimo
+                # noto anche se stantio: e' configurazione, non stato del cielo.
+                "judge": self._judge,
             }

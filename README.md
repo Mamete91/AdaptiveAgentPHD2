@@ -61,7 +61,7 @@ Key elements of the adaptive guiding engine:
 
 ## N.I.N.A. integration (optional)
 
-A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/). Its centerpiece is a virtual **Sky Conditions monitor** (exposed through N.I.N.A.'s native `ISafetyMonitor` interface — the same role an ASCOM safety monitor plays): one continuously evaluated **SAFE/UNSAFE verdict on acquisition quality**, built from six independent conditions: sustained STAR_LOST; persistent N1 sky-transparency degradation measured on the imaging camera; a sustained collapse of the guide-star signal, which the guide channel sees minutes before the next light frame could; stale telemetry under an already degraded sky; loss of the Agent during an active session; and a guide channel gone silent while guiding was expected. Fast evidence and persistent evidence carry independent thresholds, and recovery toward safe is granted only by the imaging camera — one guide star can testify that the sky went bad, never that the whole field came back. It never fails *toward* safe. **N.I.N.A.'s Sequence Engine always remains the sole owner of the sequence lifecycle**: the monitor only reports, and the user's end-of-sequence criteria always win (verified down to N.I.N.A.'s cancellation chain). On top of that state the plugin ships the recommended recovery workflow — the self-contained **Recovery probe** instruction for *Trigger On Unsafe*, which lets a clouded-out session resume on its own — plus the dockable dashboard panel, per-exposure **N.I.N.A. telemetry** forwarding (HFR, star count, image statistics — what the Agent uses to recognize sky transparency), a bounded **meridian-protection window** that lets the mechanical flip run at its deadline even under unsafe conditions and then restores the hold — without it N.I.N.A. stops tracking at the deadline and nothing ever restarts it — and **Agent lifecycle management**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes. The Agent is fully functional without it.
+A companion plugin — **[Adaptive Agent for PHD2 — Dashboard](https://github.com/Mamete91/AdaptiveAgentPHD2-NinaPlugin)** — integrates the Agent into [N.I.N.A.](https://nighttime-imaging.eu/). Its centerpiece is a virtual **Sky Conditions monitor** (exposed through N.I.N.A.'s native `ISafetyMonitor` interface — the same role an ASCOM safety monitor plays): one continuously evaluated **SAFE/UNSAFE verdict on acquisition quality**, built from four conditions: sustained star loss (measured on PHD2's own StarLost/GuideStep events); a sustained collapse of the guide-star signal; a guide channel gone silent while guiding was expected; and loss of the Agent during an active session. Since plugin 1.14 (with Agent 3.1) **the guide star judges the sky in both directions** — it reports the sky going bad and confirms it is clear again — and the judgement is suspended while guiding is paused on purpose (calibration, Guiding Assistant, autofocus). The imaging camera is informational; the 1.13 behaviour, where the imaging camera judges the sky, can be re-enabled with the option *The imaging camera can also report unsafe*. It never fails *toward* safe. **N.I.N.A.'s Sequence Engine always remains the sole owner of the sequence lifecycle**: the monitor only reports, and the user's end-of-sequence criteria always win (verified down to N.I.N.A.'s cancellation chain). On top of that state the plugin ships the recommended recovery workflow — the self-contained **Recovery probe** instruction for *Trigger On Unsafe*, which lets a clouded-out session resume on its own — plus the dockable dashboard panel, per-exposure **N.I.N.A. telemetry** forwarding (HFR, star count, image statistics — what the Agent uses to recognize sky transparency), a bounded **meridian-protection window** that lets the mechanical flip run at its deadline even under unsafe conditions and then restores the hold — without it N.I.N.A. stops tracking at the deadline and nothing ever restarts it — and **Agent lifecycle management**: auto-launch when N.I.N.A. starts and graceful shutdown (with PHD2 baseline restore) when it closes. The Agent is fully functional without it.
 
 ![The plugin settings inside N.I.N.A.](docs/img/nina-plugin.jpg)
 
@@ -74,9 +74,11 @@ themselves, so nothing has to be taken on trust.</sub>
 ![The Recovery probe nested inside Trigger On Unsafe](docs/img/recovery-probe.png)
 
 <sub>`Trigger On Unsafe` → `Before Waiting For Safety` → **Recovery probe (Adaptive Agent)**.
-Nested there, the probe runs *before* N.I.N.A. parks itself on the safety wait: while conditions
-are unsafe it takes verification exposures replicating the interrupted light, and the moment the
-monitor returns SAFE the wait ends and the sequence resumes on its own. No extra containers, no
+Nested there, the probe runs *before* N.I.N.A. parks itself on the safety wait. With the guide
+channel as judge (default since plugin 1.14) it takes no exposures: it keeps guiding alive —
+restarting it if it stops or if the star stays lost — and the moment the monitor returns SAFE the
+wait ends and the sequence resumes on its own. (With the legacy imaging-camera judgement it takes
+verification exposures replicating the interrupted light instead.) No extra containers, no
 Camera instructions — and *After Waiting For Safety* stays free for anything you want to run on
 the way back.</sub>
 
@@ -116,7 +118,7 @@ git clone https://github.com/Mamete91/AdaptiveAgentPHD2.git
 cd AdaptiveAgentPHD2
 python -m pip install -r requirements.txt
 
-python main.py --monitor-only      # observe only, zero control
+python main.py --monitor-only      # observe only, zero control (the sky judge keeps working)
 python main.py --simulator --dry-run   # no hardware needed
 python main.py --dry-run           # real PHD2, decisions logged, nothing sent
 python main.py --config config.toml    # live control

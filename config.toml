@@ -520,8 +520,9 @@ ref_session_floor_frac    = 0.70   # 0 = disattivato (solo rilascio a tempo)
 # USB), PHD2 tace e `guiding_state` resta congelato su un valore operativo -> il Safety
 # Monitor non se ne accorge. L'agente MISURA e basta; il latch GUIDE_UNOBSERVABLE del
 # plugin decide. Telemetria letta dal protocollo PHD2 (event_server.cpp):
-# LoopingExposures (camera viva ma non guida), ErrorCode per-frame (SATURATED/
-# MASSCHANGE/... = firma del frame corrotto), Alert con severità strutturata.
+# LoopingExposures (camera viva ma non guida), ErrorCode per-frame (MASSCHANGE/... =
+# firma del frame corrotto; dal §126 la stella SATURA e' esclusa: PHD2 la guida lo
+# stesso), Alert con severità strutturata.
 enabled        = true    # false = kill-switch: nessuna telemetria di canale su /status
 error_window_s = 120.0   # finestra di conteggio degli ErrorCode per-frame
 alert_window_s = 180.0   # entro quanto un Alert warning/error resta corroborante
@@ -530,39 +531,48 @@ mass_window_s  = 120.0   # finestra per la dispersione di StarMass (elettrico vs
 # §71 — "canale pronto" per la Recovery Probe: consenso AND di condizioni sostenute
 # (frame che fluiscono, stella tracciata in modo STABILE, niente raffiche di errori,
 # niente alert severi). L'asticella è sopra il criterio di PHD2: il riaggancio-lampo
-# del 3/8 (41% di frame utili) resta correttamente respinto. Il plugin usa questo
-# segnale solo per DIFFERIRE la sonda S1 (tetto 15 min): mai per decidere il SAFE.
+# del 3/8 (41% di frame utili) resta correttamente respinto. §126 — con la guida
+# giudice del cielo (plugin 1.14, default) questo e' una CONDIZIONE del ritorno a SAFE:
+# senza canale pronto il sereno non conta. Con la camera giudice (opzione legacy)
+# serve solo a differire la posa-sonda (tetto 15 min).
 ready_window_s             = 90.0
 ready_min_tracked_fraction = 0.7
 ready_frame_max_age_s      = 10.0
 ready_max_errors           = 2
 ready_min_samples          = 10
+# §126-bis — entro questa distanza (px) la stella che PHD2 seleziona e' la STESSA di
+# prima e il riferimento SNR del giudice del cielo resta (cambio filtro, autofocus).
+# 15 px = regione di ricerca di PHD2 di fabbrica (intestazione dei guide log).
+stessa_stella_px           = 15.0
 
 [recovery_probe]
-# §57 S1 — posa-sonda FAIL-SAFE durante UNSAFE-nubi. La sonda la scatta il SEQUENCER
-# di NINA (template builtin: Trigger On Unsafe + Loop While Unsafe + Take Exposure —
-# vedi docs/development/TEMPLATE_SEQUENZA_RECOVERY_S1.md): qui vivono i parametri di
-# riferimento del template, documentati e usati dalla telemetria di validazione.
+# §57 S1 — riferimento dei parametri dell'istruzione plugin "Recovery probe (Adaptive
+# Agent)" (Trigger On Unsafe -> Before Waiting For Safety; i valori veri vivono
+# nell'istruzione, nella sequenza). §126 — con la guida giudice (plugin 1.14, default)
+# l'istruzione NON scatta pose: tiene viva la guida (la fa ripartire se si ferma, se la
+# stella resta persa oltre l'intervallo minimo, o una volta per cadenza di unsafe).
+# Solo con la camera giudice (opzione legacy) scatta ancora le pose-sonda.
 enabled                = true
 probe_timeout_min      = 12      # cadenza fail-safe della sonda mentre UNSAFE (Wait del template)
 probe_min_interval_min = 5       # paletto 3 — intervallo minimo ASSOLUTO tra due sonde
 match_sub              = true    # paletto 2 — sonda = stesso filtro/esposizione del sub, NON guidata
 
 [recovery_hint]
-# §57 S2 — hint "il cielo sta tornando" dalla SNR della stella guida (fluisce anche
-# mentre NINA è in attesa UNSAFE). AUTORITÀ SAFETY ZERO: può solo ANTICIPARE la sonda
-# S1 (istruzione plugin "Recovery probe"), mai dichiarare SAFE — la verità resta la
-# camera di imaging (N1). §57-bis: accumulatore leaky IN SECONDI DI TEMPO REALE
-# (indipendente dal frame-rate di guida del setup, fisicamente coerente col cielo).
-# VALORI PROVVISORI da tarare sul campo.
+# §57/§126 — il SENSORE DEL CIELO dalla SNR della stella di guida, valutata a ogni frame
+# (accumulatore leaky in secondi di tempo reale, §57-bis: indipendente dal frame-rate).
+# Dal 04/10/2026 (plugin 1.14, default) e' il giudice del cielo: `degrading` e' l'evidenza
+# con cui il plugin dichiara UNSAFE, `sky_ok` (= active) quella con cui torna SAFE,
+# insieme al canale pronto §71. Questo modulo resta pura MISURA: decide il plugin.
+# Con la camera giudice (opzione legacy del plugin) torna a essere solo un anticipo
+# della posa-sonda. VALORI PROVVISORI da tarare sul campo.
 enabled            = true
-snr_recover_frac   = 0.8         # PROVVISORIO — frame "buono" se snr >= frac × snr_ref (pre-nube)
-snr_recover_floor  = 25.0        # PROVVISORIO — floor assoluto (usato anche senza snr_ref)
-sustained_seconds  = 60.0        # PROVVISORIO — secondi di segnale buono per active=true
+snr_recover_frac   = 0.8         # PROVVISORIO — sereno se snr >= frac × riferimento
+snr_recover_floor  = 25.0        # PROVVISORIO — soglia usata SOLO senza riferimento (primo frame)
+sustained_seconds  = 60.0        # PROVVISORIO — secondi di sereno sostenuto per sky_ok (= active)
 drain_factor       = 2.0         # PROVVISORIO — velocità di scarica (× dt) sui frame cattivi
 
-# §76 — polarità OPPOSTA: evidenza che il cielo sta PEGGIORANDO mentre N1 è ancora
-# fermo all'ultima posa buona. Tarata sulla notte 4/8: SNR crollata da ~70 a ~22
+# §76 — polarità OPPOSTA: evidenza che il cielo sta PEGGIORANDO (nata per vedere le
+# nubi prima della posa successiva; dal §126 e' la via delle nubi). Tarata sulla notte 4/8: SNR crollata da ~70 a ~22
 # (31% del riferimento) fra le 23:07 e le 23:11, N1 ha visto le nubi alle 23:14 e
 # il monitor è passato UNSAFE alle 23:16 — otto minuti di posa sotto le nubi.
 # Soglia più severa e sostegno più lungo del recupero: un falso positivo qui mette
@@ -571,4 +581,18 @@ degrade_enabled           = true
 snr_degrade_frac          = 0.5
 degrade_sustained_seconds = 90.0
 degrade_min_ref           = 15.0
+# §126 — dal 04/10/2026 la guida giudica il cielo da sola, in entrambi i versi, e la
+# camera di ripresa resta informativa. Questo blocco non dipende piu' dallo stato N1:
+# degrado (50% per 90 s) e recupero (80% per 60 s) si valutano a ogni frame e il
+# plugin li usa per dichiarare UNSAFE e per tornare SAFE. Il riferimento non scende
+# mentre la stella e' sotto il sereno (sotto l'80%) per al massimo questo tempo
+# (stesso principio di [n1] ref_freeze_max_min, §66).
+# Il giudizio si salva in cielo_guida.json e sopravvive a un riavvio dell'Agente.
+snr_ref_freeze_max_min    = 90.0
+# §126-quater/quinquies — quando PHD2 sceglie un'ALTRA stella decide il primo dato
+# della nuova: (1) se la guida vedeva gia' il cielo degradato e l'ultimo dato della
+# stella vecchia ha al massimo questi secondi, il riferimento si TRASPORTA col rapporto
+# fra le due (una nube resta una nube); (2) se la nuova parte sotto il 50% del
+# riferimento vecchio lo si tiene; (3) altrimenti si reimpara.
+ponte_stella_max_s        = 120.0
 

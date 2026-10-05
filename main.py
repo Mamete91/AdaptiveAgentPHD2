@@ -179,7 +179,10 @@ def main():
         except Exception:
             return (None, None)
 
-    recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state)
+    # §126-bis — il giudizio del cielo sopravvive a un riavvio dell'Agente a notte in
+    # corso (file accanto a rig_contribution.json, ignorato da git).
+    recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state,
+                                                stato_file=Path("cielo_guida.json"))
 
     # §68 — osservabilità del canale di guida: misura soltanto (il latch vive nel
     # plugin). Alimentato dagli eventi PHD2 nel loop, incluso LoopingExposures che
@@ -393,6 +396,57 @@ def _event_loop(
                 log.error("guide_health.%s fallito (%s) — osservatore ignorato "
                           "per il resto della sessione", method, e)
 
+    rh_error_logged = [False]
+    # §126-bis — alla connessione PHD2 rimanda lo stato corrente, compreso uno
+    # StarSelected (event_server.cpp, saluto al client, chiuso da AppState): NON e'
+    # una stella nuova e non deve buttare il riferimento del giudice del cielo.
+    in_catchup = True
+    # §126-bis — ultima posizione nota della stella (StarSelected/LockPositionSet):
+    # serve a capire se PHD2 ha scelto la STESSA stella o un'altra.
+    ultima_stella: list = [None]
+    # §126-quater — calibrazione in corso: il lock rimesso alla fine (o dopo un
+    # fallimento) non e' una selezione. Armato a StartCalibration, disarmato a
+    # StartGuiding / GuidingStopped / CalibrationFailed.
+    calib_in_corso = [False]
+    _px = getattr(getattr(guide_health, "cfg", None), "stessa_stella_px", None)
+    soglia_stessa_stella = float(_px) if isinstance(_px, (int, float)) else 15.0
+
+    def _cambio_stella(x, y, motivo: str, se_ignota: bool) -> None:
+        """Nuova posizione di aggancio: se lontana dalla precedente e' un'altra
+        stella e il giudice del cielo lo deve sapere (reset_stella decide se
+        reimparare il riferimento o tenerlo). Senza una posizione precedente si
+        avvisa solo se `se_ignota` (una selezione esplicita); il lock rimesso a
+        inizio guida dopo una calibrazione e' la stessa stella."""
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            return
+        prima = ultima_stella[0]
+        ultima_stella[0] = (float(x), float(y))
+        _rh("posizione_stella", float(x), float(y))
+        if prima is None and not se_ignota:
+            return
+        if prima is not None:
+            d = ((float(x) - prima[0]) ** 2 + (float(y) - prima[1]) ** 2) ** 0.5
+            if d <= soglia_stessa_stella:
+                log.info("Stella di guida: la stessa di prima (%.1f px) — riferimento "
+                         "conservato (%s)", d, motivo)
+                return
+            motivo = f"{motivo}, {d:.0f} px dalla precedente"
+        _gh("reset_stella", motivo)
+        _rh("reset_stella", motivo)
+
+    def _rh(method: str, *args) -> None:
+        """§126 — stesso paletto per il sensore del cielo: sospensione e cambio
+        stella non devono mai poter abbattere il loop di guida."""
+        if recovery_hint_tracker is None:
+            return
+        try:
+            getattr(recovery_hint_tracker, method)(*args)
+        except Exception as e:
+            if not rh_error_logged[0]:
+                rh_error_logged[0] = True
+                log.error("recovery_hint.%s fallito (%s) — ignorato per il resto "
+                          "della sessione", method, e)
+
     import queue as q_module
     from server import sync_broadcast as _broadcast
 
@@ -430,6 +484,13 @@ def _event_loop(
             # piu' frequente che abbiamo, e rimette in riga lo stato se un
             # evento di transizione si fosse perso.
             _stato_phd2(controller, "Guiding", "arrivato un GuideStep")
+            # §126 — l'orologio del canale si aggiorna PRIMA di ogni filtro. Prima
+            # stava dopo `if sospeso: continue`: durante il Guiding Assistant PHD2
+            # manda un GuideStep a ogni frame, l'Agente li scartava senza segnarli
+            # e il plugin vedeva un canale muto (UNSAFE "guida non osservabile"
+            # dopo ~2 minuti, il 2/10 alle 23:13:42). Il frame e' arrivato: che sia
+            # utile alla guida o al motore lo decidono i filtri qui sotto.
+            _gh("on_guide_step", event)
             if is_settling:
                 # Ignoriamo i GuideStep durante il dithering (falsi errori)
                 continue
@@ -449,8 +510,7 @@ def _event_loop(
             # §36 — la misura grezza di PHD2 e' in PIXEL: converti in arcsec all'ingest
             # con la pixel-scale VIVA (override PHD2 -> reduced/native). Kill-switch
             # convert_distance_to_arcsec (shipped ON); a OFF passa 1.0 (px grezzi).
-            # §68 — osservabilità del canale: aggiorna ENTRAMBI gli orologi + qualità frame.
-            _gh("on_guide_step", event)
+            # §68 — osservabilità del canale: aggiornata in testa al ramo (§126).
 
             px_scale = (controller.cfg.setup.guide_pixel_scale_arcsec
                         if controller.cfg.analyzer.convert_distance_to_arcsec else 1.0)
@@ -458,6 +518,17 @@ def _event_loop(
             actions = []
 
             now = time.monotonic()
+            # §126-bis — il sensore del cielo e' un OSSERVATORE: lavora anche con
+            # --monitor-only, che toglie il controllo, non la sicurezza. Prima il
+            # giudice del cielo restava senza SNR in quella modalita'.
+            if monitor_only and analyzer.is_ready and recovery_hint_tracker is not None:
+                try:
+                    recovery_hint_tracker.update(snapshot.snr_avg)
+                except Exception as e:
+                    if not hint_error_logged:
+                        hint_error_logged = True
+                        log.error("recovery_hint.update fallito (%s) — osservatore "
+                                  "ignorato per il resto della sessione", e)
             if not monitor_only and analyzer.is_ready:
                 # §34 — accumulo baseline + popolamento logging per OGNI guide-frame
                 # (no-op se per_frame_baseline è off). La VALUTAZIONE (classify + leve)
@@ -517,6 +588,9 @@ def _event_loop(
             # §68 — la stella persa NON cambia l'attesa di guida: PHD2 sta ancora
             # guidando (ci prova). Ma il frame esiste: ne registriamo la qualità.
             _gh("on_star_lost", event)   # §71: frame arrivato, stella NO
+            # §126-bis — un frame senza stella non e' evidenza di sereno.
+            if controller is None or not controller.sospeso:
+                _rh("on_star_lost")
 
             actions = []
             # §108 — ad anello aperto non si valuta: `evaluate` puo' chiamare
@@ -557,6 +631,7 @@ def _event_loop(
 
         elif event_name == "StartGuiding":
             log.info("PHD2 ha avviato la guida")
+            calib_in_corso[0] = False
             _stato_phd2(controller, "Guiding", "annuncio StartGuiding")
             _gh("set_guiding_expected", True, "guida avviata (annuncio PHD2)")
             analyzer.reset()
@@ -571,6 +646,17 @@ def _event_loop(
 
         elif event_name == "StartCalibration":
             _stato_phd2(controller, "Calibrating", "calibrazione avviata")
+            # §126 — in calibrazione PHD2 non manda frame di guida con SNR: la guida
+            # NON e' attesa e gli stati di prima non devono restare accesi. Il 24/8
+            # uno stato di stella persa rimasto congelato e' stato contato dal
+            # plugin durante la calibrazione fino a UNSAFE (00:11:06).
+            _gh("set_guiding_expected", False, "calibrazione in corso (annuncio PHD2)")
+            _rh("sospendi", "calibrazione")
+            # §126-bis/quater — la calibrazione sposta la stella di proposito e il
+            # lock viene rimesso a inizio guida: non e' un cambio di stella. La
+            # posizione di prima resta (se la calibrazione fallisce e PHD2 sceglie
+            # un'altra stella, il confronto la riconosce).
+            calib_in_corso[0] = True
             # §109 — durante la calibrazione PHD2 comanda spostamenti grandi e
             # misura di quanto la stella si muove rispetto al punto di partenza.
             # Non arrivano GuideStep, ma arrivano gli StarLost — e da li' l'Agente
@@ -587,7 +673,16 @@ def _event_loop(
                 except Exception:
                     pass
 
+        elif event_name == "Calibrating":
+            # §126 — un passo di calibrazione riuscito e' prova che la stella c'e'.
+            # La stella persa NON si congela a guida ferma (il 24/8 l'allarme nato
+            # prima della calibrazione era con ogni probabilita' giusto: nubi): si
+            # spegne quando la stella si rivede, qui o al primo GuideStep.
+            _gh("on_calibration_step", event)
+
         elif event_name in ("CalibrationComplete", "CalibrationFailed"):
+            if event_name == "CalibrationFailed":
+                calib_in_corso[0] = False
             if controller is not None and controller.in_calibrazione:
                 controller.in_calibrazione = False
                 esito = ("completata" if event_name == "CalibrationComplete"
@@ -607,7 +702,9 @@ def _event_loop(
         elif event_name == "GuidingStopped":
             _stato_phd2(controller, "Stopped", "guida fermata")
             log.info("PHD2 ha fermato la guida")
+            calib_in_corso[0] = False
             _gh("set_guiding_expected", False, "guida fermata (annuncio PHD2)")
+            _rh("sospendi", "guida fermata")
             controller.mark_uninitialized()
             try:
                 _broadcast({"type": "guiding_stopped", "ts": time.time()})
@@ -617,6 +714,13 @@ def _event_loop(
         elif event_name == "AppState":
             state = event.get("State", "")
             log.info("PHD2 AppState: %s", state)
+            # §126-bis — AppState chiude il saluto di PHD2 al client (event_server.cpp):
+            # da qui gli StarSelected sono selezioni vere.
+            if in_catchup:
+                # §126-quater — la memoria su disco vale solo per la stella che PHD2
+                # sta guidando adesso (presa dal saluto); senza stella si scarta.
+                _rh("conferma_memoria", ultima_stella[0], soglia_stessa_stella)
+            in_catchup = False
             # §110 — l'Agente agisce solo quando PHD2 sta davvero guidando. E' una
             # condizione POSITIVA: copre anche gli stati non enumerati (Manual
             # Guide, Star Cross, strumenti futuri) senza doverli rincorrere.
@@ -651,6 +755,38 @@ def _event_loop(
                 if not controller.is_initialized():
                     controller.initialize()
 
+        elif event_name == "StarSelected":
+            # §126 — PHD2 ha selezionato una stella (anche in automatico a ogni
+            # ripartenza della guida: dopo l'autofocus e' un'altra stella in 15
+            # casi su 22). Il riferimento SNR della precedente non vale piu'.
+            # NON LockPositionSet: quello scatta a ogni dither.
+            log.info("PHD2 ha selezionato una stella (%s, %s)",
+                     event.get("X", "?"), event.get("Y", "?"))
+            if in_catchup:
+                # Saluto alla connessione: e' la stella gia' in uso. Se ne prende
+                # solo la posizione, per riconoscerla alla prossima selezione.
+                if isinstance(event.get("X"), (int, float)) and isinstance(event.get("Y"), (int, float)):
+                    ultima_stella[0] = (float(event["X"]), float(event["Y"]))
+                    _rh("posizione_stella", float(event["X"]), float(event["Y"]))
+            else:
+                _cambio_stella(event.get("X"), event.get("Y"), "StarSelected", True)
+
+        elif event_name == "LockPositionSet":
+            # §126-bis — PHD2 cambia stella anche SENZA StarSelected: a fine Guiding
+            # Assistant con multistar riseleziona partendo da SELECTED
+            # (guider_multistar.cpp, AutoSelect; visto il 2/10 alle 23:19:25). Il
+            # dither sposta il lock di pochi pixel: sotto la soglia non e' un cambio.
+            # §126-quater — PHD2 manda SEMPRE LockPositionSet prima di StarSelected
+            # (guider.cpp: SetLockPosition poi NotifyStarSelected): con la posizione
+            # precedente ignota il lock E' gia' la selezione. Nel saluto e durante la
+            # calibrazione invece si prende solo la posizione.
+            if in_catchup or calib_in_corso[0]:
+                if isinstance(event.get("X"), (int, float)) and isinstance(event.get("Y"), (int, float)):
+                    ultima_stella[0] = (float(event["X"]), float(event["Y"]))
+                    _rh("posizione_stella", float(event["X"]), float(event["Y"]))
+            else:
+                _cambio_stella(event.get("X"), event.get("Y"), "LockPositionSet", True)
+
         elif event_name == "Version":
             # §56 — header di versione nel log: PHD2 invia questo evento alla connessione.
             # (La versione dell'agente e' gia' nel banner; plugin/NINA non si annunciano
@@ -675,6 +811,16 @@ def _event_loop(
                 _attiva = bool(event.get("Value"))
                 if not _attiva and not controller.anello_aperto:
                     controller.anello_aperto = True
+                    # §126 — dall'inizio del Guiding Assistant alla fine del test del
+                    # backlash l'uscita di guida resta disattivata
+                    # (guiding_assistant.cpp: SetGuidingEnabled(false) all'avvio,
+                    # ripristino in DoStop, dopo EndBacklashTest). Nel test del
+                    # backlash PHD2 non manda frame per ~2 minuti: con la guida
+                    # "attesa" il plugin dichiarava UNSAFE. E' uno strumento di
+                    # misura con l'operatore presente, non una sessione da sorvegliare.
+                    _gh("set_guiding_expected", False,
+                        "uscita di guida sospesa (Guiding Assistant o misura)")
+                    _rh("sospendi", "anello aperto")
                     log.warning(
                         "PHD2 ha SOSPESO l'uscita di guida (Guiding Assistant o "
                         "altro strumento di misura). L'Agente si ferma: niente "
@@ -688,6 +834,8 @@ def _event_loop(
                 elif _attiva and controller.anello_aperto:
                     controller.anello_aperto = False
                     log.info("PHD2 ha RIPRESO l'uscita di guida. Reset statistiche.")
+                    if controller.app_state in ("Guiding", "LostLock"):
+                        _gh("set_guiding_expected", True, "uscita di guida ripristinata")
                     analyzer.reset()
                     if controller.diagnostic_engine is not None:
                         # L'anello aperto non tocca l'atmosfera: i riferimenti di
@@ -725,6 +873,13 @@ def _event_loop(
                     pass
 
         elif event_name == "SettleDone":
+            # §126 — l'esito dell'assestamento si registra sempre: Status != 0
+            # significa che la guida non e' ripartita come richiesto.
+            _esito = event.get("Status", 0)
+            _gh("on_settle_done", _esito if isinstance(_esito, int) else 1,
+                str(event.get("Error", "") or ""))
+            if isinstance(_esito, int) and _esito != 0:
+                log.info("PHD2 SettleDone con esito %s: %s", _esito, event.get("Error", ""))
             if is_settling:
                 log.info("PHD2 SettleDone: Dithering completato. Reset statistiche.")
                 is_settling = False

@@ -210,7 +210,7 @@
           </div>
           <!-- §55 (fix N6) — freschezza telemetria esplicita: la prossima notte
                "stantia" è provato a colpo d'occhio, non dedotto dai log -->
-          <div class="mini-stat" title="Età dell'ultima telemetria NINA vs finestra adattiva (§43). STANTIA = oltre la finestra: il plugin escala verso UNSAFE se il cielo era degradato.">
+          <div class="mini-stat" title="Età dell'ultima telemetria NINA vs finestra adattiva (§43). STANTIA = oltre la finestra. Solo con la camera di ripresa come giudice il plugin escala verso UNSAFE se il cielo era degradato; con la guida giudice (default dal plugin 1.14) è solo informazione.">
             <span class="mini-label">Telemetria</span>
             <span class="mini-val" id="transp-fresh">—</span>
           </div>
@@ -219,22 +219,22 @@
 
       <!-- §57 — card Recovery: hint SNR-guida (S2, solo osservazione) + storico sonde (S1/S2) -->
       <div class="condition-card" id="recovery-card" style="display:none"
-           title="§57 — recovery da UNSAFE-nubi. L'hint (SNR guida sostenuta) può solo ANTICIPARE la posa-sonda: la verità resta la camera di imaging (N1). Le sonde le scatta il sequencer (template S1).">
-        <div class="condition-label">Recovery (§57)</div>
+           title="§126 — il cielo visto dalla guida. Dal plugin 1.14 è la stella di guida a giudicare il cielo in entrambi i versi: sotto metà del sereno si sospende (circa 3 minuti e mezzo con i valori di fabbrica), sopra l'80% per un minuto con la stella tracciata stabilmente si riparte (circa 2 minuti). Le pose di verifica non servono più.">
+        <div class="condition-label">Cielo dalla guida</div>
         <svg class="condition-icon" id="recovery-icon" aria-hidden="true"><use id="recovery-icon-u" href="#i-nubeFerma"/></svg>
         <div class="condition-name" id="recovery-state">—</div>
         <div class="condition-desc" id="recovery-reason"></div>
         <div class="separator"></div>
         <div class="mini-stats">
-          <div class="mini-stat" title="SNR guida corrente / riferimento pre-nube (catturato in CLEAR)">
+          <div class="mini-stat" title="SNR della stella di guida / riferimento di sereno (si reimpara a ogni nuova stella e non scende mentre il cielo è degradato)">
             <span class="mini-label">SNR / rif</span>
             <span class="mini-val" id="recovery-snr">—</span>
           </div>
-          <div class="mini-stat" title="Accumulatore leaky (simmetrico al CLOUD di N6): sale coi frame buoni, latch ad accumulo pieno">
+          <div class="mini-stat" title="Secondi di segnale sopra l'80% del sereno accumulati (servono 60 s per confermare il sereno)">
             <span class="mini-label">Accumulo</span>
             <span class="mini-val" id="recovery-acc">—</span>
           </div>
-          <div class="mini-stat" title="Ultima posa-sonda osservata: trigger (S1 timeout / S2 hint) → esito N1">
+          <div class="mini-stat" title="Pose di verifica: con la guida come giudice non servono. Solo con l'opzione «la camera di ripresa può dichiarare unsafe» il sequencer le scatta ancora.">
             <span class="mini-label">Ultima sonda</span>
             <span class="mini-val" id="recovery-probe">—</span>
           </div>

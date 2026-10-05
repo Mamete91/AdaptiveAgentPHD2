@@ -112,11 +112,15 @@ class TestCorroboration(unittest.TestCase):
         t.on_guide_step({"ErrorCode": 1})     # SATURATED
         t.on_guide_step({"ErrorCode": 7})     # MASSCHANGE
         b = t.status_block()
-        self.assertEqual(b["star_errors_recent"], 2)
+        # §126 — la saturazione resta visibile ma non e' un errore del canale.
+        self.assertEqual(b["star_errors_recent"], 1)
+        self.assertEqual(b["star_saturated_recent"], 1)
         self.assertEqual(b["last_star_error"], "MASSCHANGE")
         self.assertIn("SATURATED", b["star_errors_by_code"])
         c.advance(200)                        # fuori finestra
-        self.assertEqual(t.status_block()["star_errors_recent"], 0)
+        b = t.status_block()
+        self.assertEqual(b["star_errors_recent"], 0)
+        self.assertEqual(b["star_saturated_recent"], 0)
 
     def test_alert_severity_is_structured_not_text(self):
         c = _Clock()

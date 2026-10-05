@@ -84,19 +84,24 @@ class TestHintDynamics(unittest.TestCase):
 
 
 class TestGating(unittest.TestCase):
-    """2. Inerte se l'ultimo stato N1 è CLEAR (o ignoto)."""
+    """2. §126 — NESSUN gating sullo stato N1: la guida giudica il cielo da sola.
 
-    def test_inert_when_clear(self):
+    Fino al §125 l'hint era inerte a N1 CLEAR o ignoto. Il 3-4/10 N1 e' stato
+    portato a 0.457 da UNA posa con stelle allungate mentre la stella di guida non
+    aveva perso nulla: il giudice era quello sbagliato. Oggi l'evidenza di sereno
+    si misura a ogni frame, qualunque cosa dica la camera di ripresa."""
+
+    def test_evaluated_when_clear(self):
         t, _, clock = _make(state="CLEAR")
         _frames(t, clock, 80.0, 20)
         b = t.status_block()
-        self.assertFalse(b["active"])
-        self.assertEqual(b["accumulator_s"], 0.0)
+        self.assertTrue(b["active"])
+        self.assertTrue(b["sky_ok"])
 
-    def test_inert_when_state_unknown(self):
+    def test_evaluated_when_state_unknown(self):
         t, _, clock = _make(state=None)
         _frames(t, clock, 80.0, 20)
-        self.assertFalse(t.status_block()["active"])
+        self.assertTrue(t.status_block()["active"])
 
 
 class TestSnrReference(unittest.TestCase):
@@ -113,11 +118,12 @@ class TestSnrReference(unittest.TestCase):
         _frames(t, clock, 50.0, 6)                       # 50 >= 46.4 -> buono, 15 s
         self.assertTrue(t.status_block()["active"])
 
-    def test_absolute_floor_without_reference(self):
-        t, _, clock = _make()                            # mai CLEAR: nessuna ref
-        _frames(t, clock, 20.0, 10)                      # sotto il floor 25 -> non buono
-        self.assertFalse(t.status_block()["active"])
-        _frames(t, clock, 30.0, 6)                       # sopra il floor -> buono
+    def test_relative_threshold_also_for_a_faint_star(self):
+        """§126-bis — il floor assoluto vale SOLO senza riferimento (primo frame).
+        Prima era max(floor, frazione): una stella a SNR 20 di sereno non poteva
+        mai confermare il sereno, e con la guida giudice l'UNSAFE non rientrava."""
+        t, _, clock = _make()
+        _frames(t, clock, 20.0, 10)                      # riferimento 20, soglia 16
         self.assertTrue(t.status_block()["active"])
 
 
@@ -132,8 +138,12 @@ class TestStructuralNoSafetyPath(unittest.TestCase):
         self.assertNotIn("diagnostic_engine", src_names)
         t, _, _ = _make()
         public = [n for n in dir(t) if not n.startswith("_")]
+        # §126 — due ingressi in piu', entrambi di MISURA: la guida si e' fermata
+        # (sospendi) e PHD2 ha scelto un'altra stella (reset_stella).
         self.assertEqual(sorted(public),
-                         ["cfg", "observe_probe", "status_block", "update"])
+                         ["cfg", "conferma_memoria", "observe_probe", "on_star_lost",
+                          "posizione_stella", "reset_stella", "sospendi",
+                          "status_block", "update"])
 
     def test_active_hint_never_touches_transparency(self):
         """L'hint attivo non altera lo stato N1 letto dal provider (read-only)."""
