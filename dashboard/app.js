@@ -1007,16 +1007,16 @@ const SAFETY_UI = {
   SAFE: { glyph: 'scudoOk', tone: 'tone-green', title: 'Autorizzata', cause: 'SAFE',
     tip: "SESSIONE AUTORIZZATA\nNessuna condizione di rischio rilevata: la sequenza può procedere normalmente." },
   MERIDIAN_PROTECTION: { glyph: 'scudoFlip', tone: 'tone-blue', title: 'Finestra meridiano', cause: 'FLIP AUTORIZZATO',
-    tip: "FINESTRA MERIDIANO\nStato transitorio: autorizza la sola manovra meccanica di meridian flip mentre la valutazione di sicurezza resta internamente invariata. Terminato il flip riprende il controllo normale." },
+    tip: "FINESTRA MERIDIANO\nStato transitorio: il monitor riporta safe per lasciar fare a NINA il meridian flip e lo protegge fino alla fine (ricentraggio e ripartenza della guida compresi). Sotto, il giudizio sul cielo continua: finito il flip, se il cielo non è ancora sereno la sequenza torna sospesa." },
   STAR_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'STELLA PERSA',
-    tip: "SOSPESA — STELLA PERSA\nPHD2 ha perso la stella di guida in modo persistente (oltre il tempo di consolidamento delle Opzioni del plugin: 5 minuti di fabbrica). La sequenza resta sospesa finché la guida non torna operativa." },
+    tip: "SOSPESA — STELLA PERSA\nPHD2 ha perso la stella di guida in modo persistente (oltre il tempo di consolidamento delle Opzioni del plugin: 5 minuti di fabbrica). La sequenza resta sospesa finché la stella non torna tracciata." },
   AGENT_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'AGENTE PERSO',
-    tip: "SOSPESA — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio." },
-  GUIDE_UNOBSERVABLE: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'CANALE GUIDA CIECO',
-    tip: "SOSPESA — CANALE GUIDA CIECO\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). Controlla camera di guida, cavo e USB." },
+    tip: "SOSPESA — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio. A guida volutamente ferma non scatta." },
+  GUIDE_UNOBSERVABLE: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'CANALE GUIDA MUTO',
+    tip: "SOSPESA — CANALE GUIDA MUTO\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). Controlla camera di guida, cavo e USB." },
   // §126 — le nubi le dichiara la guida (§128: l'unico giudice del cielo).
   CLOUD: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'NUBI O CAMERA GUIDA',
-    tip: "SOSPESA — NUBI (O CAMERA DI GUIDA)\nIl segnale della stella di guida è sceso sotto metà del sereno ed è rimasto lì (circa 3 minuti e mezzo con i valori di fabbrica). Di solito sono nubi; se la camera di ripresa vede il campo pieno di stelle, controlla la camera di guida. Si riparte da soli quando la stella torna sopra l'80% del sereno per un minuto (cinque se intanto è cambiata la stella o la posa di guida), tracciata stabilmente: non serve nessuna posa di verifica." },
+    tip: "SOSPESA — NUBI (O CAMERA DI GUIDA)\nIl segnale della stella di guida è sceso sotto metà del sereno ed è rimasto lì (circa 3 minuti e mezzo con i valori di fabbrica). Di solito sono nubi; se la camera di ripresa vede il campo pieno di stelle, controlla la camera di guida. Si riparte da soli quando la stella torna sopra l'80% del sereno per un minuto (cinque se intanto è cambiata la stella o la posa di guida), tracciata stabilmente.\nQuesto stato compare anche dopo una stella persa, un Agente perso o un canale di guida muto: tornata la guida, si aspetta che confermi il sereno." },
   UNKNOWN: { glyph: 'scudoIgn', tone: '', title: 'Sconosciuta', cause: 'NESSUNA NOTIZIA',
     tip: "STATO SCONOSCIUTO\nIl monitor delle Condizioni del Cielo non sta pubblicando il proprio stato: non è connesso in NINA, oppure il plugin non è attivo. Assenza di notizie non significa 'sicuro'." },
 };
@@ -1147,7 +1147,7 @@ function updateLevel2(data) {
 
   // --- COSA RILEVO -------------------------------------------------------
   if (rh.degrading) {
-    add('ondaGiu', 'tone-orange', 'Sensore rapido',
+    add('ondaGiu', 'tone-orange', 'Cielo dalla guida',
         `cielo in peggioramento · ${Math.round(rh.degrade_s || 0)} s`,
         "Il canale di guida vede il segnale della stella calare rispetto al sereno recente" +
         (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} contro ${rh.snr_ref})` : '') +
@@ -1175,7 +1175,7 @@ function updateLevel2(data) {
     add('nubeSu', 'tone-blue', 'Cielo dalla guida', 'sereno confermato',
         "La guida ha confermato il sereno" +
         (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} su ${rh.snr_ref})` : '') +
-        ".\nCon la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli, senza pose di verifica.");
+        ".\nCon la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli.");
   }
   // §126-septies — perche' il ritorno a SAFE chiede piu' tempo del solito.
   if (unsafeOra && rh.conferma_lunga && !rh.active) {
@@ -1233,7 +1233,7 @@ function updateLevel1(data) {
   //        al livello 2, dove compaiono solo se stanno accadendo.
   const de = ctrl.diagnostic_engine || {};
   if (de.enabled !== true) {
-    l1('ctrl', 'diagIgn', '', 'Motore spento', 'v2.3 pura',
+    l1('ctrl', 'diagIgn', '', 'Motore spento', 'regole di base',
        "CONTROLLO ADATTIVO — SPENTO\nIl motore diagnostico è disattivato: le leve seguono le sole regole di base, senza interpretazione del comportamento della guida.");
   } else {
     const [g, tone] = DIAG_UI[de.state] || DIAG_UI.INSUFFICIENT_DATA;
@@ -1317,7 +1317,7 @@ function updateLevel1(data) {
          "RECUPERO — CANALE DI GUIDA MUTO\nDalla camera di guida non arrivano frame con la stella: controlla camera, cavo e USB.");
     } else if (unsafeOra && rh.active) {
       l1('recup', 'nubeSu', 'tone-blue', 'Sereno confermato', snrRif,
-         "RECUPERO — SERENO CONFERMATO\nLa guida ha confermato il sereno: con la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli (circa un minuto con i valori di fabbrica), senza pose di verifica.");
+         "RECUPERO — SERENO CONFERMATO\nLa guida ha confermato il sereno: con la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli (circa un minuto con i valori di fabbrica).");
     } else if (unsafeOra && rh.sereno_in_conferma) {
       // §126-septies — la guida sta accumulando sereno (Agente 3.2).
       l1('recup', 'nubeSu', 'tone-blue', 'Sereno in conferma',
@@ -1848,7 +1848,7 @@ function updateDiagnosticEngine(de) {
   }
 
   el('diag-suggestion').textContent = de.suggestion
-    || (enabled ? '' : 'Motore spento — comportamento identico alla v2.3.');
+    || (enabled ? '' : 'Motore spento — la guida usa solo le regole di base.');
 
   // Evidenze (✓ a sostegno / ◦ neutro) — il "perché" senza numeri
   const evEl = el('diag-evidence');
@@ -1876,7 +1876,7 @@ function updateDiagnosticEngine(de) {
   if (lo && lo.delta) {
     const lc = (lo.lever_changes && lo.lever_changes.length)
       ? lo.lever_changes.map(c => `${(c.axis || '').toUpperCase()} ${c.param} ${c.old}→${c.new}`).join(', ')
-      : (lo.action_kind === 'block' ? 'mossa v2.3 bloccata' : '—');
+      : (lo.action_kind === 'block' ? 'mossa delle regole di base bloccata' : '—');
     const d = lo.delta;
     outEl.innerHTML =
       `<span class="diag-out-leve">${lc}</span>` +
@@ -1993,7 +1993,7 @@ el('btn-clear-log').addEventListener('click', () => {
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     if (mode === 'guardian' &&
-        !confirm('Attivare GUARDIAN? La v2.3 continua a pilotare; il motore conferma/attenua/blocca le sue mosse e fa micro-correzioni nei buchi.')) return;
+        !confirm('Attivare GUARDIAN? Le regole di base continuano a guidare; il motore adattivo conferma, attenua o blocca le loro mosse e fa piccole correzioni nei momenti liberi.')) return;
     try {
       const r = await fetch(`${API_BASE}/config/diagnostic_mode`, {
         method: 'POST',

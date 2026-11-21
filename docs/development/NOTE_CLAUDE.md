@@ -6374,6 +6374,8 @@ Test plugin: 111 (+5, tra cui la notte 20-21/11 ricostruita sulla macchina a sta
 
 ## §128 — Pulizia: via il giudizio della camera di ripresa (plugin 1.15.0.0, Agente 3.3.0)
 
+> §128-bis (21/11, plugin 1.15.1.0, Agente 3.3.1) — revisione dei TESTI, nessuna logica: in fondo al paragrafo.
+
 Decisione dell'operatore (21/11/2026): "togliere definitivamente il codice del vecchio sistema per rendere piu'
 snello l'Agente", con attenzione; tenere in dashboard la telemetria delle pose (visualizzazione). Dal 1.14 il cielo
 lo giudica la sola camera di guida e il percorso della camera era spento di default: nessuna notte lo usava, ma
@@ -6442,3 +6444,27 @@ Tag `v1.14.3.0` sul plugin (ultima versione con il giudizio della camera) e `v3.
   sono giudicate (avviso a schermo, riga in dashboard). Con l'Agente 3.3 e il sensore acceso, come sul Minix, non
   cambia niente. Rifiniture: commenti superati, avviso "nubi non giudicate" solo con notizie fresche, racconto del
   cielo "in attesa dei primi dati" senza dati della guida.
+
+### §128-bis — Revisione dei testi (plugin 1.15.1.0, Agente 3.3.1)
+
+Richiesta dell'operatore (21/11): controllo generale di tooltip e spiegazioni di plugin e dashboard, dopo la
+pulizia. Ogni frase confrontata con il codice (valori di fabbrica in PluginSettings, soglie in config.toml
+[recovery_hint], SafetyDecisionEngine, MeridianProtectionEngine, GuideRestartPolicy). Nessuna logica toccata.
+
+- Tolto cio' che non serviva piu': "pose di verifica" (scheda Cielo dalla guida, stato NUBI, due chip),
+  "Dal plugin 1.14", la riga della scheda Condizioni che "univa la conferma dalle pose di NINA", la chip
+  "Sensore rapido" (rapido rispetto a un sensore lento che non c'e' piu': ora "Cielo dalla guida"),
+  "v2.3" nei testi visibili (si confondeva con la versione 3.3 dell'Agente: ora "regole di base").
+- Spiegato meglio: cos'e' un poll (un controllo ogni n secondi: cambiando l'intervallo cambiano i tempi in
+  poll); valori di fabbrica e intervalli ammessi nei tooltip; "con la sicurezza nubi attiva" dove il ritorno
+  passa dal sereno della guida (a nubi spente stella persa, Agente perso e canale muto rientrano senza);
+  "in entrambi i versi" -> "sia per sospendere sia per far ripartire"; il Trigger On Unsafe (non l'istruzione)
+  va nel contenitore dell'oggetto; la cadenza di riavvio della sonda si ripete finche' resta unsafe;
+  lo stato NUBI compare anche dopo stella persa / Agente perso / canale muto (il plugin pubblica la causa
+  ATTUALE, e il latch e' passato al cielo della guida); CANALE GUIDA CIECO -> MUTO come nel plugin.
+- Corretti due testi non esatti: il toast "flip completato" diceva "attesa unsafe ripristinata" anche se nel
+  frattempo il cielo era tornato sereno; il toast e il log della finestra scaduta dicevano solo "senza flip",
+  ma la stessa uscita (ClosedTimeout) scatta anche con un flip di NINA ancora in corso dopo 30 minuti.
+- Toast della stella persa: "guida persa" -> "stella di guida persa". Toast "nubi non giudicate": dice dove
+  si spegne il sensore (config.toml dell'Agente). "baseline PHD2" nelle opzioni del ciclo di vita ->
+  "parametri di partenza di PHD2" (in dashboard "baseline" e' l'RMS tipico: due significati).

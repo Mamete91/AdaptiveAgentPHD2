@@ -80,14 +80,13 @@
         </div>
       </div>
 
-      <div class="condition-card" title="Lo stato della guida ricavato dai fotogrammi di PHD2 — segnale della stella, sua larghezza, scatti improvvisi. La riga in basso unisce questa lettura veloce alla conferma dalle pose di NINA, quando la sua telemetria è disponibile.">
+      <div class="condition-card" title="Lo stato della guida ricavato dai fotogrammi di PHD2 — segnale della stella, sua larghezza, scatti improvvisi. La riga in basso racconta il cielo visto dalla stella di guida, che è il giudice: se la sequenza è sospesa, perché, e cosa sta facendo il recupero. Le pose di NINA aggiungono solo una nota informativa.">
         <div class="condition-label">Condizioni del Cielo</div>
         <svg class="condition-icon" id="condition-icon" aria-hidden="true"><use id="condition-icon-u" href="#i-mirinoOff"/></svg>
         <div class="condition-name" id="condition-name">In attesa…</div>
         <div class="condition-desc" id="condition-desc"></div>
-        <!-- §77 — la riga che racconta cosa sta facendo il monitor: unisce ciò
-             che vede il sensore VELOCE (canale guida, 3 s) e quello LENTO (posa
-             di verifica, 300 s). Nessuna decisione qui: solo il racconto. -->
+        <!-- §77/§128 — la riga che racconta cosa sta facendo il monitor: segue la
+             stella di guida, unico giudice del cielo. Nessuna decisione qui: solo il racconto. -->
         <div class="sky-story" id="sky-story">
           <span class="sky-story-icon" id="sky-story-icon">🌙</span>
           <span class="sky-story-lines">
@@ -98,7 +97,7 @@
 
         <div class="separator"></div>
         <div class="mini-stats">
-          <div class="mini-stat" title="Quanto la stella di guida si stacca dal fondo cielo, secondo PHD2. Dal plugin 1.14 è anche il giudice del cielo: se resta sotto metà del suo sereno la sequenza viene sospesa, e riparte quando torna sopra l'80% (vedi la scheda «Cielo dalla guida»). Se crolla, l'Agente può anche allungare la posa di guida per non perdere la stella.">
+          <div class="mini-stat" title="Quanto la stella di guida si stacca dal fondo cielo, secondo PHD2. È anche il giudice del cielo: se resta sotto metà del suo sereno la sequenza viene sospesa, e riparte quando torna sopra l'80% (vedi la scheda «Cielo dalla guida»). Se crolla, l'Agente può anche allungare la posa di guida per non perdere la stella.">
             <span class="mini-label">SNR</span>
             <span class="mini-val" id="snr-val">—</span>
           </div>
@@ -220,7 +219,7 @@
 
       <!-- §126 — card "Cielo dalla guida": il giudice del cielo -->
       <div class="condition-card" id="recovery-card" style="display:none"
-           title="Il cielo visto dalla guida. È la stella di guida a giudicare il cielo, in entrambi i versi.&#10;&#10;SOSPENSIONE — il segnale resta sotto metà del sereno per 90 s, poi il monitor lo conferma: in tutto circa 3 minuti e mezzo con i valori di fabbrica.&#10;&#10;RIPARTENZA — il segnale resta sopra l'80% del sereno per un minuto, con la stella tracciata stabilmente, poi il monitor lo conferma: circa 2 minuti con i valori di fabbrica. Se durante la sospensione è cambiata la stella di guida o la posa, il sereno deve durare 5 minuti: con la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno.&#10;&#10;Le pose di verifica non servono più.">
+           title="Il cielo visto dalla guida. È la stella di guida a giudicare il cielo, sia per sospendere sia per far ripartire la sequenza.&#10;&#10;SOSPENSIONE — il segnale resta sotto metà del sereno per 90 s, poi il monitor lo conferma: in tutto circa 3 minuti e mezzo con i valori di fabbrica.&#10;&#10;RIPARTENZA — il segnale resta sopra l'80% del sereno per un minuto, con la stella tracciata stabilmente, poi il monitor lo conferma: circa 2 minuti con i valori di fabbrica. Se durante la sospensione è cambiata la stella di guida o la posa, il sereno deve durare 5 minuti: con la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno.&#10;&#10;Anche dopo una stella persa, un Agente perso o un canale di guida muto si riparte solo con il sereno confermato dalla guida.">
         <div class="condition-label">Cielo dalla guida</div>
         <svg class="condition-icon" id="recovery-icon" aria-hidden="true"><use id="recovery-icon-u" href="#i-nubeFerma"/></svg>
         <div class="condition-name" id="recovery-state">—</div>
@@ -402,7 +401,7 @@
               <span id="autocal-refresh-status">—</span>
               <span class="gate-status-badge" id="autocal-last-refresh-badge"
                     style="display:none"
-                    title="Esito dell'ultimo ciclo di refresh: applicato (nuova baseline più stretta) o rifiutato (regola tightest-wins / gate)"></span>
+                    title="Esito dell'ultimo aggiornamento della baseline: applicato (nuova baseline più stretta) o rifiutato (resta la più stretta, oppure non c'erano le condizioni per aggiornarla)"></span>
             </span>
           </div>
         </div>
@@ -466,9 +465,9 @@
           <div class="diag-hero-main">
             <span class="diag-label" id="diag-label">DATI INSUFFICIENTI</span>
             <span class="diag-confidence" id="diag-confidence"
-                  title="Confidence provvisoria — non calibrata" style="display:none">—</span>
+                  title="Confidenza provvisoria — non ancora tarata" style="display:none">—</span>
           </div>
-          <div class="diag-suggestion" id="diag-suggestion">Motore spento — comportamento identico alla v2.3.</div>
+          <div class="diag-suggestion" id="diag-suggestion">Motore spento — la guida usa solo le regole di base.</div>
           <ul class="diag-evidence" id="diag-evidence"></ul>
         </div>
 
@@ -500,7 +499,7 @@
           <div class="diag-switcher" id="diag-switcher">
             <button class="diag-btn" data-mode="off" id="diag-btn-off"
                     title="Spegne il motore: la guida usa solo le regole di base. GUARDIAN è la modalità normale di lavoro.">OFF</button>
-            <button class="diag-btn" data-mode="guardian" id="diag-btn-guardian" title="Assistito: la v2.3 pilota, il motore conferma/attenua/blocca e micro-corregge">GUARDIAN</button>
+            <button class="diag-btn" data-mode="guardian" id="diag-btn-guardian" title="Modalità normale: le regole di base guidano, il motore adattivo conferma, attenua o blocca le loro mosse e fa piccole correzioni.">GUARDIAN</button>
             <!-- §54: JITTER deprecata (mai validata, scavalca §44/§50/§51/§53) — rimossa dal toggle; attivabile solo con allow_experimental_jitter=true nel config -->
             <!-- <button class="diag-btn" data-mode="jitter" id="diag-btn-jitter" title="DEPRECATO">JITTER</button> -->
           </div>
