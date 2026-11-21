@@ -6,8 +6,11 @@
 > stella resta persa, e il ritorno a SAFE lo concede la guida quando conferma il sereno. La configurazione della
 > sequenza resta la stessa (Trigger On Unsafe -> Before Waiting For Safety -> Recovery probe), ma **nel ramo
 > UNSAFE non vanno istruzioni che fermano la guida o parcheggiano** (Park, Find Home, Stop Guiding): il
-> "park su UNSAFE prolungato" previsto piu' sotto e' superato. Quanto segue descrive il funzionamento con
-> l'opzione legacy "la camera di ripresa puo' dichiarare unsafe". Dettagli: NOTE_CLAUDE §126.
+> "park su UNSAFE prolungato" previsto piu' sotto e' superato. Il Trigger On Unsafe va nel contenitore
+> dell'oggetto, non alla radice: cosi' a fine notte l'area finale (park, copertura) parte comunque.
+> **§128 (plugin 1.15, Agente 3.3):** il giudizio della camera di ripresa e le pose-sonda sono stati TOLTI dal
+> codice. Quanto segue e' la storia del design fino al 1.14 (pose-sonda, N1 come giudice): non descrive piu'
+> il funzionamento attuale. Dettagli: NOTE_CLAUDE §126 e §128.
 
 > **Cosa risolve.** Quando N6 va UNSAFE per nubi, il `Wait Until Safe` di NINA è un puro
 > loop di attesa (poll `IsSafe` ogni 5 s, **nessuna posa**): senza light salvati N1 resta

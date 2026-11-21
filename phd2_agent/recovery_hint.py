@@ -1,36 +1,25 @@
 """
-§57 S2 — RecoveryHintTracker: "il cielo sta tornando?" dalla SNR della stella guida.
+RecoveryHintTracker — il SENSORE DEL CIELO dalla SNR della stella di guida.
 
 §126 — LA GUIDA GIUDICA IL CIELO (decisione dell'operatore del 04/10/2026, dopo la
-forense della notte 3-4/10). Questo modulo smette di essere un "suggeritore" della
-camera di ripresa e diventa il SENSORE del giudice: degrado, recupero e riferimento
-SNR si valutano a ogni frame, qualunque cosa dica N1. Il motivo, misurato: il 3-4/10
-una posa con stelle allungate ha portato N1 a 0.457 e il monitor in UNSAFE per tre
-ore, mentre la stella di guida — stesso tubo (OAG), stesso cielo — aveva SNR 66.3
-contro un riferimento di 65.5. La camera di ripresa resta informativa (dashboard).
-Quanto scritto sotto sulla "autorita' zero" vale per il codice di QUESTO modulo, che
-resta pura misura: la decisione la prende il plugin, ora con questi segnali.
+forense della notte 3-4/10: una posa con stelle allungate aveva portato l'indice della
+camera di ripresa a 0.457 e il monitor in UNSAFE per tre ore, con la stella di guida a
+SNR 66.3 contro un riferimento di 65.5). Degrado, sereno e riferimento SNR si valutano a
+ogni frame di guida, che continua a fluire anche a sequenza ferma.
 
-Contesto (deadlock provato, notte 12/7): durante l'attesa UNSAFE NINA non salva light
-→ N1 congelato → N6 non può tornare SAFE. Ma la SNR guida (GuideStep di PHD2) continua
-a fluire: è un segnale di cielo indipendente dai light. Questo tracker la integra e
-stima un HINT di recupero che può solo ANTICIPARE la posa-sonda S1 (istruzione
-RecoveryProbe del plugin). PALETTO 1 — autorità ZERO sulla safety: questo modulo non ha
-alcun percorso verso N6/IsSafe; espone solo osservazione su /status.
+Questo modulo resta pura MISURA: espone su /status `degrading`, `sky_ok`, `sky_state` e il
+riferimento; la decisione SAFE/UNSAFE la prende il plugin (SafetyDecisionEngine). Nessun
+percorso verso IsSafe.
 
-La SNR guida è un proxy CONTAMINATO (seeing/fuoco/magnitudine della stella guida):
-una stella luminosa sopravvive a velature sottili. Per questo l'hint non giudica mai:
-la verità resta la camera di imaging (posa-sonda → N1 → drain §55 → N6).
+Dinamica (§57-bis): accumulatori leaky IN SECONDI DI TEMPO REALE, indipendenti dal
+frame-rate di guida. Sereno: sale di dt sui frame con SNR >= 80% del riferimento, scende
+di drain_factor x dt sugli altri; sky_ok a sustained_seconds (5 minuti dopo un cambio di
+stella o di posa durante un UNSAFE, §126-sexies). Degrado (§76): SNR <= 50% del
+riferimento sostenuta per degrade_sustained_seconds.
 
-Dinamica (§57-bis, Gate): accumulatore leaky IN SECONDI DI TEMPO REALE — sale di dt sui
-frame con SNR "buona" (>= max(floor, frac×snr_ref)), scende di drain_factor×dt sugli
-altri; latch active a sustained_seconds, rilascio a 0. Il criterio è così indipendente
-dal frame-rate di guida (0.5–4 s per setup) e fisicamente coerente col cielo.
-Gating: valutato solo se l'ultimo stato N1 noto è degradato (CLOUD/HAZE); a CLEAR è
-inerte e aggiorna snr_ref (EMA della SNR di cielo limpido, il riferimento pre-nube).
-
-Fratello di N1 (non lo importa, non lo modifica): legge lo stato via un provider
-read-only iniettato da main.py.
+§128 (3.3) — tolta la telemetria delle pose-sonda della camera di ripresa (observe_probe,
+`probes`) e il collegamento allo stato N1 che serviva solo a quella: dal plugin 1.15 le
+pose-sonda non esistono piu'. L'indice di trasparenza resta in dashboard, come informazione.
 """
 from __future__ import annotations
 
@@ -38,7 +27,6 @@ import json
 import logging
 import threading
 import time
-from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -60,23 +48,17 @@ _MAX_FRAME_DT_S = 5.0
 # il degrado e lo rende invisibile a se stesso.
 _SNR_REF_RELEASE_HALF_LIFE_MIN = 25.0
 
-_DEGRADED = ("CLOUD", "HAZE")
-
-
 class RecoveryHintTracker:
-    """Osserva la SNR guida per-frame ed espone l'hint di recupero su /status."""
+    """Osserva la SNR guida per-frame ed espone il giudizio del cielo su /status."""
 
     def __init__(
         self,
         config: RecoveryHintConfig,
-        state_provider: Optional[Callable[[], tuple[Optional[str], Optional[float]]]] = None,
         now_fn: Callable[[], float] = time.time,
         stato_file: Optional[Path] = None,
         unsafe_provider: Optional[Callable[[], Optional[bool]]] = None,
     ) -> None:
         self.cfg = config
-        # provider read-only dell'ultimo (state, index) di N1; None => gating inerte.
-        self._state_provider = state_provider
         self._now = now_fn          # iniettabile nei test (clock finto)
         self._lock = threading.Lock()
 
@@ -87,7 +69,6 @@ class RecoveryHintTracker:
         self._active: bool = False
         self._active_since: Optional[float] = None
         self._reason: str = "in attesa di frame"
-        self._last_seen_state: Optional[str] = None  # stato N1 all'ultimo frame (pre-sonda)
 
         # §76 — accumulatore della polarità OPPOSTA: evidenza di DEGRADO. Vive
         # nella stessa classe perché condivide il riferimento `snr_ref` — due
@@ -96,9 +77,6 @@ class RecoveryHintTracker:
         self._degrading: bool = False
         self._degrading_since: Optional[float] = None
         self._degrade_reason: str = "in attesa di frame"
-
-        # Telemetria sonde (paletto 8): ultimi record, esposti su /status e dashboard.
-        self._probes: deque[dict[str, Any]] = deque(maxlen=12)
 
         # §126 — stato del cielo VISTO DALLA GUIDA, indipendente dalla camera di
         # ripresa. Diventa DEGRADED quando l'evidenza di degrado si conferma e
@@ -167,7 +145,6 @@ class RecoveryHintTracker:
         if snr is None or not (snr > 0):
             return   # frame senza SNR utile: non conta né a favore né contro
 
-        state, _index = self._read_state()
         now = self._now()
         snr = float(snr)
         # §126-sexies — lo stato del monitor si legge solo se serve (conferma lunga in
@@ -181,7 +158,6 @@ class RecoveryHintTracker:
             self._last_frame_ts = now
             self._last_snr = snr
             self._ultimo_snr_ts = now
-            self._last_seen_state = state
             if self._conferma_lunga and monitor is False:
                 # Il monitor e' tornato SAFE per un'altra via (ricollegato, sicurezza
                 # nubi spenta): non c'e' piu' un UNSAFE da chiudere con cautela.
@@ -259,7 +235,7 @@ class RecoveryHintTracker:
 
     def _monitor_in_unsafe(self) -> Optional[bool]:
         """§126-sexies — il monitor del plugin e' in UNSAFE? None se non si sa (nessun
-        plugin, stato stantio, giudice camera). Un provider guasto vale "non so":
+        plugin, stato stantio, Agente che non fa da giudice). Un provider guasto vale "non so":
         il sensore non deve mai cadere per questo."""
         if self._unsafe_provider is None:
             return None
@@ -758,51 +734,6 @@ class RecoveryHintTracker:
                 logger.warning("[cielo-guida] salvataggio dello stato fallito (%s): il "
                                "giudizio non sopravvivera' a un riavvio", e)
 
-    def _read_state(self) -> tuple[Optional[str], Optional[float]]:
-        try:
-            if self._state_provider is not None:
-                return self._state_provider()
-        except Exception:
-            pass
-        return (None, None)
-
-    # ------------------------------------------------------------------ #
-    #  Telemetria sonde (paletto 8) — thread FastAPI                      #
-    # ------------------------------------------------------------------ #
-
-    def observe_probe(self, transparency_after: Optional[dict]) -> None:
-        """Chiamata (da server.py, accanto all'ingest N1) quando arriva un light mentre
-        l'ultimo contesto era degradato: è la firma di una posa-sonda (o del primo light
-        dopo le nubi). Registra trigger presunto ed esito — i numeri per tarare S2."""
-        if not self.cfg.enabled:
-            return
-        with self._lock:
-            if self._last_seen_state not in _DEGRADED:
-                return   # light di normale imaging: non è una sonda
-            after = transparency_after or {}
-            record = {
-                "ts": self._now(),
-                # attribuzione by-construction: se l'hint era attivo, la sonda è stata
-                # (o sarebbe stata) anticipata da S2; altrimenti è la cadenza S1.
-                "trigger": "hint_S2" if self._active else "timeout_S1",
-                "outcome_index": after.get("index"),
-                "outcome_state": after.get("state"),
-                "hint_active": self._active,
-                "snr": self._last_snr,
-                "snr_ref": self._snr_ref,
-                "accumulator_s": round(self._accumulator_s, 1),
-            }
-            self._probes.append(record)
-            logger.info(
-                "[recovery_probe] sonda osservata: trigger=%s -> index=%s state=%s "
-                "(hint_active=%s snr=%s ref=%s acc=%.0fs)",
-                record["trigger"], record["outcome_index"], record["outcome_state"],
-                self._active,
-                f"{self._last_snr:.1f}" if self._last_snr is not None else "n/d",
-                f"{self._snr_ref:.1f}" if self._snr_ref is not None else "n/d",
-                self._accumulator_s,
-            )
-
     # ------------------------------------------------------------------ #
     #  Lettura per /status e dashboard                                    #
     # ------------------------------------------------------------------ #
@@ -821,7 +752,6 @@ class RecoveryHintTracker:
                 "sustained_target_s": self._sereno_richiesto_s(),
                 "since": self._active_since,
                 "reason": self._reason,
-                "probes": list(self._probes),
                 # §76 — evidenza di DEGRADO (polarità opposta). SOLO misura: il
                 # plugin la usa per accumulare verso unsafe, mai per drenare.
                 "degrading": self._degrading,

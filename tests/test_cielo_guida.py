@@ -57,7 +57,7 @@ class _State:
 
 def _cielo(clock, state=None, **kw) -> RecoveryHintTracker:
     return RecoveryHintTracker(RecoveryHintConfig(**kw),
-                               state_provider=state or _State(), now_fn=clock)
+                               now_fn=clock)
 
 
 def _feed(t, c, snr, seconds, step=3.0) -> None:
@@ -769,15 +769,13 @@ class TestMemoriaSuDisco(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             f = pathlib_path(os.path.join(d, "cielo.json"))
             c = _Clock()
-            t = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                    now_fn=c, stato_file=f)
+            t = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
             t.posizione_stella(812.0, 433.0)
             _feed(t, c, 65.0, 900)
             _feed(t, c, 26.0, 300)
             self.assertEqual(t.status_block()["sky_state"], "DEGRADED")
             c.advance(120)
-            t2 = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                     now_fn=c, stato_file=f)
+            t2 = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
             t2.conferma_memoria((814.0, 431.0), 15.0)   # il saluto di PHD2: stessa stella
             _feed(t2, c, 26.0, 120)
             b = t2.status_block()
@@ -792,13 +790,11 @@ class TestMemoriaSuDisco(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             f = pathlib_path(os.path.join(d, "cielo.json"))
             c = _Clock()
-            t = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                    now_fn=c, stato_file=f)
+            t = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
             t.posizione_stella(812.0, 433.0)
             _feed(t, c, 120.0, 900)
             for posizione in (None, (200.0, 900.0)):
-                t2 = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                         now_fn=c, stato_file=f)
+                t2 = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
                 t2.conferma_memoria(posizione, 15.0)
                 self.assertIsNone(t2.status_block()["snr_ref"], posizione)
 
@@ -807,12 +803,10 @@ class TestMemoriaSuDisco(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             f = pathlib_path(os.path.join(d, "cielo.json"))
             c = _Clock()
-            t = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                    now_fn=c, stato_file=f)
+            t = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
             _feed(t, c, 65.0, 900)
             c.advance(3 * 3600)
-            t2 = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                     now_fn=c, stato_file=f)
+            t2 = RecoveryHintTracker(RecoveryHintConfig(), now_fn=c, stato_file=f)
             t2.conferma_memoria(None, 15.0)
             self.assertIsNone(t2.status_block()["snr_ref"])
 
@@ -821,8 +815,7 @@ class TestMemoriaSuDisco(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             f = pathlib_path(os.path.join(d, "cielo.json"))
             f.write_text("{non e' json", encoding="utf-8")
-            t = RecoveryHintTracker(RecoveryHintConfig(), state_provider=_State(),
-                                    now_fn=_Clock(), stato_file=f)
+            t = RecoveryHintTracker(RecoveryHintConfig(), now_fn=_Clock(), stato_file=f)
             self.assertIsNone(t.status_block()["snr_ref"])
 
 
@@ -1027,8 +1020,7 @@ class _Monitor:
 
 
 def _cielo_m(clock, monitor, **kw) -> RecoveryHintTracker:
-    return RecoveryHintTracker(RecoveryHintConfig(**kw), state_provider=_State(),
-                               now_fn=clock, unsafe_provider=monitor)
+    return RecoveryHintTracker(RecoveryHintConfig(**kw), now_fn=clock, unsafe_provider=monitor)
 
 
 class TestConfermaLunga(unittest.TestCase):

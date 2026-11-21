@@ -6369,3 +6369,76 @@ Consiglio di sequenza (ripetuto): nella sequenza di NGC 1514 il Trigger On Unsaf
 contenitore dell'oggetto (vedi §126).
 
 Test plugin: 111 (+5, tra cui la notte 20-21/11 ricostruita sulla macchina a stati).
+
+---
+
+## §128 — Pulizia: via il giudizio della camera di ripresa (plugin 1.15.0.0, Agente 3.3.0)
+
+Decisione dell'operatore (21/11/2026): "togliere definitivamente il codice del vecchio sistema per rendere piu'
+snello l'Agente", con attenzione; tenere in dashboard la telemetria delle pose (visualizzazione). Dal 1.14 il cielo
+lo giudica la sola camera di guida e il percorso della camera era spento di default: nessuna notte lo usava, ma
+opzioni, tooltip e dashboard lo raccontavano ancora (fuorvianti).
+
+### Punto di ritorno
+
+Tag `v1.14.3.0` sul plugin (ultima versione con il giudizio della camera) e `v3.2.1` sull'Agente.
+
+### Plugin 1.15
+
+- `SafetyDecisionEngine` riscritto solo per la guida: tolti il percorso CLOUD sull'indice (logica a indice e
+  legacy a poll), il latch STALE, il cambio di giudice con trasferimento dei latch, `LastCloudFromGuide`, la causa
+  `StaleTelemetry`. Restano STAR_LOST (eventi; stato del controller con un Agente prima del 3.1), CLOUD dalla guida,
+  AGENT_LOST, GUIDE_UNOBSERVABLE. Giudice del cielo = l'Agente dichiara `giudice_pronto` (deciso per collegamento);
+  senza, il percorso delle nubi e' spento come con "Sicurezza nubi" disattivata, e il monitor lo avvisa
+  (`Toast_SkyJudgeUnavailable`, giudice pubblicato "NONE"): non c'e' piu' il ripiego sulla camera.
+- `ISafetySettings`/`PluginSettings`: tolte 9 impostazioni (CloudUnsafePolls, UseIndexCloudLogic,
+  CloudIndexAccumulateBelow/DrainAbove, StaleUnsafeEnabled/Polls, SkyDegradingAccumulateEnabled,
+  ProbeChannelGateEnabled, ImagingCameraUnsafeEnabled); da 741 a ~550 righe. Le chiavi nei settings.json salvati si
+  ignorano (System.Text.Json); `LoadFrom(path)` per il test sul file vero del Minix.
+- `RecoveryProbe`: solo sonda di guida; tolti il ciclo delle pose-sonda, `RecoveryProbeGate`, `LastLightMemory`
+  (e il suo abbonamento a ImageSaved), i mediator di camera/immagini, le proprieta' AutoTimeout e
+  FallbackExposureSeconds. Le sequenze salvate con quei campi si caricano: NINA legge con Newtonsoft e impostazioni
+  standard (SequenceJsonConverter.CreateSettings: solo Converters e Context => MissingMemberHandling.Ignore), test
+  `RecoveryProbeCompatibilityTests` con il frammento vero della sequenza NGC 7635.
+- Opzioni riordinate in sezioni (Collegamento all'Agente / Cielo dalla guida / Stella, canale e Agente /
+  Meridiano / Recupero). Due difetti dell'interfaccia chiusi strada facendo: la soglia delle nubi era grigia se si
+  spegneva una casella che valeva solo per la camera; il campo del riavvio della sonda era grigio con la "cadenza
+  automatica" accesa (cioe' sempre, di fabbrica). "Timeout sonda" diventa "Riavvio guida dopo (min)".
+- Testi IT/EN: 28 chiavi tolte, 5 nuove, 14 riscritte (91 per lingua, tutte usate). README, LongDescription.
+
+### Agente 3.3
+
+- `recovery_hint`: tolti `observe_probe` e la lista `probes` (registrazione delle pose-sonda), il provider dello stato
+  N1 che serviva solo a quella. `server.py`: niente piu' chiamata a observe_probe all'ingest. `config`: tolta la
+  sezione `[recovery_probe]` (nessuno la leggeva). `safety_state`: tolta la causa STALE_TELEMETRY.
+- Resta l'indice di trasparenza N1 con la sua scheda e la freschezza della telemetria: e' informazione.
+- Dashboard: tolti i rami della camera giudice (pose di verifica, "possibile schiarita", esiti delle sonde, NUBI
+  dalla camera, TELEMETRIA FERMA, mini-stat "Ultima sonda"); il giudice "NONE" ha avviso su scheda, riga e sessione.
+
+### Verifica
+
+- Il rigioco delle 25 notti non c'e' piu': la pulizia automatica della cartella temporanea ha cancellato harness e dati
+  (`verifica126/`). Al suo posto, per un cambio che deve essere a comportamento invariato, un confronto
+  DIFFERENZIALE fra il motore 1.14.3 e il motore 1.15 sugli stessi snapshot: 1.200.000 tick casuali con persistenza,
+  11.153 transizioni, guida giudice, impostazioni variate a ogni sessione: **0 differenze** in decisione, causa
+  attuale e causa d'ingresso. Con anche la stella persa dallo stato del controller (Agente prima del 3.1) le
+  differenze compaiono solo nella combinazione "Agente senza stella persa dagli eventi ma giudice dichiarato", che
+  non esiste (giudice_pronto e star_lost sono nati insieme nel 3.1, guide_health li pubblica sempre): li' il nuovo
+  motore chiede il sereno anche dopo la stella ritrovata, e AGENT_LOST non dipende piu' dalla freschezza della
+  telemetria della camera.
+- Test: plugin 79 (111 - 38 della camera, del cambio di giudice e del cancello delle pose-sonda + 6 nuovi:
+  caricamento del settings.json vero, due di compatibilita' delle sequenze, Agente perso senza giudice, latch
+  orfano, blocco della guida mancante dalla revisione), Agente 745 (tolti 4 della registrazione delle pose-sonda).
+- Dashboard provata in anteprima su cinque scenari con le funzioni vere.
+- Revisione indipendente (secondo agente): un difetto vero, corretto. Sul ramo della stella persa letta dallo stato
+  del controller avevo aggiunto il passaggio al cielo della guida al rilascio; quel ramo e' raggiungibile anche con il
+  giudice guida gia' deciso, in un tick in cui il blocco della guida manca (server.py lo sostituisce con
+  {"enabled": false} se guide_health fallisce): li' il 1.14.3 tornava SAFE e il 1.15 sarebbe rimasto UNSAFE. Riportato
+  identico. Confronto differenziale rifatto anche con il blocco della guida che manca a tratti: con la sicurezza nubi
+  accesa 0 differenze in tutti i casi; con le nubi spente resta solo la differenza voluta su AGENT_LOST (rientra con
+  la guida operativa, non piu' con la telemetria della camera diventata stantia).
+- Notato dalla revisione e dichiarato: nel 1.14 la camera giudicava DA SOLA, senza l'opzione, quando l'Agente non
+  poteva fare da giudice (prima del 3.1, sensore del cielo o guide_health spenti). Nel 1.15 in quei casi le nubi non
+  sono giudicate (avviso a schermo, riga in dashboard). Con l'Agente 3.3 e il sensore acceso, come sul Minix, non
+  cambia niente. Rifiniture: commenti superati, avviso "nubi non giudicate" solo con notizie fresche, racconto del
+  cielo "in attesa dei primi dati" senza dati della guida.

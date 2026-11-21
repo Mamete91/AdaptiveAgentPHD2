@@ -35,7 +35,6 @@ STATE_UNKNOWN = "UNKNOWN"          # nessuna notizia fresca dal plugin
 # distinta: "vai a controllare la camera" vs "aspetta che passi la nuvola".
 CAUSE_STAR_LOST = "STAR_LOST"
 CAUSE_CLOUD = "CLOUD"
-CAUSE_STALE = "STALE_TELEMETRY"
 CAUSE_AGENT_LOST = "AGENT_LOST"
 CAUSE_GUIDE_UNOBSERVABLE = "GUIDE_UNOBSERVABLE"
 
@@ -157,7 +156,8 @@ class SafetyStateStore:
                 # dicesse UNKNOWN a torto, questi due numeri lo spiegano subito.
                 "staleness_window_s": round(self.staleness_seconds, 1),
                 "poll_interval_s": self._poll_interval,
-                # §126 — chi giudica il cielo nel plugin ("GUIDE"/"CAMERA"); l'ultimo
+                # §126/§128 — chi giudica il cielo nel plugin ("GUIDE", "NONE" se l'Agente
+                # non puo' farlo; "CAMERA" solo da un plugin fino al 1.14); l'ultimo
                 # noto anche se stantio: e' configurazione, non stato del cielo.
                 "judge": self._judge,
             }

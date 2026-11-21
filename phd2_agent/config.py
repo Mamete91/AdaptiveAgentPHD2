@@ -541,18 +541,6 @@ class NinaIndicesConfig:
     ref_freeze_max_min: float = 90.0        # tetto al congelamento (oltre = nuova normalita')
     ref_session_floor_frac: float = 0.70    # §67 pavimento: frazione minima del best di sessione
 
-
-@dataclass
-class RecoveryProbeConfig:
-    """§57 S1 — posa-sonda fail-safe durante UNSAFE. La sonda la scatta il SEQUENCER
-    (template builtin: TriggerOnUnsafe/LoopWhileUnsafe + TakeExposure); qui vivono i
-    parametri di riferimento documentati nel template e usati dalla telemetria."""
-    enabled: bool = True
-    probe_timeout_min: float = 12.0        # cadenza fail-safe della sonda mentre UNSAFE
-    probe_min_interval_min: float = 5.0    # paletto 3 — intervallo minimo assoluto tra sonde
-    match_sub: bool = True                 # paletto 2 — sonda = stesso filtro/esposizione del sub
-
-
 @dataclass
 class GuideHealthConfig:
     """§68 — OSSERVABILITÀ del canale di guida (non qualità: quella è del motore).
@@ -580,12 +568,12 @@ class GuideHealthConfig:
 
 @dataclass
 class RecoveryHintConfig:
-    """§57 S2 — hint "il cielo sta tornando" dalla SNR della stella guida (fluisce
-    per-frame anche mentre NINA è in attesa UNSAFE e i light sono fermi).
+    """§57/§126 — il sensore del cielo dalla SNR della stella guida (fluisce per-frame
+    anche mentre NINA è in attesa UNSAFE e i light sono fermi).
 
-    NESSUNA autorità di safety (paletto 1): il tracker osserva ed espone /status;
-    può solo ANTICIPARE la posa-sonda S1 (via l'istruzione plugin), mai dichiarare
-    SAFE. Dinamica (§57-bis, Gate): accumulatore leaky IN SECONDI DI TEMPO REALE —
+    Pura MISURA (paletto 1): il tracker espone /status; a decidere SAFE/UNSAFE e' il
+    plugin, con la guida come unico giudice del cielo (§126, §128). Dinamica (§57-bis,
+    Gate): accumulatore leaky IN SECONDI DI TEMPO REALE —
     indipendente dal frame-rate di guida (0.5–4 s a seconda del setup) e fisicamente
     coerente con l'evoluzione del cielo. VALORI PROVVISORI da tarare sul campo."""
     enabled: bool = True
@@ -643,7 +631,6 @@ class AgentConfig:
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     nina_telemetry: NinaTelemetryConfig = field(default_factory=NinaTelemetryConfig)
     nina_indices: NinaIndicesConfig = field(default_factory=NinaIndicesConfig)
-    recovery_probe: RecoveryProbeConfig = field(default_factory=RecoveryProbeConfig)   # §57 S1
     recovery_hint: RecoveryHintConfig = field(default_factory=RecoveryHintConfig)      # §57 S2
     guide_health: GuideHealthConfig = field(default_factory=GuideHealthConfig)        # §68
 
@@ -998,14 +985,6 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
 
     # §57 — recovery auto-starting: S1 (sonda fail-safe, parametri di riferimento del
     # template) + S2 (hint SNR-guida). Retrocompat: sezioni assenti -> default.
-    if "recovery_probe" in raw:
-        rp = raw["recovery_probe"]
-        cfg.recovery_probe = RecoveryProbeConfig(
-            enabled=bool(rp.get("enabled", True)),
-            probe_timeout_min=float(rp.get("probe_timeout_min", 12.0)),
-            probe_min_interval_min=float(rp.get("probe_min_interval_min", 5.0)),
-            match_sub=bool(rp.get("match_sub", True)),
-        )
     if "recovery_hint" in raw:
         rh = raw["recovery_hint"]
         cfg.recovery_hint = RecoveryHintConfig(

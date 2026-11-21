@@ -523,7 +523,9 @@ ref_session_floor_frac    = 0.70   # 0 = disattivato (solo rilascio a tempo)
 # LoopingExposures (camera viva ma non guida), ErrorCode per-frame (MASSCHANGE/... =
 # firma del frame corrotto; dal §126 la stella SATURA e' esclusa: PHD2 la guida lo
 # stesso), Alert con severità strutturata.
-enabled        = true    # false = kill-switch: nessuna telemetria di canale su /status
+enabled        = true    # false = kill-switch: nessuna telemetria di canale su /status.
+                         # ATTENZIONE (§128): spegne anche il giudice del cielo (giudice_pronto
+                         # falso) e il plugin non giudica piu' le nubi.
 error_window_s = 120.0   # finestra di conteggio degli ErrorCode per-frame
 alert_window_s = 180.0   # entro quanto un Alert warning/error resta corroborante
 mass_window_s  = 120.0   # finestra per la dispersione di StarMass (elettrico vs ottico)
@@ -531,10 +533,8 @@ mass_window_s  = 120.0   # finestra per la dispersione di StarMass (elettrico vs
 # §71 — "canale pronto" per la Recovery Probe: consenso AND di condizioni sostenute
 # (frame che fluiscono, stella tracciata in modo STABILE, niente raffiche di errori,
 # niente alert severi). L'asticella è sopra il criterio di PHD2: il riaggancio-lampo
-# del 3/8 (41% di frame utili) resta correttamente respinto. §126 — con la guida
-# giudice del cielo (plugin 1.14, default) questo e' una CONDIZIONE del ritorno a SAFE:
-# senza canale pronto il sereno non conta. Con la camera giudice (opzione legacy)
-# serve solo a differire la posa-sonda (tetto 15 min).
+# del 3/8 (41% di frame utili) resta correttamente respinto. §126 — e' una CONDIZIONE
+# del ritorno a SAFE: senza canale pronto il sereno della guida non conta.
 ready_window_s             = 90.0
 ready_min_tracked_fraction = 0.7
 ready_frame_max_age_s      = 10.0
@@ -545,26 +545,14 @@ ready_min_samples          = 10
 # 15 px = regione di ricerca di PHD2 di fabbrica (intestazione dei guide log).
 stessa_stella_px           = 15.0
 
-[recovery_probe]
-# §57 S1 — riferimento dei parametri dell'istruzione plugin "Recovery probe (Adaptive
-# Agent)" (Trigger On Unsafe -> Before Waiting For Safety; i valori veri vivono
-# nell'istruzione, nella sequenza). §126 — con la guida giudice (plugin 1.14, default)
-# l'istruzione NON scatta pose: tiene viva la guida (la fa ripartire se si ferma, se la
-# stella resta persa oltre l'intervallo minimo, o una volta per cadenza di unsafe).
-# Solo con la camera giudice (opzione legacy) scatta ancora le pose-sonda.
-enabled                = true
-probe_timeout_min      = 12      # cadenza fail-safe della sonda mentre UNSAFE (Wait del template)
-probe_min_interval_min = 5       # paletto 3 — intervallo minimo ASSOLUTO tra due sonde
-match_sub              = true    # paletto 2 — sonda = stesso filtro/esposizione del sub, NON guidata
-
 [recovery_hint]
 # §57/§126 — il SENSORE DEL CIELO dalla SNR della stella di guida, valutata a ogni frame
 # (accumulatore leaky in secondi di tempo reale, §57-bis: indipendente dal frame-rate).
-# Dal 04/10/2026 (plugin 1.14, default) e' il giudice del cielo: `degrading` e' l'evidenza
-# con cui il plugin dichiara UNSAFE, `sky_ok` (= active) quella con cui torna SAFE,
-# insieme al canale pronto §71. Questo modulo resta pura MISURA: decide il plugin.
-# Con la camera giudice (opzione legacy del plugin) torna a essere solo un anticipo
-# della posa-sonda. VALORI PROVVISORI da tarare sul campo.
+# Dal 04/10/2026 e' il giudice del cielo: `degrading` e' l'evidenza con cui il plugin
+# dichiara UNSAFE, `sky_ok` (= active) quella con cui torna SAFE, insieme al canale
+# pronto §71. Questo modulo resta pura MISURA: decide il plugin. Se e' spento
+# (enabled = false, o degrade_enabled = false) il plugin non giudica le nubi e lo segnala. VALORI PROVVISORI
+# da tarare sul campo.
 enabled            = true
 snr_recover_frac   = 0.8         # PROVVISORIO — sereno se snr >= frac × riferimento
 snr_recover_floor  = 25.0        # PROVVISORIO — soglia usata SOLO senza riferimento (primo frame)

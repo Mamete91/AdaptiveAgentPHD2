@@ -170,23 +170,16 @@ def main():
     controller.nina_store = nina_store
     controller.transparency_tracker = transparency_tracker
 
-    # §57 S2 — RecoveryHintTracker: fratello di N1 (SOLO osservazione, autorità safety
-    # ZERO). Legge lo stato N1 via provider read-only; alimentato per-frame con snr_avg
-    # nel loop eventi (la SNR guida fluisce anche mentre NINA è in attesa UNSAFE).
-    def _n1_state() -> tuple:
-        try:
-            b = transparency_tracker.status_block()
-            return (b.get("state"), b.get("index"))
-        except Exception:
-            return (None, None)
-
+    # §57/§126 — RecoveryHintTracker: il sensore del cielo dalla guida (SOLO misura,
+    # decide il plugin); alimentato per-frame con snr_avg nel loop eventi (la SNR guida
+    # fluisce anche mentre NINA e' in attesa UNSAFE).
     # §73 — riflesso dello stato del Safety Monitor del plugin (dashboard; dal
     # §126-sexies anche la durata del sereno chiesto dopo un cambio in UNSAFE).
     safety_state = SafetyStateStore()
 
     # §126-bis — il giudizio del cielo sopravvive a un riavvio dell'Agente a notte in
     # corso (file accanto a rig_contribution.json, ignorato da git).
-    recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint, state_provider=_n1_state,
+    recovery_hint_tracker = RecoveryHintTracker(cfg.recovery_hint,
                                                 stato_file=Path("cielo_guida.json"),
                                                 unsafe_provider=safety_state.monitor_in_unsafe)
 

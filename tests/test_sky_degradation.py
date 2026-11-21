@@ -48,7 +48,9 @@ class _State:
 
 
 def _tracker(clock, state, **kw):
-    return RecoveryHintTracker(RecoveryHintConfig(**kw), state_provider=state, now_fn=clock)
+    # §128 — `state` (lo stato N1) non entra piu' nel sensore: i test lo cambiano per
+    # mostrare che il giudizio della guida non ne dipende.
+    return RecoveryHintTracker(RecoveryHintConfig(**kw), now_fn=clock)
 
 
 def _feed(t, c, snr, seconds, step=3.0):

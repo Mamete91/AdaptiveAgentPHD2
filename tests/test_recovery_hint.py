@@ -41,7 +41,9 @@ class _Clock:
 def _make(state="CLOUD", **cfg_kw):
     st = _State(state)
     clock = _Clock()
-    t = RecoveryHintTracker(_cfg(**cfg_kw), state_provider=st, now_fn=clock)
+    # §128 — il sensore non legge piu' lo stato N1: `st` resta solo per i test che
+    # mostrano che il giudizio non dipende da cio' che dice la camera di ripresa.
+    t = RecoveryHintTracker(_cfg(**cfg_kw), now_fn=clock)
     return t, st, clock
 
 
@@ -143,17 +145,9 @@ class TestStructuralNoSafetyPath(unittest.TestCase):
         # §126-sexies — e PHD2 ha cambiato la posa di guida (cambio_posa). Lo stato del
         # monitor arriva da un provider iniettato: il modulo non importa nulla di safety.
         self.assertEqual(sorted(public),
-                         ["cambio_posa", "cfg", "conferma_memoria", "observe_probe",
+                         ["cambio_posa", "cfg", "conferma_memoria",
                           "on_star_lost", "posizione_stella", "reset_stella", "sospendi",
                           "status_block", "update"])
-
-    def test_active_hint_never_touches_transparency(self):
-        """L'hint attivo non altera lo stato N1 letto dal provider (read-only)."""
-        t, st, clock = _make()
-        st.index = 0.1
-        _frames(t, clock, 80.0, 10)
-        self.assertTrue(t.status_block()["active"])
-        self.assertEqual((st.state, st.index), ("CLOUD", 0.1))   # intatto
 
 
 class TestKillSwitch(unittest.TestCase):
@@ -166,35 +160,6 @@ class TestKillSwitch(unittest.TestCase):
         self.assertFalse(b["enabled"])
         self.assertFalse(b["active"])
         self.assertEqual(b["accumulator_s"], 0.0)
-        t.observe_probe({"index": 0.9, "state": "CLEAR"})
-        self.assertEqual(b["probes"], [])
-
-
-class TestProbeTelemetry(unittest.TestCase):
-    """Paletto 8: record sonda con attribuzione trigger + esito, gated sul contesto."""
-
-    def test_probe_recorded_with_s1_attribution(self):
-        t, _, clock = _make()
-        _frames(t, clock, 10.0, 1)                       # contesto degradato, hint spento
-        t.observe_probe({"index": 0.12, "state": "CLOUD"})
-        probes = t.status_block()["probes"]
-        self.assertEqual(len(probes), 1)
-        self.assertEqual(probes[0]["trigger"], "timeout_S1")
-        self.assertEqual(probes[0]["outcome_state"], "CLOUD")
-
-    def test_probe_recorded_with_s2_attribution_when_hint_active(self):
-        t, _, clock = _make()
-        _frames(t, clock, 60.0, 6)                       # hint attivo (15 s buoni)
-        t.observe_probe({"index": 0.85, "state": "CLEAR"})
-        probes = t.status_block()["probes"]
-        self.assertEqual(probes[0]["trigger"], "hint_S2")
-        self.assertEqual(probes[0]["outcome_state"], "CLEAR")
-
-    def test_normal_imaging_light_not_recorded(self):
-        t, _, clock = _make(state="CLEAR")
-        _frames(t, clock, 60.0, 1)                       # contesto CLEAR
-        t.observe_probe({"index": 0.95, "state": "CLEAR"})
-        self.assertEqual(t.status_block()["probes"], [])
 
 
 if __name__ == "__main__":

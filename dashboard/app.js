@@ -996,8 +996,6 @@ function updateTransparency(nina) {
   }
 }
 
-// §57 — card Recovery: hint SNR-guida (S2, sola osservazione) + ultima sonda (S1/S2).
-// Graceful: nascosta se il tracker è spento o non c'è mai stato contesto degradato.
 // ---------------------------------------------------------------------------
 //  §73 — Stato del monitor Condizioni del Cielo (§78)
 //  Il monitor decide nel plugin; qui si RIFLETTE soltanto. Uno stato per volta,
@@ -1012,24 +1010,20 @@ const SAFETY_UI = {
     tip: "FINESTRA MERIDIANO\nStato transitorio: autorizza la sola manovra meccanica di meridian flip mentre la valutazione di sicurezza resta internamente invariata. Terminato il flip riprende il controllo normale." },
   STAR_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'STELLA PERSA',
     tip: "SOSPESA — STELLA PERSA\nPHD2 ha perso la stella di guida in modo persistente (oltre il tempo di consolidamento delle Opzioni del plugin: 5 minuti di fabbrica). La sequenza resta sospesa finché la guida non torna operativa." },
-  CLOUD: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'NUBI',
-    tip: "SOSPESA — NUBI (CAMERA DI RIPRESA)\nDegrado di trasparenza persistente misurato sul conteggio stelle della camera di ripresa: succede solo con l'opzione «Anche la camera di ripresa può dichiarare unsafe». Il rientro richiede evidenza di cielo realmente tornato limpido, cioè la posa di verifica." },
-  STALE_TELEMETRY: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'TELEMETRIA FERMA',
-    tip: "SOSPESA — TELEMETRIA FERMA\nSolo con la camera di ripresa come giudice: la telemetria di NINA si è fermata mentre l'ultimo cielo noto era degradato, e senza osservazione affidabile non si dichiara sicuro." },
   AGENT_LOST: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'AGENTE PERSO',
     tip: "SOSPESA — AGENTE PERSO\nL'Agente è irraggiungibile durante una sessione attiva: perdere l'osservazione è di per sé una condizione di rischio." },
   GUIDE_UNOBSERVABLE: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'CANALE GUIDA CIECO',
     tip: "SOSPESA — CANALE GUIDA CIECO\nIl canale di guida non fornisce più informazioni affidabili (nessun frame mentre la guida era attesa). Controlla camera di guida, cavo e USB." },
-  // §126 — nubi dichiarate dal giudice GUIDA (default dal plugin 1.14).
-  CLOUD_GUIDE: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'NUBI O CAMERA GUIDA',
+  // §126 — le nubi le dichiara la guida (§128: l'unico giudice del cielo).
+  CLOUD: { glyph: 'scudoAlert', tone: 'tone-red', title: 'Sospesa', cause: 'NUBI O CAMERA GUIDA',
     tip: "SOSPESA — NUBI (O CAMERA DI GUIDA)\nIl segnale della stella di guida è sceso sotto metà del sereno ed è rimasto lì (circa 3 minuti e mezzo con i valori di fabbrica). Di solito sono nubi; se la camera di ripresa vede il campo pieno di stelle, controlla la camera di guida. Si riparte da soli quando la stella torna sopra l'80% del sereno per un minuto (cinque se intanto è cambiata la stella o la posa di guida), tracciata stabilmente: non serve nessuna posa di verifica." },
   UNKNOWN: { glyph: 'scudoIgn', tone: '', title: 'Sconosciuta', cause: 'NESSUNA NOTIZIA',
     tip: "STATO SCONOSCIUTO\nIl monitor delle Condizioni del Cielo non sta pubblicando il proprio stato: non è connesso in NINA, oppure il plugin non è attivo. Assenza di notizie non significa 'sicuro'." },
 };
 
-// §126 — chi giudica il cielo nel plugin: "GUIDE" dal 1.14 (default), "CAMERA" se
-// l'operatore ha riattivato il comportamento fino al 1.13. Il racconto del recupero
-// cambia: con la guida giudice non esistono pose di verifica.
+// §126/§128 — il cielo lo giudica la camera di guida. Il plugin pubblica "GUIDE", oppure
+// "NONE" quando l'Agente in esecuzione non puo' fare da giudice: allora le nubi non sono
+// giudicate e la dashboard lo dice.
 // §126-sexies — quanto deve durare il sereno ADESSO (1 minuto di norma, 5 dopo un
 // cambio di stella o di posa avvenuto durante l'UNSAFE).
 function durataSereno(rh) {
@@ -1039,9 +1033,10 @@ function durataSereno(rh) {
   return `${m} minuti`;
 }
 
-function giudiceGuida(safety) {
-  // §126-bis — senza il campo (plugin fino al 1.13) il giudice e' la camera.
-  return !!(safety && safety.judge === 'GUIDE');
+function senzaGiudice(safety) {
+  // Solo con notizie fresche da un monitor collegato: a NINA chiusa l'ultimo giudice
+  // noto resta nello stato, ma non deve tenere acceso l'avviso.
+  return !!(safety && safety.fresh && safety.connected && safety.judge === 'NONE');
 }
 
 // §126-bis — lo stato della stella di guida MISURATO ADESSO dall'Agente. Il racconto
@@ -1146,7 +1141,6 @@ function updateLevel2(data) {
   const rh = data.recovery_hint || {};
   const gh = data.guide_health || {};
   const de = ctrl.diagnostic_engine || {};
-  const guida = giudiceGuida(data.safety);
   const unsafeOra = (data.safety || {}).state === 'UNSAFE';
   const chips = [];
   const add = (glyph, tone, label, val, tip) => chips.push([glyph, tone, label, val, tip]);
@@ -1157,18 +1151,14 @@ function updateLevel2(data) {
         `cielo in peggioramento · ${Math.round(rh.degrade_s || 0)} s`,
         "Il canale di guida vede il segnale della stella calare rispetto al sereno recente" +
         (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} contro ${rh.snr_ref})` : '') +
-        (guida ? ".\nÈ la guida a giudicare il cielo: se il calo dura, la sequenza viene sospesa."
-               : ".\nLa camera di ripresa se ne accorgerebbe solo a fine posa."));
+        ".\nÈ la guida a giudicare il cielo: se il calo dura, la sequenza viene sospesa.");
   }
   if (gh.enabled && gh.channel_ready === false) {
     const why = (gh.channel_not_ready_reasons || []).join(', ');
     add('segnaleDebole', 'tone-yellow', 'Canale guida', 'non pronto',
         (why ? why + ".\n\n" : '') +
-        (guida
-          ? "Finché la stella non è tracciata in modo stabile, la guida non può confermare il " +
-            "sereno: un ritorno a SAFE aspetta."
-          : "Finché la stella non è tracciata in modo stabile, una posa di verifica misurerebbe " +
-            "il nostro problema invece del cielo: le sonde di recupero, se attive, restano differite."));
+        "Finché la stella non è tracciata in modo stabile, la guida non può confermare il " +
+        "sereno: un ritorno a SAFE aspetta.");
   }
 
   // --- COSA STO FACENDO --------------------------------------------------
@@ -1180,40 +1170,27 @@ function updateLevel2(data) {
         (mm.cap_arcsec != null ? `\n\nTetto corrente ${mm.cap_arcsec}"` : '') +
         (mm.winning ? ` (vince il termine ${mm.winning}).` : '.'));
   }
-  if (guida) {
-    // §126 — a cielo sereno `active` e' sempre vero: e' notizia solo durante una sospensione.
-    if (unsafeOra && rh.active) {
-      add('nubeSu', 'tone-blue', 'Cielo dalla guida', 'sereno confermato',
-          "La guida ha confermato il sereno" +
-          (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} su ${rh.snr_ref})` : '') +
-          ".\nCon la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli, senza pose di verifica.");
-    }
-    // §126-septies — perche' il ritorno a SAFE chiede piu' tempo del solito.
-    if (unsafeOra && rh.conferma_lunga && !rh.active) {
-      add('nubeFerma', 'tone-blue', 'Conferma lunga',
-          `${Math.round(rh.accumulator_s || 0)}/${Math.round(rh.sustained_target_s || 300)} s`,
-          "Durante la sospensione è cambiata la stella di guida o la posa" +
-          (rh.conferma_lunga_motivo ? ` (${rh.conferma_lunga_motivo})` : '') +
-          ".\nCon la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno: per questo il sereno deve durare 5 minuti invece di uno.");
-    }
-  } else if (rh.active) {
-    add('nubeSu', 'tone-blue', 'Suggerimento recupero', 'possibile schiarita',
-        "La stella di guida è risalita vicino al livello del sereno recente" +
+  // §126 — a cielo sereno `active` e' sempre vero: e' notizia solo durante una sospensione.
+  if (unsafeOra && rh.active) {
+    add('nubeSu', 'tone-blue', 'Cielo dalla guida', 'sereno confermato',
+        "La guida ha confermato il sereno" +
         (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} su ${rh.snr_ref})` : '') +
-        ".\nNon è una conferma: a dire se il campo di ripresa è tornato utilizzabile " +
-        "può essere solo la posa di verifica.");
+        ".\nCon la stella tracciata stabilmente il monitor riautorizza la sequenza entro pochi controlli, senza pose di verifica.");
   }
-  const probes = Array.isArray(rh.probes) ? rh.probes : [];
-  if (probes.length && !guida) {
-    const last = probes[probes.length - 1];
-    const ok = last.outcome_state === 'CLEAR';
-    add(ok ? 'lenteSi' : 'lenteNo', ok ? 'tone-green' : 'tone-orange',
-        'Verifica del campo',
-        `${probes.length} · ${ok ? 'campo tornato' : 'ancora chiuso'}`,
-        (ok ? "L'ultima posa di verifica ha ritrovato le stelle al livello del sereno recente."
-            : "L'ultima posa di verifica ha trovato il campo ancora sotto le nubi.") +
-        "\n\nÈ l'esito di una verifica CONCLUSA: la sonda vive nella sequenza di NINA e " +
-        "l'Agente ne conosce solo le tracce, mai il momento in cui scatta.");
+  // §126-septies — perche' il ritorno a SAFE chiede piu' tempo del solito.
+  if (unsafeOra && rh.conferma_lunga && !rh.active) {
+    add('nubeFerma', 'tone-blue', 'Conferma lunga',
+        `${Math.round(rh.accumulator_s || 0)}/${Math.round(rh.sustained_target_s || 300)} s`,
+        "Durante la sospensione è cambiata la stella di guida o la posa" +
+        (rh.conferma_lunga_motivo ? ` (${rh.conferma_lunga_motivo})` : '') +
+        ".\nCon la sola SNR una stella più luminosa sotto la nube sembrerebbe sereno: per questo il sereno deve durare 5 minuti invece di uno.");
+  }
+  // §128 — l'Agente in esecuzione non puo' giudicare il cielo: dirlo, sempre.
+  if (senzaGiudice(data.safety)) {
+    add('nubeIgn', 'tone-orange', 'Nubi', 'non giudicate',
+        "L'Agente in esecuzione non può fare da giudice del cielo (versione precedente alla 3.1, " +
+        "o sensore del cielo spento): le nubi non portano a UNSAFE. Stella persa, canale di guida " +
+        "muto e Agente perso restano attivi. Aggiorna l'Agente o riaccendi il sensore.");
   }
 
   // --- COSA HO DECISO ----------------------------------------------------
@@ -1300,19 +1277,15 @@ function updateLevel1(data) {
     const idx = t.index != null ? Number(t.index).toFixed(2) : '—';
     let tip = `CIELO — ${cl.toUpperCase()}\nIndice di trasparenza ${idx}` +
       (t.base_stars != null ? ` sul riferimento di ${t.base_stars} stelle.` : '.');
-    if (giudiceGuida(data.safety)) {
-      // §126 — con la guida giudice l'indice della camera e' solo informazione.
-      tip += "\nSolo informativo: il cielo lo giudica la camera di guida.";
-    } else if (t.state === 'HAZE') {
-      tip += "\nZona neutra: il cielo è calato ma non abbastanza da contare come nube. Non accumula né drena.";
-    }
+    // §126/§128 — l'indice della camera di ripresa e' solo informazione.
+    tip += "\nSolo informativo: il cielo lo giudica la camera di guida.";
     l1('cielo', cg, ct, cl, `${t.state} · ${idx}`, tip);
   } else {
     // Ignoranza dichiarata: prima ricadeva sull'icona del sereno in grigio,
     // cioe' mostrava "limpido" quando non sappiamo nulla.
     l1('cielo', '\u2754', '', 'Nessuna misura', '—',
        "CIELO — NESSUNA MISURA\nNon arrivano pose da NINA: senza immagini non c'è indice di trasparenza. L'assenza di dati non è mai «sereno»." +
-       (giudiceGuida(data.safety) ? "\nCon la guida come giudice l'indice è solo informativo: il cielo lo giudica la camera di guida." : ''));
+       "\nL'indice è solo informativo: il cielo lo giudica la camera di guida.");
   }
 
   // --- 4. SESSIONE: la CONSEGUENZA operativa. Titolo = cosa accade alla
@@ -1322,9 +1295,6 @@ function updateLevel1(data) {
   // --- 5. RECUPERO: elezione per fase. A riposo resta uno slot muto, non
   //        sparisce: le posizioni fisse sono ciò che rende leggibile la striscia.
   const rh = data.recovery_hint || {};
-  const probes = Array.isArray(rh.probes) ? rh.probes : [];
-  const last = probes.length ? probes[probes.length - 1] : null;
-  const guida = giudiceGuida(data.safety);
   const unsafeOra = (data.safety || {}).state === 'UNSAFE';
   const snrRif = rh.snr != null && rh.snr_ref != null ? `${rh.snr} / ${rh.snr_ref}` : '';
   if (rh.degrading) {
@@ -1332,10 +1302,9 @@ function updateLevel1(data) {
        `${Math.round(rh.degrade_s || 0)} s`,
        "RECUPERO — CIELO IN PEGGIORAMENTO\nIl canale di guida vede il segnale della stella crollare rispetto al sereno recente" +
        (rh.snr != null && rh.snr_ref != null ? ` (${rh.snr} contro ${rh.snr_ref})` : '') +
-       (guida ? ".\nÈ la guida a giudicare il cielo: se il calo dura, la sequenza viene sospesa."
-              : ".\nLa camera di ripresa se ne accorgerebbe solo a fine posa: qui si accumula evidenza senza aspettarla."));
-  } else if (guida) {
-    // §126 — giudice guida: nessuna posa di verifica, il racconto segue la stella.
+       ".\nÈ la guida a giudicare il cielo: se il calo dura, la sequenza viene sospesa.");
+  } else {
+    // §126 — il racconto segue la stella di guida: nessuna posa di verifica.
     const stella = statoStellaGuida(data.guide_health);
     if (unsafeOra && stella === 'persa') {
       l1('recup', 'nubeFerma', 'tone-red', 'Stella persa', '',
@@ -1372,21 +1341,6 @@ function updateLevel1(data) {
       l1('recup', 'nubeFerma', '', 'Nessuno', '—',
          "RECUPERO — NESSUNO IN CORSO\nLa guida vede il cielo al livello del sereno. È lo stato normale di una notte buona.");
     }
-  } else if (rh.active) {
-    l1('recup', 'nubeSu', 'tone-blue', 'Possibile schiarita',
-       rh.snr != null && rh.snr_ref != null ? `${rh.snr} / ${rh.snr_ref}` : '',
-       "RECUPERO — POSSIBILE SCHIARITA\nLa stella di guida è risalita vicino al livello del sereno recente: vale la pena verificare.\nNon è una conferma — a dire se il campo di ripresa è tornato utilizzabile può essere solo la posa di controllo.");
-  } else if (last) {
-    const ok = last.outcome_state === 'CLEAR';
-    l1('recup', ok ? 'lenteSi' : 'lenteNo', ok ? 'tone-green' : 'tone-orange',
-       ok ? 'Campo tornato' : 'Ancora chiuso',
-       `${probes.length} verifiche`,
-       (ok ? "RECUPERO — ULTIMA VERIFICA POSITIVA\nLa posa di controllo ha ritrovato le stelle al livello del sereno recente."
-           : "RECUPERO — ULTIMA VERIFICA NEGATIVA\nLa posa di controllo ha trovato il campo ancora sotto le nubi. Si riprova al giro successivo.") +
-       "\n\nÈ l'esito dell'ultima verifica conclusa: la sonda vive nella sequenza di NINA e l'Agente ne conosce solo le tracce, mai il momento in cui scatta.");
-  } else {
-    l1('recup', 'nubeFerma', '', 'Nessuno', '—',
-       "RECUPERO — NESSUNO IN CORSO\nNessun degrado in atto e nessuna verifica del campo registrata. È lo stato normale di una notte buona.");
   }
 }
 
@@ -1591,18 +1545,11 @@ function updateDynamicPanels(data) {
 // ===========================================================================
 //  §77 — "Condizioni del Cielo": il racconto del recupero
 //
-//  Il monitor ha DUE osservatori con scale temporali diversissime:
-//    • il canale di guida — SNR della stella, ogni ~3 s: velocissimo, ma vede
-//      UNA stella. Può testimoniare che il cielo è peggiorato, non che il campo
-//      è tornato buono;
-//    • la posa di verifica — centinaia di stelle sul campo di ripresa, ma una
-//      fotografia ogni 300 s: lentissima, e l'unica che autorizza il ritorno.
-//
-//  Questa riga NON decide nulla: unisce le due voci e le racconta, così durante
-//  una notte vera si capisce PERCHÉ il monitor sta facendo quello che fa —
-//  soprattutto nei minuti in cui il veloce ha già capito e il lento sta ancora
-//  esponendo. Ordine di precedenza: si racconta il fatto più urgente e più
-//  fresco, uno solo alla volta.
+//  §126/§128 — il cielo lo giudica la camera di guida (SNR della stella, ogni
+//  pochi secondi, anche a sequenza ferma); la camera di ripresa e' una nota
+//  informativa. Questa riga NON decide nulla: racconta cosa sta facendo il
+//  monitor e perche'. Ordine di precedenza: il fatto piu' urgente e piu' fresco,
+//  uno solo alla volta.
 // ===========================================================================
 
 function updateSkyStory(data) {
@@ -1614,7 +1561,6 @@ function updateSkyStory(data) {
   const safety = data.safety || {};
   const state = t.state || null;
   const unsafe = safety.state === 'UNSAFE';
-  const guida = giudiceGuida(safety);
 
   // §77-bis — DUE righe brevi. Il racconto è dal punto di vista del recupero nel
   // suo insieme, in prima persona: chi legge vuole sapere cosa sta facendo il
@@ -1628,14 +1574,12 @@ function updateSkyStory(data) {
   if (rh.degrading) {
     cls = 'worsening'; icon = '\u2601\uFE0F';
     seeing = 'Il cielo sta peggiorando rapidamente.';
-    doing = guida ? 'Se il calo dura, sospendo la sequenza.'
-                  : 'Sto accumulando evidenze senza aspettare la prossima posa.';
+    doing = 'Se il calo dura, sospendo la sequenza.';
     detail = `Segnale della stella di guida in calo da ${Math.round(rh.degrade_s || 0)}s` +
              (rh.snr != null && rh.snr_ref != null
                ? ` (${rh.snr} contro ${rh.snr_ref} del cielo sereno recente).` : '.');
-  } else if (guida) {
-    // §126 — giudice guida: il racconto segue la stella, la camera di ripresa e'
-    // una nota informativa.
+  } else {
+    // §126 — il racconto segue la stella, la camera di ripresa e' una nota informativa.
     const numeri = rh.snr != null && rh.snr_ref != null
       ? `Stella di guida a ${rh.snr} contro ${rh.snr_ref} del sereno.` : '';
     const stella = statoStellaGuida(data.guide_health);
@@ -1663,6 +1607,11 @@ function updateSkyStory(data) {
       cls = 'clouded'; icon = '\u2601\uFE0F';
       seeing = 'Cielo coperto (o camera di guida in difficoltà).';
       doing = 'La guida resta in osservazione: si riparte quando la stella torna.';
+    } else if (rh.snr == null) {
+      // Nessun dato dalla guida (sensore spento, guida mai partita): non e' «limpido».
+      cls = ''; icon = '\u{1F319}';
+      seeing = 'In attesa dei primi dati…';
+      doing = '';
     } else if (rh.sky_state === 'DEGRADED' || rh.sotto_il_sereno) {
       cls = 'clouded'; icon = '\u{1F32B}\uFE0F';
       seeing = 'Cielo sotto il sereno.';
@@ -1680,40 +1629,6 @@ function updateSkyStory(data) {
                 `${Math.round(rh.sustained_target_s || 60)}.` +
                 (rh.conferma_lunga ? ' Cinque minuti perché durante la sospensione è cambiata la stella di guida o la posa.' : '');
     }
-  } else if (state === 'CLOUD' || state === 'HAZE') {
-    if (rh.active) {
-      cls = 'recovering'; icon = '\u{1F324}\uFE0F';
-      seeing = 'Vedo un recupero stabile del cielo.';
-      doing = 'Attendo la conferma dalla posa di verifica.';
-      detail = (rh.snr != null && rh.snr_ref != null
-                ? `Stella di guida a ${rh.snr} contro ${rh.snr_ref} del sereno recente. ` : '') +
-               'La stella di guida è una sola: a dire se il campo di ripresa è ' +
-               'tornato utilizzabile può essere solo la camera di ripresa.';
-    } else if (unsafe) {
-      cls = 'probing'; icon = '\u{1F50D}';
-      seeing = 'Cielo coperto.';
-      doing = 'Verifico periodicamente il campo di ripresa.';
-      detail = 'Scatto pose di controllo finché il cielo non torna davvero ' +
-               'utilizzabile; la sequenza resta sospesa fino ad allora.';
-    } else {
-      cls = 'clouded'; icon = '\u2601\uFE0F';
-      seeing = 'Cielo coperto.';
-      doing = 'Il campo di ripresa non è utilizzabile.';
-    }
-  } else if (state === 'CLEAR') {
-    const lastProbe = (Array.isArray(rh.probes) && rh.probes.length)
-      ? rh.probes[rh.probes.length - 1] : null;
-    if (unsafe && lastProbe && lastProbe.outcome_state === 'CLEAR') {
-      cls = 'confirmed'; icon = '\u2705';
-      seeing = 'Recupero confermato.';
-      doing = 'Completo le verifiche, poi la sequenza riprende.';
-      detail = 'La posa di controllo ha ritrovato il campo al livello del sereno ' +
-               'recente: servono ancora alcune conferme prima di riautorizzare.';
-    } else {
-      cls = 'clear'; icon = '\u{1F30C}';
-      seeing = 'Cielo limpido.';
-      doing = 'Il campo è al livello del sereno recente.';
-    }
   }
 
   box.className = `sky-story ${cls}`;
@@ -1727,9 +1642,7 @@ function updateSafetyState(safety, guideHealth) {
   const state = (safety && safety.state) || 'UNKNOWN';
   const cause = (safety && safety.cause) || null;
   // Per l'UNSAFE è la CAUSA a fare lo stato visibile (azione operativa distinta).
-  let key = state === 'UNSAFE' ? (SAFETY_UI[cause] ? cause : 'STAR_LOST') : state;
-  // §126 — le nubi le dichiara la guida: testo diverso, nessuna posa di verifica.
-  if (key === 'CLOUD' && giudiceGuida(safety)) { key = 'CLOUD_GUIDE'; }
+  const key = state === 'UNSAFE' ? (SAFETY_UI[cause] ? cause : 'STAR_LOST') : state;
   const ui = SAFETY_UI[key] || SAFETY_UI.UNKNOWN;
 
   // Dettaglio: il fatto MISURATO dall'Agente dietro la decisione del monitor.
@@ -1744,9 +1657,9 @@ function updateSafetyState(safety, guideHealth) {
   }
 
   let tip = ui.tip;
-  // §126-septies — con la guida giudice il rientro da queste cause passa dal cielo della
-  // guida (il plugin satura il suo accumulatore): il SAFE arriva col sereno confermato.
-  if (state === 'UNSAFE' && giudiceGuida(safety)) {
+  // §126-septies — il rientro da queste cause passa dal cielo della guida (il plugin
+  // satura il suo accumulatore): il SAFE arriva col sereno confermato.
+  if (state === 'UNSAFE' && !senzaGiudice(safety)) {
     const ritorno = "la guida deve anche confermare il sereno prima di riautorizzare: un minuto, " +
                     "cinque se nel frattempo è cambiata la stella o la posa di guida.";
     if (key === 'STAR_LOST') { tip += "\n\nRitrovata la stella, " + ritorno; }
@@ -1754,6 +1667,11 @@ function updateSafetyState(safety, guideHealth) {
     else if (key === 'GUIDE_UNOBSERVABLE') { tip += "\n\nQuando i frame tornano, " + ritorno; }
   }
   if (detail) { tip += "\n\n" + detail + "."; }
+  // §128 — l'Agente in esecuzione non puo' giudicare il cielo: le nubi non contano.
+  if (senzaGiudice(safety)) {
+    tip += "\n\nATTENZIONE: l'Agente in esecuzione non può giudicare il cielo (versione precedente " +
+           "alla 3.1, o sensore spento): le nubi non portano a UNSAFE.";
+  }
   // §72 — dentro la finestra il riportato diverge dall'interno: dirlo esplicitamente.
   if (safety && safety.internal_safe === false && state === 'MERIDIAN_PROTECTION') {
     tip += "\n\nValutazione interna: ancora UNSAFE — al termine del flip la sequenza torna sospesa.";
@@ -1764,31 +1682,36 @@ function updateSafetyState(safety, guideHealth) {
   l1('sess', ui.glyph, ui.tone, ui.title, ui.cause, tip);
 }
 
+// §126 — card "Cielo dalla guida": SNR, riferimento, sereno accumulato.
+// Graceful: nascosta se il sensore è spento o non ha ancora dati.
 function updateRecoveryHint(rh, safety) {
   const card = el('recovery-card');
   if (!card) { return; }
-  const hasContext = rh && rh.enabled
-    && (rh.snr != null || (rh.probes && rh.probes.length > 0) || rh.active);
+  const hasContext = rh && rh.enabled && (rh.snr != null || rh.active);
   if (!hasContext) {
     card.style.display = 'none';
     return;
   }
   card.style.display = '';
   const stateEl = el('recovery-state');
-  const guida = giudiceGuida(safety);
-  if (guida && rh.sereno_in_conferma && !rh.active) {
+  if (senzaGiudice(safety)) {
+    // §128 — l'Agente in esecuzione non fa da giudice: la scheda lo dice per prima cosa.
+    setGlyph('recovery-icon', 'nubeIgn');
+    stateEl.textContent = 'NUBI NON GIUDICATE';
+    stateEl.style.color = '#f59e0b';
+  } else if (rh.sereno_in_conferma && !rh.active) {
     // §126-septies — la stella e' sopra l'80%: la guida sta confermando il sereno.
     setGlyph('recovery-icon', 'nubeSu');
     stateEl.textContent = `SERENO IN CONFERMA · ${durataSereno(rh)}`;
     stateEl.style.color = '#60a5fa';
-  } else if (guida && (rh.sky_state === 'DEGRADED' || rh.sotto_il_sereno)) {
+  } else if (rh.sky_state === 'DEGRADED' || rh.sotto_il_sereno) {
     // §126 — il giudice guida vede il cielo sotto il sereno.
     setGlyph('recovery-icon', 'nubeFerma');
     stateEl.textContent = 'SOTTO IL SERENO';
     stateEl.style.color = '#f59e0b';
   } else if (rh.active) {
     setGlyph('recovery-icon', 'nubeSu');
-    stateEl.textContent = guida ? 'SERENO (GUIDA)' : 'CIELO IN RECUPERO?';
+    stateEl.textContent = 'SERENO (GUIDA)';
     stateEl.style.color = '#34d399';
   } else {
     setGlyph('recovery-icon', 'lenteVuota');
@@ -1801,18 +1724,6 @@ function updateRecoveryHint(rh, safety) {
     (rh.snr_ref != null ? rh.snr_ref.toFixed(1) : '—');
   el('recovery-acc').textContent =
     `${rh.accumulator_s != null ? rh.accumulator_s : '—'}s/${rh.sustained_target_s != null ? rh.sustained_target_s : '—'}s`;
-  const probes = rh.probes || [];
-  if (guida) {
-    el('recovery-probe').textContent = 'non servono';
-  } else if (probes.length > 0) {
-    const p = probes[probes.length - 1];
-    const ago = Math.max(0, Math.round((Date.now() / 1000 - p.ts) / 60));
-    const trig = p.trigger === 'hint_S2' ? 'S2' : 'S1';
-    const idx = p.outcome_index != null ? p.outcome_index.toFixed(2) : '—';
-    el('recovery-probe').textContent = `${trig} → ${p.outcome_state || '—'} (${idx}) · ${ago}m fa`;
-  } else {
-    el('recovery-probe').textContent = '—';
-  }
 }
 
 // §51 — card "Adaptive MinMove": badge ACTIVE/IDLE (da clamping_active), cap, baseline

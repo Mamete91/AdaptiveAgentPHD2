@@ -310,7 +310,7 @@ def _con_giudice_pronto(recovery_hint: dict, guide_health: dict) -> dict:
 
     Il plugin non deve dedurlo dalla presenza dei campi: `sky_ok` c'e' anche con il
     sensore spento. Pronto = sensore del cielo acceso con il degrado attivo e canale
-    di guida osservato. Senza, il plugin 1.14 torna al giudice camera (1.13).
+    di guida osservato. Senza, il plugin non giudica le nubi e lo avvisa (1.15, §128).
     """
     try:
         rh = dict(recovery_hint or {})
@@ -406,8 +406,8 @@ class SafetyStatePayload(BaseModel):
     # §73-ter — cadenza del battito dichiarata dal plugin: l'Agente ne deriva la
     # finestra di freschezza invece di indovinarla (vedi SafetyStateStore).
     poll_interval_s: Optional[float] = Field(default=None, ge=0)
-    # §126 — chi giudica il cielo nel plugin: "GUIDE" (default dal 1.14) o
-    # "CAMERA" (comportamento fino al 1.13, riattivabile dalle opzioni).
+    # §126/§128 — chi giudica il cielo nel plugin: "GUIDE", oppure "NONE" se questo
+    # Agente non puo' farlo (giudice_pronto falso). "CAMERA" solo da un plugin fino al 1.14.
     judge: Optional[str] = None
 
 
@@ -446,14 +446,6 @@ async def ingest_nina_telemetry(payload: NinaTelemetryPayload):
         # §45 — alimenta il tracker Layer-2 (derivato da Layer-1, non sporca lo store).
         if _transparency_tracker is not None:
             _transparency_tracker.ingest(dumped)
-            # §57 — telemetria sonde (paletto 8): un light arrivato a contesto degradato
-            # è la firma di una posa-sonda; registra trigger presunto + esito post-ingest.
-            # SOLO osservazione (N1 già aggiornato sopra; N6 non c'entra).
-            if _recovery_hint_tracker is not None:
-                try:
-                    _recovery_hint_tracker.observe_probe(_transparency_tracker.status_block())
-                except Exception:
-                    logger.exception("Errore in RecoveryHintTracker.observe_probe (ignorato)")
     except Exception:
         # Difesa in profondità: un bug nello store non deve mai propagarsi.
         logger.exception("Errore aggiornando NinaTelemetryStore (telemetria scartata)")
