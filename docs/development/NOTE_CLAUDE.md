@@ -6328,3 +6328,44 @@ regola cambia.
 - Errori "unknown sequence container: TriggerRunnerRootContextContainer" nel log di NINA (064 e 065): innocui. Il
   convertitore dei contenitori non conosce quel tipo, ma Trigger On Unsafe riaggancia i suoi rami a un contesto nuovo
   (TriggerOnUnsafe.cs, AttachInstructionSetsToContext) e la Recovery probe si carica (nessun "unknown sequence item").
+
+---
+
+## §127 — La finestra del meridiano copre tutto il flip di NINA (plugin 1.14.3.0, §72-bis)
+
+### Notte 20-21/11 (log NINA 3.3.0.1069, PHD2 GuideLog, agent.log)
+
+- 00:18-00:22 la stella di guida resta ferma (dx/dy < 3 px) mentre la massa scende da ~8000 a ~750 e la SNR da
+  51 a 14: NUBI, non montatura ferma (con il tracking fermo la stella esce in un secondo). La posa delle 00:19 ha
+  23 stelle contro 121, tonde (ECC 0.33). UNSAFE STAR_LOST alle 00:25:31: corretto.
+- 00:24:23 l'operatore ferma la sequenza; 00:27:46 si apre la finestra §72 (deadline a 3.9 min).
+- 00:33:27 l'operatore riavvia la sequenza, NINA avvia il flip. 00:33:29 "Stopping tracking to pass meridian"
+  (pausa 0): alle 00:33:31 la protezione riattiva il tracking scambiandolo per la guardia dell'unsafe (innocuo con
+  pausa 0, pericoloso con una pausa lunga: la montatura proseguirebbe oltre il meridiano).
+- 00:34:01 il pilastro cambia e la finestra si CHIUDE ("flip done"): l'unsafe onesto torna. 00:34:24 il Trigger On
+  Unsafe (alla radice di questa sequenza) annulla lo slew di ricentraggio: "Meridian Flip - Cancelled by user".
+  Montatura girata, non ricentrata, guida spenta: intervento manuale.
+
+### Causa
+
+Il cambio di pilastro non e' la fine del flip. Per NINA (NINA.WPF.Base/ViewModel/MeridianFlipVM.cs) il flip e':
+StopAutoguider, PassMeridian, Flip, (Autofocus), Recenter, SelectNewGuideStar, ResumeAutoguider, Settle.
+`MeridianFlip()` solleva `ITelescopeMediator.BeforeMeridianFlip` prima e `AfterMeridianFlip` dopo l'intero
+workflow, anche se annullato (eventi presenti nell'SDK 3.2.0.9001).
+
+### Correzione (plugin 1.14.3.0)
+
+- `MeridianProtectionEngine.Tick(..., flipInProgress, flipsCompleted)`: con un flip di NINA in corso la finestra
+  resta aperta (il cambio o l'ignoto del pilastro non chiude), si chiude quando NINA conclude il flip; tetto
+  `FlipMaxMinutes = 30` (NINA bloccata -> Lockout, unsafe onesto).
+- Durante il flip il tracking non si tocca mai: lo fermano e riavviano i passi di NINA.
+- Unsafe che arriva a flip iniziato, o flip forzato dopo un Lockout: la finestra si apre (`OpenedDuringFlip`) e
+  protegge il flip fino in fondo. Senza avvisi di NINA (flip a mano dalla montatura) resta la regola del pilastro.
+- `AdaptiveAgentSafetyMonitor`: si iscrive agli avvisi in Subscribe, si disiscrive in Unsubscribe; fail-inert.
+- Costo dichiarato: durante il flip (2-3 minuti con il ricentraggio) il monitor riporta SAFE anche con le nubi;
+  in quel tempo gira solo il flip. A flip concluso la guida e' ripartita e giudica il cielo.
+
+Consiglio di sequenza (ripetuto): nella sequenza di NGC 1514 il Trigger On Unsafe e' alla radice; va nel
+contenitore dell'oggetto (vedi §126).
+
+Test plugin: 111 (+5, tra cui la notte 20-21/11 ricostruita sulla macchina a stati).
