@@ -6468,3 +6468,60 @@ pulizia. Ogni frase confrontata con il codice (valori di fabbrica in PluginSetti
 - Toast della stella persa: "guida persa" -> "stella di guida persa". Toast "nubi non giudicate": dice dove
   si spegne il sensore (config.toml dell'Agente). "baseline PHD2" nelle opzioni del ciclo di vita ->
   "parametri di partenza di PHD2" (in dashboard "baseline" e' l'RMS tipico: due significati).
+
+## §129 — Recenter if needed: il ricentraggio dopo un flip in unsafe o dopo molti minuti senza guida (plugin 1.16.0.0)
+
+Domanda dell'operatore (21/11): sotto le nubi il flip si completa, ma il ricentraggio? Studio sul sorgente di NINA
+**3.3.0.1070** = commit `db6b9090acdf` di isbeorn/nina (i nightly non hanno tag: si trovano dai commit "Bump version
+to 3.3.0.NNNN" su develop), sul profilo NINA vero del Minix e sulla sequenza NGC 7635.
+
+### Cosa fa NINA (MeridianFlipVM, PHD2Guider, CenteringSolver/CaptureSolver, TriggerOnUnsafe)
+- Il flip e' un AutomatedWorkflow: StopAutoguider, PassMeridian, Flip, (Autofocus), Recenter, SelectNewGuideStar,
+  ResumeAutoguider, Settle. I passi girano TUTTI anche se uno torna false; solo un'eccezione esce.
+- Recenter e' "best effort, so always return true": plate solve fallito -> notifica "centraggio dopo il flip fallito" e
+  avanti. Con il profilo del Minix (30 tentativi, posa 10 s, attesa 0,1 min, ricerca cieca) sotto le nubi sono circa
+  10 minuti (stima: su questo PC un ASTAP fallito costa circa 2 s).
+- SelectNewGuideStar ritorna sempre true; ResumeAutoguider (AutoRetryStartGuiding, 50 s) ritorna false dopo 3 tentativi
+  di 30 s di attesa della stella.
+- DoMeridianFlip ritorna true salvo eccezioni: AfterMeridianFlipEventArgs.Success e' vero anche con ricentraggio e guida
+  falliti. Il plugin NON puo' sapere dall'avviso se il ricentraggio e' riuscito.
+- TriggerOnUnsafe ha anche **AfterWaitForSafe**: eseguito dopo il ritorno del safe, annullato e riavviato se torna
+  unsafe; gira in un TriggerRunnerContextContainer che e' un IDeepSkyObjectContainer e inoltra il Target del contenitore
+  dell'oggetto (ItemUtility.RetrieveContextCoordinates trova le coordinate). Istruzioni: ErrorBehavior di default
+  ContinueOnError.
+- Center: StopGuiding, slew, CenteringSolver.Center, StartGuiding se l'aveva fermata; fallimento = eccezione.
+
+### Decisione dell'operatore
+Strada B (codice), non la A (un "Slew and center" fisso in AfterWaitForSafe ricentrerebbe dopo ogni unsafe, anche senza
+bisogno). Regola: ricentrare solo dopo un flip in unsafe se il ricentraggio di NINA non e' riuscito, e dopo un unsafe
+con molti minuti senza guida. Niente studio della deriva: 12 minuti di partenza e una foto di controllo decide.
+
+### Implementazione (plugin 1.16.0.0)
+- `RecenterTracker` (logica pura, thread-safe): alimentato dal monitor a ogni tick PRIMA di pubblicare IsSafe (NINA
+  non deve vedere SAFE prima che la memoria lo sappia). Somma i secondi in cui il monitor e' internamente UNSAFE e la
+  guida assente (`IsUnguided`: stella persa, guida ferma — flip compreso —, Agente irraggiungibile; payload incompleto
+  non conta); passo massimo 3 intervalli. Flip con il monitor internamente UNSAFE all'inizio o alla fine => motivo.
+  I motivi si accumulano fino a un controllo riuscito (Consume), anche attraverso piu' episodi. Reset a Connect/
+  Disconnect. Nella finestra meridiano (riportato SAFE, interno UNSAFE) non decide e non consuma.
+- `RecenterIfNeeded` (Trigger On Unsafe > After Waiting For Safety): se c'e' un motivo, UN plate solve di controllo
+  (ICaptureSolver, al massimo 2 tentativi, guida accesa, montatura ferma); scarto calcolato come in CenteringSolver
+  (Transform all'epoca della montatura, Coordinates - Coordinates); entro la tolleranza del profilo (Threshold) non
+  tocca nulla; fuori: StopGuiding, ICenteringSolver.Center con i parametri del profilo, StartGuiding. Coordinate dal
+  contesto (come Center ereditato), ripiego sul bersaglio dell'ultimo flip. Fail-inert: montatura parcheggiata o senza
+  tracking, camera scollegata, solve fallito, eccezioni => log e la sequenza prosegue (motivo conservato). Annullata:
+  niente ripartenza della guida (la rifa' la Recovery probe se e' tornato l'unsafe). Ogni controllo scrive nel log
+  minuti senza guida e scarto: i dati per tarare i 12 minuti.
+- Compatibilita' verificata firma per firma fra SDK 3.2.0.9001 (riflessione sulle DLL del pacchetto) e sorgente 1070:
+  IPlateSolverFactory (GetPlateSolver/GetBlindSolver/GetCaptureSolver/GetCenteringSolver), ICaptureSolver.Solve,
+  ICenteringSolver.Center, CaptureSolverParameter/CenterSolveParameter/PlateSolveParameter, PlateSolveResult,
+  CaptureSequence(double,string,FilterInfo,BinningMode,int), BinningMode(short,short), Coordinates operator -,
+  ItemUtility.RetrieveContextCoordinates, ContextCoordinates, IGuiderMediator.StopGuiding/StartGuiding,
+  IPlateSolveSettings, BeforeMeridianFlipEventArgs.Target.
+- Tooltip: "ⓘ" su entrambe le istruzioni con la spiegazione nella lingua del plugin (IT/EN), tooltip dei campi a
+  capo; la Description dell'elenco istruzioni di NINA e' statica (SequenceEntityExtensions.GrabLabel: solo chiavi
+  "Lbl_" di NINA si traducono), quindi scritta in inglese e in italiano.
+- Test: 103 (+24): RecenterTrackerTests (14, casi reali: nube con la guida che corregge, stella persa 15/10 minuti,
+  flip sotto le nubi e a sereno, finestra meridiano, episodi che si sommano, salto lungo, scollegato) e
+  RecenterIfNeededTests (10, con finti DispatchProxy: niente foto senza motivo, scarto 0,5' => niente, 6' =>
+  ricentra e la guida riparte, solve fallito, centraggio fallito o che lancia, montatura parcheggiata o ferma, senza
+  coordinate, salvataggio del campo).
